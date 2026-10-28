@@ -349,8 +349,9 @@ end
 -- The pinned-anchor rule (routepins.want, rebase.decide's want), checked again once the player moved PIN_CHECK_M or
 -- the anchor changed: -> want (nil | true | false), and the nearest planned anchor's lat, lon when there is one. The
 -- frame is the nearest planned anchor's, whichever way the car came, so a bake in those frames fits every drive.
+-- (A field, not a local: this chunk is at LuaJIT's limit of 200 locals.)
 M.PIN_CHECK_M = 50
-local function pinWant(pl)
+function M._pinWant(pl)
   if not M.SNAP_TELEPORTS or not st.anchor then return nil end
   local c = st.pinCheck
   if c and c.anchorId == st.anchorId and hypot(pl.x - c.x, pl.y - c.y) < M.PIN_CHECK_M then
@@ -361,7 +362,6 @@ local function pinWant(pl)
   st.pinCheck = { anchorId = st.anchorId, x = pl.x, y = pl.y, want = want, lat = aLat, lon = aLon }
   return want, aLat, aLon
 end
-M._pinWant = pinWant
 
 -- Terrain centre for a resync (same frame): where terrain-follow would put it now.
 local function resyncHint()
@@ -1380,7 +1380,7 @@ local function updateWorld(dt)
     edgeDist = math.min(nx - x0, x1 - nx, ny - y0, y1 - ny)
   end
   -- the pinned-anchor rule: a pinned request whose anchor is no longer the nearest planned one is discarded (want false)
-  local want, wLat, wLon = pinWant(pl)
+  local want, wLat, wLon = M._pinWant(pl)
   if p and p.pinned and want and (math.abs(p.lat - wLat) > 1e-7 or math.abs(p.lon - wLon) > 1e-7) then want = false end
   local action = rebase.decide(pl.dist, p, staleDist, st.clock, st.retryAt, edgeDist, want)
   if p and p.ready and p.purpose == 'resync' then

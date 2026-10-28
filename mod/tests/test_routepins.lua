@@ -67,7 +67,16 @@ T.check(at(39.5, -104.9, A) == nil, 'no planned anchor within the pin distance: 
 -- towards B, B within 6.75 km but not 300 m nearer than A: false; 300 m nearer: true
 local mid = { (A[1] + B[1]) / 2, (A[2] + B[2]) / 2 }
 T.check(at(mid[1], mid[2], A) == nil, 'the midpoint: neither within the pin distance')
-local dLat = 0.0012 -- ~130 m
-T.check(at(B[1] + 0.0607 - dLat * 0, B[2], A) ~= true, 'B just within 6.75 km, not 300 m nearer: stay')
-T.check(at(B[1] + 0.055, B[2], A) == true, 'B clearly nearer: move')
+T.check(at(B[1] + 0.055, B[2], A) == true, 'B within the pin distance and far nearer than A: move')
+-- the hysteresis: anchors C and D 1.1 km apart (a planned area's lattice is denser than a route's anchors)
+write({ version = 1, pinM = 7500, anchors = { { 40.00, -104.99 }, { 40.01, -104.99 } } })
+local C, D = { 40.00, -104.99 }, { 40.01, -104.99 }
+local m = 1 / 111195 -- degrees of latitude per metre
+T.check(at(C[1] + 500 * m, C[2], C) == false, '500 m up: C still the nearest: stay')
+T.check(at(C[1] + 600 * m, C[2], C) == false, '600 m up: D nearer by 88 m, under 300 m: stay')
+T.check(at(C[1] + 720 * m, C[2], C) == true, '720 m up: D nearer by 328 m: move')
+local w2, la2 = at(C[1] + 720 * m, C[2], C)
+T.check(la2 == 40.01, '... to D')
+T.check(at(C[1] + 720 * m, C[2], D) == false, 'in D already: stay')
+T.check(at(C[1] + 400 * m, C[2], D) == true, '400 m up, in D: C nearer by 312 m: move back')
 T.done('test_routepins')
