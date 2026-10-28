@@ -22,7 +22,7 @@ cbuffer perDraw : register(b0)
     uniform float4 gradeTone;        // x: contrast (1 = none), y: pivot (encoded), z: saturation, w: vibrance
     uniform float4 gradeShadows;     // rgb: shadow tint (encoded, 0.5 0.5 0.5 = none), a: amount
     uniform float4 gradeHighlights;  // rgb: highlight tint (as above), a: amount
-    uniform float4 gradeMisc;        // x: vignette amount, y: vignette radius, zw: unused
+    uniform float4 gradeMisc;        // x: vignette amount, y: vignette radius, z: share of the contrast below the pivot, w: unused
 
     POSTFX_UNIFORMS
 };
@@ -44,13 +44,14 @@ float3 linearToSrgb(float3 c)
     return lerp(c * 12.92f, 1.055f * pow(c, 1.0f / 2.4f) - 0.055f, step(0.0031308f, c));
 }
 
-// A contrast curve through (0, 0), (pivot, pivot) and (1, 1): a power on each side of the pivot, so the
-// slope at the pivot is `contrast` and nothing clips.
-float contrastCurve(float x, float pivot, float contrast)
+// A contrast curve through (0, 0), (pivot, pivot) and (1, 1): a power on each side of the pivot, so nothing
+// clips; above the pivot the slope there is `contrast`, below it `contrastLo` (a gentler toe keeps dusk and
+// shadowed streets readable instead of crushing them to black).
+float contrastCurve(float x, float pivot, float contrast, float contrastLo)
 {
     x = saturate(x);
     if (x < pivot) {
-        return pivot * pow(x / max(pivot, 1e-4f), contrast);
+        return pivot * pow(x / max(pivot, 1e-4f), contrastLo);
     }
     const float hi = 1.0f - pivot;
     return 1.0f - hi * pow((1.0f - x) / max(hi, 1e-4f), contrast);
@@ -74,8 +75,9 @@ float3 grade(float3 encoded, float2 uv)
 
     // 3: contrast, per channel (keeps hues closer than a luminance-only curve at these strengths)
     float3 c = linearToSrgb(lin);
-    c = float3(contrastCurve(c.r, gradeTone.y, gradeTone.x), contrastCurve(c.g, gradeTone.y, gradeTone.x),
-               contrastCurve(c.b, gradeTone.y, gradeTone.x));
+    const float lo = lerp(1.0f, gradeTone.x, saturate(gradeMisc.z));
+    c = float3(contrastCurve(c.r, gradeTone.y, gradeTone.x, lo), contrastCurve(c.g, gradeTone.y, gradeTone.x, lo),
+               contrastCurve(c.b, gradeTone.y, gradeTone.x, lo));
 
     // 4: split tone (soft light towards the tint, weighted by how dark / bright the pixel is)
     const float y = dot(c, LUMA);
