@@ -266,6 +266,16 @@ class MapData:
             if getattr(self, "_drcog", None) is None:
                 self._drcog = drcog.Drcog(self.raw_dir, self.fetcher)
             return self._drcog
+    def lidar(self):
+        """lidarheights.Lidar when the lidar heights are on (BNE_LIDAR_HEIGHTS=1: earthd --lidar-heights on), else
+        None."""
+        import lidarheights
+        if not lidarheights.enabled():
+            return None
+        with self._lock:
+            if getattr(self, "_lidar", None) is None:
+                self._lidar = lidarheights.Lidar(self.raw_dir, self.fetcher)
+            return self._lidar
 
     def regional(self):
         """osmtags.Regional over this cache's regional tables (tools/osm_tag_table.py), made when first asked for."""
@@ -283,6 +293,9 @@ class MapData:
             import drcog
             if drcog.covers(key.bounds()):  # (--drcog on: the region's roofprints in, kept under their own name)
                 name = f"{name}.{drcog.TAG}"
+        if layer == "buildings" and self.lidar() is not None:
+            import lidarheights
+            name = f"{name}.{lidarheights.TAG}"     # (--lidar-heights on: 3DEP heights in, kept under their own name)
         if layer == "roads":
             tag = self.regional().covering(key.bounds())
             if tag is not None:         # a cell inside a regional OSM table: built with its tags, kept under its tag
@@ -373,6 +386,18 @@ class MapData:
                     if n:                   # (credited with the cell's datasets: credits.FEATURES)
                         sources = dict(sources)
                         sources[(drcog.DATASET, drcog.LICENSE)] = n
+            if layer == "buildings" and self.lidar() is not None and len(feats):
+                import lidarheights
+                try:
+                    feats, n = lidarheights.apply(feats, self.lidar().heights(feats, key, kind))
+                except DEFERRED:
+                    raise
+                except Exception as e:      # (outside 3DEP, the service down: the heights as they were)
+                    log.warning("mapdata: lidar heights of %s: %s: %s", key, type(e).__name__, e)
+                    n = 0
+                if n:                       # (credited with the cell's datasets: credits.FEATURES)
+                    sources = dict(sources)
+                    sources[(lidarheights.DATASET, lidarheights.LICENSE)] = n
             if osm is not None:
                 feats = self._osm(feats, osm.result())
                 tag = self.regional().covering(key.bounds())

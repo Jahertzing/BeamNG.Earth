@@ -180,6 +180,10 @@ POLICIES = {
     # DRCOG's planimetric layers (drcog.py, --drcog on): ArcGIS REST queries, one or two pages a map cell, cached
     "gis.drcog.org": HostPolicy(rate=2.0, burst=4.0, max_conc=2, daily_budget=20000, allow_prefetch=True,
                                 offline_ok=True, timeout=60.0),
+    # the Planetary Computer's STAC search and tile service (lidarheights.py, --lidar-heights on): 17 requests a map
+    # cell (one search, 16 PNG tiles of ~8 KB), cached
+    "planetarycomputer.microsoft.com": HostPolicy(rate=4.0, burst=8.0, max_conc=4, daily_budget=20000,
+                                                  allow_prefetch=True, offline_ok=True, timeout=60.0),
     "stac.overturemaps.org": HostPolicy(rate=5.0, burst=10.0, max_conc=2, daily_budget=5000,
                                         allow_prefetch=True, offline_ok=True, timeout=20.0),
     **{h: HostPolicy(rate=20.0, burst=40.0, max_conc=4, daily_budget=None, allow_prefetch=True,

@@ -4861,6 +4861,9 @@ def main():
                     help="the Denver region's DRCOG 2024 planimetrics (drcog.py): its stereo-compiled roofprints with "
                          "their heights in place of the Overture footprints they match, its edges of pavement for the "
                          "road widths (CC BY 3.0, credited); off = Overture's footprints everywhere")
+    ap.add_argument("--lidar-heights", choices=("on", "off"), default="off",
+                    help="US building heights from USGS 3DEP lidar (lidarheights.py: the Planetary Computer's height-"
+                         "above-ground rasters) where the map has none or a machine-learned one; public domain")
     ap.add_argument("--gas-stations", choices=("on", "off"), default="off",
                     help="gas stations with refuelling at real stations (gasstations.py; Overture places, needs "
                          "--roads on): West Coast USA's pumps and canopies, the stock refuel prompt")
@@ -4899,6 +4902,8 @@ def main():
     args = ap.parse_args()
     if args.drcog == "on":      # (every process reads it: mapdata.MapData.drcog; the revisit keys hold BNE_* too)
         os.environ["BNE_DRCOG"] = "1"
+    if args.lidar_heights == "on":      # (every process reads it: mapdata.MapData.lidar; the revisit keys hold BNE_* too)
+        os.environ["BNE_LIDAR_HEIGHTS"] = "1"
     args.cells = resolve_cells(args.cells, args.near_visual)
     args.block = resolve_block(args.block, args.near_visual)
     args.horizon = resolve_horizon(args.horizon, args.near_visual)

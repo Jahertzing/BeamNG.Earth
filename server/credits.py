@@ -97,7 +97,7 @@ SHORT = {
 FEATURES = {
     "map:Overture": "Overture Maps", "map:OpenStreetMap": "OpenStreetMap", "map:Microsoft ML Buildings": "Microsoft",
     "map:TomTom": "TomTom", "map:Esri Community Maps": "Esri", "map:Google Open Buildings": "Google",
-    "map:USGS Lidar": "USGS Lidar", "map:DRCOG Planimetrics 2024": "DRCOG Regional Data Catalog", "map:doi:10.5281/zenodo.8174931": "Shi et al. (East Asia buildings)",
+    "map:USGS Lidar": "USGS Lidar", "map:DRCOG Planimetrics 2024": "DRCOG Regional Data Catalog", "map:USGS 3DEP Lidar": "USGS 3DEP", "map:doi:10.5281/zenodo.8174931": "Shi et al. (East Asia buildings)",
     "land:esa-worldcover": "ESA WorldCover", "canopy:meta-wri-chm": "Meta & WRI",
     "sea:noaa": "NOAA NCEI", "bridge:nbi": "FHWA NBI", "bridge:wikidata": "Wikidata",
     "air:ourairports": "OurAirports", "grav:egm2008": "NGA EGM2008",
