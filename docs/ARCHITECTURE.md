@@ -972,11 +972,15 @@ three days of testing: dem 741 MB / 7.5k files, imagery 1.4 GB / 35k, deshadow 7
   colouring each blade from the ground under it (Ghost of Tsushima), fading it out over a wide band, and filling in
   past it with cheaper grass. GroundCover cannot read the ground, so in detail mode the server takes the block
   photo's mean colour under its grass layers (`surface.grass_tint`, middle 60% of the block) into the terrain
-  message (`grassTint`), and `groundcover.lua` sets the stock grass materials' `baseColorFactor` to give their
-  textures (mean linear colour measured offline, `TEX_LINEAR`) that colour (`TINT_STRENGTH`, geometric), only
-  when it moved by more than 3% (each change reloads the material). Past "near", each GroundCover's fade starts
-  at half its radius at the latest (`FADE_SHARE`). The settings page's "Grass takes the ground's colour" turns
-  the tint off.
+  message (`grassTint`), and `groundcover.lua` draws the grass with copies of its stock materials whose
+  `baseColorFactor` gives their textures (mean linear colour measured offline, `TEX_LINEAR`) that colour
+  (`TINT_STRENGTH`, geometric, `TINT_BRIGHT`). A material in use is never changed: the first version reloaded the
+  stock materials under live grass and Jeff's first drive with it crashed the engine (a call through a freed
+  object). A copy per colour step (`TINT_STEP` 6%: re-used, never deleted) is set up before it is registered, and
+  when the colour moved more than 8% the GroundCover objects are made again on the new copies at the next block
+  change (`afterBlockChange`, as at a teleport). Past "near", each GroundCover's fade starts at half its radius at
+  the latest (`FADE_SHARE`). The settings page's "Grass takes the ground's colour" (off by default until it is
+  checked in game) switches the tint.
 - Grass cards to 1 km (2026-10-28, same ask; `server/grasscards.py`, `earthd --grass-cards on`, any near-visual
   mode, with `--surface on`). The flat grass layer gives no height, so between the 3D grass and `SEND_M` (1 km) each road
   tile square of grassy land gets a render-only mesh of crossed cards (one per 3 m cell of a jittered grid hashed
