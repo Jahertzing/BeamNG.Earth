@@ -213,7 +213,8 @@ class PlanTest(unittest.TestCase):
         self.assertTrue(plan2)
         for _, _, cands in plan2:
             self.assertNotIn("co_frederick", [c.name for c in cands], "no data there: not asked")
-            self.assertEqual(cands[0].name, "naipusda")
+            self.assertEqual(cands[0].name, "co_naip2023", "the state's NAIP 2023, then USDA's and USGS's")
+            self.assertEqual([c.name for c in cands[1:]], ["naipusda", "naip"])
 
     def test_front_range_sources(self):
         """Each Front Range town's centre gets its own county's photo first."""
@@ -277,6 +278,26 @@ class PlanTest(unittest.TestCase):
                 self.assertLess(lane.dist_m([la], [lo])[0], 3000.0)
             self.assertLess(min(town.dist_m([la], [lo])[0], lane.dist_m([la], [lo])[0]), 3000.0, "no cells in the low")
 
+    def test_naip2023_not_probed_and_falls_through(self):
+        """The Planetary Computer's statewide NAIP: no coverage probe (a request per z13 tile of the state), and a
+        failure passes its parents on (as a national source's), where a county's is left for the next run."""
+        class NoNet:
+            def get(self, *a, **k):
+                raise AssertionError("no request expected")
+
+            def policy(self, host):
+                return netfetch.HostPolicy()
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        reg = preload.disc_region(39.0, -106.0, 2.0)       # no county's box here
+        cov = preload.probe_coverage(NoNet(), tmp.name, reg, [imagery.SOURCES["co_naip2023"]])
+        self.assertEqual(cov, {})
+        self.assertTrue(preload.fallthrough(imagery.SOURCES["co_naip2023"]))
+        self.assertTrue(preload.fallthrough(imagery.SOURCES["naip"]))
+        self.assertFalse(preload.fallthrough(imagery.SOURCES["co_larimer"]))
+        plan = preload.plan_exports(reg, self.chain)
+        self.assertTrue(plan and all(cs[0].name == "co_naip2023" for _, _, cs in plan))
+
     def test_dead_hosts_left_out(self):
         """One small request per host up front; a host that fails it (USDA's NAIP host not resolving) is left out,
         a 404 is an answer."""
@@ -291,6 +312,22 @@ class PlanTest(unittest.TestCase):
                     raise netfetch.NotFound("404", url, "tiles.mapterhorn.com")
                 return None
         reg = preload.disc_region(*FREDERICK, 1.0)
+        old = dict(imagery.RESOLVERS)
+        self.addCleanup(lambda: (imagery.RESOLVERS.clear(), imagery.RESOLVERS.update(old)))
+        imagery.RESOLVERS["pcnaip"] = lambda fetcher, cache_dir: \
+            "https://planetarycomputer.microsoft.com/t/{pz}/{px}/{py}@{scale}x.jpg"
+        dead = preload.check_hosts(Net(), reg, self.chain, {"dem", "imagery"})
+        self.assertIn("planetarycomputer.microsoft.com", asked)
+        asked.clear()
+
+        def no_register(fetcher, cache_dir):
+            raise netfetch.FetchFailed("registration refused", "u", "planetarycomputer.microsoft.com")
+        imagery.RESOLVERS["pcnaip"] = no_register
+        dead2 = preload.check_hosts(Net(), reg, self.chain, {"dem", "imagery"})
+        self.assertIn("co_naip2023", dead2, "a source that cannot register: left out")
+        asked.clear()
+        imagery.RESOLVERS["pcnaip"] = lambda fetcher, cache_dir: \
+            "https://planetarycomputer.microsoft.com/t/{pz}/{px}/{py}@{scale}x.jpg"
         dead = preload.check_hosts(Net(), reg, self.chain, {"dem", "imagery"})
         self.assertEqual(set(dead), {"naipusda"})
         self.assertEqual(dead["naipusda"][0], "apps.geo.fpac.usda.gov")
