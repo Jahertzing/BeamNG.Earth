@@ -758,7 +758,7 @@ class Deshadow:
         """Params from the disk cache (current VERSION only). Caller holds the lock."""
         if rk in self._params:
             return self._params[rk]
-        jp, npz = self._paths(rk)
+        jp, npz = map(cachemod.resolve, self._paths(rk))
         try:
             with open(jp) as f:
                 P = json.load(f)
@@ -859,7 +859,7 @@ class Deshadow:
             if g is not None:
                 self._grids.move_to_end(rk)
                 return Region(P, g)
-        npz = self._paths(rk)[1]
+        npz = cachemod.resolve(self._paths(rk)[1])
         try:
             with np.load(npz) as f:
                 g = f["grids"]
@@ -913,7 +913,7 @@ class Deshadow:
                 return bool(P.get("ok"))
             if rk in self._events or rk in self._failed:
                 return None
-        return True if os.path.exists(self._paths(rk)[0]) else None
+        return True if cachemod.exists(self._paths(rk)[0]) else None
 
     def _worker(self):
         pacer.enable(pacer.DUTY)     # a background analysis: paced (pacer.py)
@@ -1023,13 +1023,14 @@ class Deshadow:
             return None
         png, same = self._tile_paths(z, x, y)
         v = None
-        if os.path.exists(same):
+        rsame, rpng = cachemod.resolve(same), cachemod.resolve(png)     # (written to the cache: same, png)
+        if os.path.exists(rsame):
             v = SAME
-            self.disk.used(same)
-        elif os.path.exists(png):
+            self.disk.used(rsame)
+        elif os.path.exists(rpng):
             try:
-                v = np.asarray(Image.open(png).convert("RGB"))
-                self.disk.used(png)
+                v = np.asarray(Image.open(rpng).convert("RGB"))
+                self.disk.used(rpng)
             except (OSError, ValueError):
                 v = None
         if v is None:

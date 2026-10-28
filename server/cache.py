@@ -40,10 +40,22 @@ time; the 404 markers' own expiry is netfetch's miss_ttl. Per-producer versions 
 is never read again, so it ages out through the LRU instead of being deleted at once (ROADMAP 5).
 
 Memory: about 200 bytes per tracked file (a 20 GB cache of 30 KB imagery tiles: ~130 MB).
+
+The world folder (the user, 2026-10-28: pre-loaded data must not be a cache anyone can lose): what tools/preload.py
+fetched lives in its own folder (apppaths.default_world_dir(), earthd --world-dir), laid out as the cache (dem/,
+imagery/SOURCE/, mapdata/, ...) plus VERSION, regions/ (the pre-loads' manifests) and bake/ (revisit.py's baked
+routes). The producers keep building their paths under the cache; resolve() turns one into the world's copy when there
+is one, so every read looks in the world first, then the cache. Writes go to the cache as before. The Cache class never
+sees the world's files (they are outside its root): never counted against the cap, evicted, expired or cleared. A
+world .404 marker is a permanent "no data" (netfetch.Fetcher.miss_alive). set_world(promote=True) is the pre-load's
+side: the producers write into the world, and a file the world lacks but the cache has is moved over instead of
+fetched again.
 """
+import errno
 import logging
 import math
 import os
+import shutil
 import threading
 import time
 
@@ -68,6 +80,13 @@ MSG_VERSION = 1
 READ_WAITS = (0.02, 0.05, 0.1, 0.25)   # s between the tries of a read held up on Windows (NoCache.read)
 
 
+WORLD_VERSION = 1
+WORLD_ENV = "BNGE_WORLD_DIR"        # the world folder for the server's worker processes (not BNE_: revisit's code
+WORLD_CACHE_ENV = "BNGE_WORLD_CACHE"    # key hashes those), and the cache folder it stands beside
+WORLD_DIR_S = 60.0                  # a world folder found missing is not looked for again for this long
+WORLD_DIRS_MAX = 200000             # remembered folders (then forgotten all at once)
+
+
 def cap_bytes(gb):
     """A cap in GB (float, 0 = unlimited) as bytes; None / negative / not finite -> ValueError."""
     gb = float(gb)
@@ -81,10 +100,12 @@ class NoCache:
     without a Cache, the tools, the tests)."""
 
     def read(self, path):
-        """The file's bytes, or None if it is not there (also when it was evicted a moment ago). On Windows a file
+        """The file's bytes (the world folder's copy first: resolve), or None if it is not there (also when it was
+        evicted a moment ago). On Windows a file
         another process is replacing or deleting cannot be opened for a moment (PermissionError: a far tile of a
         first visit to Chicago failed on a Windows test PC, 2026-10-24): tried again READ_WAITS, then a miss (the
         caller fetches it again and staging.replace_cached keeps whichever copy goes in)."""
+        path = resolve(path)
         for wait in READ_WAITS + (None,):
             try:
                 with open(path, "rb") as f:
@@ -231,7 +252,9 @@ class Cache(NoCache):
             self._wake.set()
 
     def read(self, path):
-        """A disk hit: marked used first (a pass running now keeps it), then read; a miss leaves no entry."""
+        """A disk hit: marked used first (a pass running now keeps it), then read; a miss leaves no entry. A world
+        folder's copy is read untracked (outside the root)."""
+        path = resolve(path)
         self.used(path)
         data = super().read(path)
         if data is None:
@@ -570,6 +593,147 @@ def touch_once(path):
         os.utime(path, None)
     except OSError:
         pass
+
+
+# --- the world folder -----------------------------------------------------------------------------------------------
+_world = None                       # (world root + sep, cache root + sep, promote) or None
+_world_dirs = {}                    # a world folder -> (it exists, when that was found)
+_world_lock = threading.Lock()
+
+
+def set_world(world_dir, cache_dir, promote=False, env=True):
+    """Read the world folder's copy of a file under cache_dir first (resolve). promote: the other way round (the
+    pre-load: the producers rooted at the world, a file only the cache has moved over; "look": read where it is, not
+    moved, the dry run's). env: also for the processes
+    started from now on (earthd's workers configure themselves from it at import). None / "" turns it off. A world
+    folder inside the cache or the cache inside it is refused (eviction would reach it): returns the folder or None."""
+    global _world
+    with _world_lock:
+        _world_dirs.clear()
+    if not world_dir or not cache_dir:
+        _world = None
+        if env:
+            os.environ.pop(WORLD_ENV, None)
+            os.environ.pop(WORLD_CACHE_ENV, None)
+        return None
+    w, c = os.path.abspath(world_dir), os.path.abspath(cache_dir)
+    wn, cn = os.path.normcase(w) + os.sep, os.path.normcase(c) + os.sep
+    if wn.startswith(cn) or cn.startswith(wn):
+        log.warning("world folder %s and cache %s overlap: no world folder (pick one outside the cache)", w, c)
+        _world = None
+        return None
+    _world = (w + os.sep, c + os.sep, promote if promote == "look" else bool(promote))
+    if env and not promote:
+        os.environ[WORLD_ENV], os.environ[WORLD_CACHE_ENV] = w, c
+    return w
+
+
+def world_dir():
+    """The world folder set (set_world), or None."""
+    w = _world
+    return w[0][:-1] if w is not None else None
+
+
+def _under(path, prefix):
+    """path relative to prefix, or None when it is not under it."""
+    if path.startswith(prefix):
+        return path[len(prefix):]
+    p = os.path.abspath(path)           # (a root given with '/' on Windows, or relative)
+    return p[len(prefix):] if p.startswith(prefix) else None
+
+
+def _world_has_dir(d):
+    now = time.monotonic()
+    got = _world_dirs.get(d)
+    if got is not None and (got[0] or now - got[1] < WORLD_DIR_S):
+        return got[0]
+    there = os.path.isdir(d)
+    with _world_lock:
+        if len(_world_dirs) >= WORLD_DIRS_MAX:
+            _world_dirs.clear()
+        _world_dirs[d] = (there, now)
+    return there
+
+
+def resolve(path):
+    """The path to read for a producer's path: its world folder copy when there is one, else path (no world folder,
+    or not under the cache). One stat for a file in a world folder that exists, none in one known missing
+    (WORLD_DIR_S). Promote mode (the pre-load): path is under the world; when it is missing there and the cache has the
+    file, it is moved over first (move_file; the cache's index drops it at its next walk)."""
+    w = _world
+    if w is None:
+        return path
+    wpre, cpre, promote = w
+    if promote:
+        rel = _under(path, wpre)
+        if rel is None:
+            return path
+        path = wpre + rel
+        if os.path.exists(path):
+            return path
+        other = cpre + rel
+        if os.path.exists(other):
+            if promote == "look":
+                return other
+            try:
+                move_file(other, path)
+            except OSError as e:
+                log.debug("world: %s not moved over (%s): read from the cache", other, e)
+                return other
+        return path
+    rel = _under(path, cpre)
+    if rel is None:
+        return path
+    wp = wpre + rel
+    if not _world_has_dir(os.path.dirname(wp)):
+        return path
+    return wp if os.path.exists(wp) else path
+
+
+def exists(path):
+    """os.path.exists of resolve(path): in the world folder or the cache."""
+    return os.path.exists(resolve(path))
+
+
+def in_world(path):
+    """Whether a (resolved) path is in the world folder."""
+    w = _world
+    return w is not None and _under(path, w[0]) is not None
+
+
+def _cross_device(e):
+    return e.errno == errno.EXDEV or getattr(e, "winerror", None) == 17     # (ERROR_NOT_SAME_DEVICE)
+
+
+def move_file(src, dst):
+    """Move a file, its folder made: os.replace on one drive, else a copy (to a temporary name, replaced into place)
+    and the source removed."""
+    os.makedirs(os.path.dirname(dst), exist_ok=True)
+    try:
+        os.replace(src, dst)
+    except OSError as e:
+        if not _cross_device(e):
+            raise
+        tmp = f"{dst}.{os.getpid()}.{threading.get_ident()}.tmp"
+        try:
+            shutil.copy2(src, tmp)
+            os.replace(tmp, dst)
+        except BaseException:
+            try:
+                os.remove(tmp)
+            except OSError:
+                pass
+            raise
+        os.remove(src)
+
+
+def _world_from_env():
+    """earthd's worker processes: the server's world folder (set_world's environment)."""
+    if os.environ.get(WORLD_ENV) and os.environ.get(WORLD_CACHE_ENV):
+        set_world(os.environ[WORLD_ENV], os.environ[WORLD_CACHE_ENV], env=False)
+
+
+_world_from_env()
 
 
 def _gb(b):

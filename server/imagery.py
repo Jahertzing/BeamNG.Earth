@@ -668,7 +668,7 @@ class Imagery:
 
     def _on_disk(self, key):
         src, z, x, y = key
-        return os.path.exists(self._paths(src, z, x, y)[0])
+        return cachemod.exists(self._paths(src, z, x, y)[0])
 
     def _load_kind(self, key, kind):
         """_load(key) in a pool thread, its requests made as `kind` (subclasses override _load(key))."""
@@ -1012,10 +1012,10 @@ class Imagery:
         for s in self.chain:
             if s is src:
                 break
-            if s.lazy and s.export == src.export and os.path.exists(self._paths(s, z, x | last, y | last)[0]):
+            if s.lazy and s.export == src.export and cachemod.exists(self._paths(s, z, x | last, y | last)[0]):
                 return True
         path, miss = self._paths(src, z, x | last, y | last)
-        if os.path.exists(path) or os.path.exists(miss):
+        if cachemod.exists(path) or cachemod.exists(miss):
             return True
         with self._lock:
             return self._probe_status(key) == "outside"
@@ -1044,9 +1044,9 @@ class Imagery:
                     if not in_bounds(src, z, tx, ty):
                         continue
                     path, miss = self._paths(src, z, tx, ty)
-                    if os.path.exists(path):
+                    if cachemod.exists(path):
                         break
-                    if os.path.exists(miss) or self._warm_passed(src, z, tx, ty):
+                    if cachemod.exists(miss) or self._warm_passed(src, z, tx, ty):
                         continue
                     with self._lock:
                         if self._probe_status((src, z, tx, ty)) == "outside":

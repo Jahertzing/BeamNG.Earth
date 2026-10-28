@@ -984,7 +984,7 @@ class ColorMatch:
     def _load(self, rk, kind):
         """(seams / field of rk (EMPTY for a field marker), meta), or None if absent or stale
         (another VERSION, reference chain, region zoom or mode)."""
-        npz, none = self._paths(rk, kind)
+        npz, none = map(cachemod.resolve, self._paths(rk, kind))
         if os.path.exists(none):
             try:
                 with open(none, "rb") as f:
@@ -1034,7 +1034,7 @@ class ColorMatch:
     # (a field is decoded by field(), on a tile worker, outside the lock)
     def _on_disk(self, rk):
         """True (a field file of rk), False (its no-seam marker) or None: stat calls only."""
-        npz, none = self._paths(rk, "field")
+        npz, none = map(cachemod.resolve, self._paths(rk, "field"))
         return True if os.path.exists(npz) else False if os.path.exists(none) else None
 
     def _peek(self, rk):

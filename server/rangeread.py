@@ -32,6 +32,7 @@ import re
 import threading
 from collections import OrderedDict
 
+import cache
 import netfetch
 import staging
 import xproc
@@ -130,7 +131,7 @@ class RemoteFile:
 
     def _saved_size(self):
         try:
-            with open(os.path.join(self.cache_dir, "size"), "rb") as f:
+            with open(cache.resolve(os.path.join(self.cache_dir, "size")), "rb") as f:
                 n = int(f.read().strip())
             return n if n > 0 else None
         except (OSError, ValueError):
@@ -154,7 +155,7 @@ class RemoteFile:
                 self.stats["mem_blocks"] += 1
             return b
         try:
-            with open(self._path(i), "rb") as f:
+            with open(cache.resolve(self._path(i)), "rb") as f:
                 b = f.read()
         except OSError:
             return None

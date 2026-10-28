@@ -60,6 +60,7 @@ from dataclasses import dataclass, field
 
 import numpy as np
 
+import cache
 import geodesy
 import gradesep
 import mapcells
@@ -369,7 +370,7 @@ class MapData:
     # --- one layer -------------------------------------------------------------------------------
     def has(self, key, layer):
         """True when the layer's file exists (not read: cheap enough for the event loop)."""
-        return os.path.exists(self.path(key, layer))
+        return cache.exists(self.path(key, layer))
 
     def layer_provenance(self, key, layer):
         """The provenance dict of a cached layer file, None when it is not cached (or has none): only that entry of
@@ -381,7 +382,7 @@ class MapData:
             return memo[path]
         p = None
         try:
-            with np.load(path, allow_pickle=False) as z:
+            with np.load(cache.resolve(path), allow_pickle=False) as z:
                 if "provenance" in z.files:
                     p = json.loads(str(z["provenance"]))
         except FileNotFoundError:
@@ -397,7 +398,7 @@ class MapData:
         """A layer file's arrays, or None when it is missing or unreadable (truncated, a damaged
         deflate stream, another layout): a miss, rebuilt and written again."""
         def read():
-            with np.load(path, allow_pickle=False) as z:
+            with np.load(cache.resolve(path), allow_pickle=False) as z:
                 return {k: z[k] for k in z.files}
         try:
             arrays = staging.read_held(read)
@@ -598,7 +599,7 @@ class MapData:
 
     @staticmethod
     def _stamp(path):
-        st = os.stat(path)
+        st = os.stat(cache.resolve(path))
         return f"{st.st_size} {st.st_mtime_ns}"
 
     def _mirror_load(self, path):

@@ -3,7 +3,7 @@ installed in a diffrent place or diffrent launcher let the player set the locati
 beamng, beammp, or the cache. Open the explorer for that operating system but have a text input for the path as
 fallback"): the game's folder, the download cache's folder (GitHub #254) and the BeamMP launcher (bmplaunch.remember).
 
-The launcher's remembered choices are app.json in data_dir() ({"cacheDir": ..., "gameDir": ...}); the launcher reads
+The launcher's remembered choices are app.json in data_dir() ({"cacheDir": ..., "worldDir": ..., "gameDir": ...}); the launcher reads
 them at its start, the world server writes them from the settings page (they apply at the next start). pick() opens
 the system's own file or folder window: PowerShell's dialogs on Windows, kdialog or zenity on Linux; ("none", None) when
 there is none (Wine, Steam's Game Mode, no desktop), and the caller asks for the path as text (ask_path in a console,
@@ -84,6 +84,42 @@ def set_cache_dir(path, dd=None):
     except OSError as e:
         return None, f"cannot use {path}: {e.strerror or e}"
     save_app_settings(dd, cacheDir=path)
+    return path, None
+
+
+# --- the world folder ------------------------------------------------------------------------------
+
+def default_world_dir():
+    """The world folder without a choice (earthd --world-dir's default): what tools/preload.py fetched, kept for good
+    (server/cache.py "The world folder"). C:/beamng-earth/world on Windows (the system drive's), else
+    ~/beamng-earth/world."""
+    if IS_WIN:
+        return os.path.join((os.environ.get("SystemDrive") or "C:") + os.sep, "beamng-earth", "world")
+    return os.path.join(os.path.expanduser("~"), "beamng-earth", "world")
+
+
+def saved_world_dir(dd=None):
+    p = app_settings(dd).get("worldDir")
+    return p if isinstance(p, str) and p else None
+
+
+def set_world_dir(path, dd=None):
+    """Keep path as the world folder for the next starts ("" or "default": the default again), as set_cache_dir.
+    Returns (the folder or None for the default, error text or None). Files already there stay where they were
+    (tools/world.py backup / import moves them)."""
+    if (path or "").strip().strip('"').lower() in ("", "default"):
+        save_app_settings(dd, worldDir=None)
+        return None, None
+    path = clean(path)
+    try:
+        os.makedirs(path, exist_ok=True)
+        probe = os.path.join(path, ".bnge-write-test")
+        with open(probe, "w") as f:
+            f.write("ok")
+        os.remove(probe)
+    except OSError as e:
+        return None, f"cannot use {path}: {e.strerror or e}"
+    save_app_settings(dd, worldDir=path)
     return path, None
 
 

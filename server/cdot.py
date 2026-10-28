@@ -35,6 +35,7 @@ from collections import OrderedDict
 
 import numpy as np
 
+import cache
 import staging
 
 log = logging.getLogger("earthd.mapdata")
@@ -125,7 +126,7 @@ class Cdot:
                 self._mem.move_to_end(path)
                 return got
         try:
-            with np.load(path, allow_pickle=False) as z:
+            with np.load(cache.resolve(path), allow_pickle=False) as z:
                 got = {k: z[k] for k in z.files}
         except (OSError, ValueError):
             lon0, lat0, lon1, lat1 = key.bounds()
