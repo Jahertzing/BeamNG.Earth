@@ -426,6 +426,9 @@ do  -- static parked cars: a group per model from cars.json, every paint at its 
   T.check(sh == trees.CARS_DIR .. 'bne_car_midsize_white' or sh == trees.CARS_DIR .. 'bne_car_midsize_red', 'a paint: ' .. tostring(sh))
   T.check(trees.GROUP_MAX_M.car_midsize == trees.CAR_MAX_M, 'shown near only')
   T.check(trees.installCars(nil) == 0, 'no cars.json: nothing')
+  T.check(trees.NO_COLLIDE.car_midsize == true, 'still cars never collide')
+  T.check(trees.preloadCars() == 2, 'both paints loaded up front')
+  T.check(scenetree.findObject(trees.typeName(trees.CARS_DIR .. 'bne_car_midsize_red', false)) ~= nil, 'its item type made')
 end
 trees.FRAME_MS, trees.POOL_SPARE = FRAME_MS, POOL_SPARE
 T.done('test_trees')
