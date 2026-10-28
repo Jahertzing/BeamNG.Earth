@@ -116,9 +116,15 @@ GAME_EXES = ("BeamNG.drive.x64.exe", "BeamNG.drive.x64")    # the game itself (n
 FAR_PER_JOB = (1, 3)        # --mode alone: far workers per server, least and most (geometry 20 ms a tile; textures
                             # render in the server process while de-shadowing is on: more workers buy nothing)
 ROAD_PER_JOB = (2, 4)       # ... road processes: 4 = roads.BUILD_PER_POSE, the tiles a pose dispatches at once
-SERVER_FIXED_GB = 4.5       # a server tree without its far and road workers: the server 1.5 GB, two block lanes
-                            # 1.1 GB each, the far-building worker 0.7 (measured 2026-10-28 14:15)
-WORKER_GB = 0.9             # a far or road worker
+# Memory: every process of a server tree grows to about PROC_GB private over a bake (the caches of DEM, map cells and
+# imagery in each; a server of 3 far + 2 road workers, 9 processes, was 14 GB after an hour, 2026-10-28 evening: four of
+# them put the commit charge at 106 GB on a 64 GB machine, the pagefile at 42 GB, and the bake crawled), and
+# RESERVE_GB stays free for the OS and the page cache.
+PROC_GB = 1.6               # a process of a server tree, private, after an hour
+FIXED_PROCS = 4             # the server, two block lanes, the far-building worker
+SERVER_FIXED_GB = FIXED_PROCS * PROC_GB
+WORKER_GB = PROC_GB         # a far or road worker
+RESERVE_GB = 8.0            # left free
 CPUS_PER_JOB = 3            # a server tree used 1.4-1.7 cores (the same run): no more jobs than this allows
 MODES = ("auto", "game", "alone")
 CPU_SAMPLE_S = 2.0          # --profile: the server tree's CPU sampled this often
@@ -143,10 +149,11 @@ def available_gb():
 
 
 def workers_for(gb):
-    """(far, road) workers of a server tree within gb of memory: the road processes first (ROAD_PER_JOB: a pose's wave
+    """(far, road) workers of a server tree within gb of memory (SERVER_FIXED_GB + WORKER_GB each): the road processes
+    first (ROAD_PER_JOB: a pose's wave
     of tiles takes as many rounds as tiles over road processes), then the far workers (FAR_PER_JOB); None when not
     even the least fit."""
-    n = int((gb - SERVER_FIXED_GB) / WORKER_GB)
+    n = int((gb - SERVER_FIXED_GB) / WORKER_GB + 1e-6)       # (11.2 GB: exactly 3 workers, not 2.9999)
     if n < FAR_PER_JOB[0] + ROAD_PER_JOB[0]:
         return None
     road = min(ROAD_PER_JOB[1], n - FAR_PER_JOB[0])
@@ -156,17 +163,18 @@ def workers_for(gb):
 
 def plan_servers(wanted, n_legs=None, ram_gb=None, cpus=None):
     """(jobs, far, road, note) for --mode alone: as many servers as wanted (at most one per leg and one per CPUS_PER_JOB
-    CPUs), each with the most workers (workers_for) that fit its share of 90% of the memory available now; when the
+    CPUs), each with the most workers (workers_for) that fit its share of 90% of the memory available now less
+    RESERVE_GB (a tree's processes grow to PROC_GB each over a bake: the paging of 2026-10-28 evening); when the
     memory allows fewer full servers than wanted, the plan with the most workers in all wins, the fewest servers on a
     tie (a server's pace follows its workers: the run of 2026-10-28 20:50, five servers of 1 + 1, crawled; five of
-    1 + 2 would be 15 workers, three of 3 + 4 are 21). ram_gb None: psutil (None there: no memory cap). 43 GB free,
-    8 or 4 wanted: 3 servers of 3 + 4."""
+    1 + 2 would be 15 workers, three of 3 + 4 are 21). ram_gb None: psutil (None there: no memory cap). 43 GB free:
+    2 servers of 1 + 4 (the 2 x (3 + 2) that fit on 2026-10-28 13:18 were 10 workers too); 56 GB: 2 of 3 + 4."""
     cpus = (os.cpu_count() or 1) if cpus is None else cpus
     most = max(1, min(int(wanted), n_legs if n_legs else int(wanted), max(1, cpus // CPUS_PER_JOB)))
     ram_gb = available_gb() if ram_gb is None else ram_gb
     if ram_gb is None:
         return most, FAR_PER_JOB[1], ROAD_PER_JOB[1], None
-    budget = ram_gb * 0.9
+    budget = max(0.0, ram_gb - RESERVE_GB) * 0.9
     best = None             # (total workers, -jobs, jobs, far, road): the most workers in all, then the fewest servers
     for jobs in range(most, 0, -1):
         w = workers_for(budget / jobs)
