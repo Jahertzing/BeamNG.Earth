@@ -88,6 +88,8 @@ nightlights.providers.tunnel = function() return ambience.tunnelLights() end
 gasstations.onCollide = roads.markCollisionDirty
 local navgraph = require('beamngEarth/navgraph')
 local postfx = require('beamngEarth/postfx')       -- no far depth-of-field blur in our level
+-- haze.lua (the sky's aerosol: distance haze, hazeStrength) and grade.lua (our colour grade post effect,
+-- colorGrade) are required where they are used: the main chunk is at Lua's 200-local limit.
 local gps = require('beamngEarth/gps')               -- the game's GPS route to a place picked on the world map
 local collisionfoci = require('beamngEarth/collisionfoci') -- other vehicles' collision islands
 local terrainpatch = require('beamngEarth/terrainpatch')   -- ground under the islands off the terrain block
@@ -1872,6 +1874,13 @@ local function onUpdate(dtReal, dtSim)
   for k in pairs(marks) do marks[k] = nil end
   local t = hitchClock()
   postfx.update(st.inOurLevel)
+  do
+    local look = { haze = require('beamngEarth/haze'), grade = require('beamngEarth/grade') }
+    local okH, errH = pcall(look.haze.update, st.inOurLevel, st.player and st.player.z)
+    if not okH and not st.hazeWarned then st.hazeWarned = true; log('W', 'beamngEarth', 'haze: ' .. tostring(errH)) end
+    local okG, errG = pcall(look.grade.update, st.inOurLevel)
+    if not okG then look.grade.setMode('off'); log('W', 'beamngEarth', 'grade: ' .. tostring(errG) .. '; off this session') end
+  end
   local stg = rawget(_G, 'beamngEarth_settings')
   if stg and stg.redirectBigMap then stg.redirectBigMap(st.inOurLevel) end
   if st.inOurLevel then gps.update(st.anchor, st.player) end
@@ -2124,6 +2133,8 @@ local function onClientEndMission()
   hudapps.unhookCityZone()
   hudapps.unhookMinimapNorth()
   postfx.restore()
+  require('beamngEarth/haze').restore()
+  require('beamngEarth/grade').restore()
   pcall(terrainpatch.clear)
   pcall(gasstations.reset)
   pcall(farcars.reset)
@@ -2188,6 +2199,8 @@ local function onExtensionUnloaded()
   terrain.delete()
   -- M1h: the level stays loaded; give it back its sky and view distance
   horizon.restoreSky()
+  require('beamngEarth/haze').restore()
+  require('beamngEarth/grade').restore()
   if st.visibleDistance and horizon.setVisibleDistance(VISIBLE_DISTANCE) then st.visibleDistance = nil end
 end
 

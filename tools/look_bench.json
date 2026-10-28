@@ -1,0 +1,23 @@
+{
+ "version": 1,
+ "about": "Front Range views for the haze and colour grade (tools/probe_look.py): mountains, plains and the skyline at distance",
+ "defaults": {
+  "date": "2026-10-20",
+  "hour": 10.5,
+  "weather": "clear",
+  "views": [
+   {"name": "ground", "agl": 1.7, "pitch": 0, "fov": 60},
+   {"name": "raised", "agl": 120, "pitch": -3, "fov": 60}
+  ]
+ },
+ "places": [
+  {"id": "lk_frederick_west", "name": "Frederick, looking west to Longs Peak and the Indian Peaks (55-70 km)",
+   "lat": 40.0992, "lon": -104.9372, "heading": 275, "group": "look", "tags": ["colorado"]},
+  {"id": "lk_i25_erie", "name": "I-25 at Erie, looking south-southwest to Denver and the foothills",
+   "lat": 40.017, "lon": -104.988, "heading": 200, "group": "look", "tags": ["colorado"]},
+  {"id": "lk_denver_north", "name": "I-25 north of downtown Denver, looking south at the skyline",
+   "lat": 39.7835, "lon": -104.9905, "heading": 195, "group": "look", "tags": ["colorado"]},
+  {"id": "lk_castle_rock", "name": "I-25 north of Castle Rock, looking south (Castle Rock butte, Pikes Peak ~70 km)",
+   "lat": 39.4300, "lon": -104.8830, "heading": 190, "group": "look", "tags": ["colorado"]}
+ ]
+}

@@ -169,6 +169,26 @@ function M.fogSigma(visM)
   return M.FOG_K / clamp(v, M.FOG_VIS_MIN, M.FOG_VIS_MAX)
 end
 
+-- The height fog for a reported visibility (m) and fog flag. The sky's aerial perspective (haze.lua: Rayleigh and
+-- the hazeStrength aerosol) already gives clear air its distance haze, and a model's clear-air visibility is a
+-- conservative figure (Open-Meteo reported 25-35 km at Denver on days the Rockies stand out 60-100 km away; at
+-- 3.912 / V the height fog then hid them, the look probe 2026-10-28): from VIS_CLEAR_M up the fog only blends
+-- the far field's edge into the sky (FOG_CLEAR_VIS_M), below VIS_FLOOR_M (mist, smoke, snow) it is the reported
+-- visibility, in between the two blend in log space. With a fog code: always the reported visibility.
+M.VIS_CLEAR_M = 20000
+M.VIS_FLOOR_M = 6000
+M.FOG_CLEAR_VIS_M = 200000
+function M.fogSigmaFor(visM, fog)
+  if fog then return M.fogSigma(visM) end
+  local v = tonumber(visM) or M.FOG_VIS_DEFAULT
+  local clear = M.FOG_K / M.FOG_CLEAR_VIS_M
+  if v >= M.VIS_CLEAR_M then return clear end
+  local s = M.fogSigma(v)
+  if v <= M.VIS_FLOOR_M then return s end
+  local t = math.log(v / M.VIS_FLOOR_M) / math.log(M.VIS_CLEAR_M / M.VIS_FLOOR_M)
+  return math.exp(math.log(s) + (math.log(clear) - math.log(s)) * t)
+end
+
 -- The engine's fogDensity that gives extinction sigma at height groundZ (nil = no compensation).
 function M.fogDensityFor(sigma, groundZ, height)
   local d = sigma
@@ -252,7 +272,7 @@ function M.targets(msg)
     cloudAboveKm = clamp((tonumber(msg.baseAglM) or 1800) / 1000, M.CLOUD_ABOVE_MIN_KM, M.CLOUD_ABOVE_MAX_KM),
     cloudDirX = cx, cloudDirY = cy,
     cloudWindSpeed = clamp((tonumber(aloft.ms) or 0) * M.CLOUD_WIND_SCALE, M.CLOUD_WIND_MIN, M.CLOUD_WIND_MAX),
-    fogSigma = M.fogSigma(msg.visM),
+    fogSigma = M.fogSigmaFor(msg.visM, msg.fog),
     fogHeight = msg.fog and M.FOG_HEIGHT_FOG or M.FOG_HEIGHT,
     windMs = ms, gustMs = math.max(ms, tonumber(wind.gustMs) or ms),
     windDirX = wx, windDirY = wy,
