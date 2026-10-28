@@ -118,6 +118,7 @@ import gravity as gravitymod  # noqa: E402
 import airportgrade as airportgrademod  # noqa: E402
 import airports as airportsmod  # noqa: E402
 import seacarve as seacarvemod  # noqa: E402
+import snapshots as snapshotsmod  # noqa: E402
 import seatiles as seatilesmod  # noqa: E402
 import vegetation as vegetationmod
 import buildings as buildingsmod  # noqa: E402
@@ -3567,6 +3568,8 @@ class Connection:
             for line in (lines if isinstance(lines, list) else [])[:PERF_LOG_LINES]:
                 if isinstance(line, str):
                     log.info("game: %s", line[:PERF_LOG_CHARS].replace("\n", " "))
+        elif kind == "snapshot":                # a drive snapshot (snapshot.lua): kept for good with this moment's logs
+            self.spawn(self.snapshot(msg))
         elif kind == "roads_reset":             # the mod dropped its roads (settings): send them all again
             self.roads.close()
             self.roads = roadsmod.Tracker()
@@ -3576,6 +3579,12 @@ class Connection:
                 self.roads = roadsmod.Tracker()
         else:
             log.debug("ignoring message type %r", kind)
+
+    async def snapshot(self, msg):
+        try:
+            await asyncio.to_thread(snapshotsmod.ingest_message, msg)
+        except Exception:
+            log.exception("snapshot %r", msg.get("folder"))
 
     async def terrain_patch(self, msg):
         """The mod's terrainpatch.lua: the ground's collision patch over box (x0, y0, x1, y1, the active anchor's
@@ -5312,6 +5321,7 @@ def main():
         ap.error("--horizon needs --near-visual mesh (terrain mode is frozen at the v1.3.1 layout)")
     logging.basicConfig(level=logging.DEBUG if args.verbose else logging.INFO,
                         format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+    snapshotsmod.install(SERVER_VERSION)     # the drive snapshots' log lines (kept in memory) and build
     raise_open_files()
     import fast
     try:
