@@ -16,6 +16,9 @@ M.MATERIALS = {
   bne_bld_sky = { '1 1 1', 200 },
   -- the street lamps' lenses (furniture.py G_LENS; tools/build_lamp_lens.py): sodium-warm, bright
   bne_lamp_lens = { '1 0.66 0.33', 4000 },
+  -- the landmarks (server/landmarks.py): the Capitol's gold dome floodlit, the Castle Rock Star's bulbs
+  bne_bld_gold = { '1 0.80 0.48', 40 },
+  bne_bld_glow = { '1 0.95 0.82', 3000 },
 }
 
 -- The street lamps' light: a pool of LIGHTS_MAX spot lights (no shadows), every LIGHTS_S moved to the lamps nearest

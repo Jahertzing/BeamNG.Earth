@@ -466,5 +466,63 @@
       {}
     ],
     "translucent": false
+  },
+  "bne_bld_gold": {
+    "name": "bne_bld_gold",
+    "mapTo": "bne_bld_gold",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "308e611d-5e1f-530d-b64d-8f249b33366e",
+    "Stages": [
+      {
+        "baseColorFactor": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "roughnessFactor": 0.3,
+        "metallicFactor": 1,
+        "vertColor": true,
+        "emissiveFactor": [
+          0,
+          0,
+          0
+        ]
+      },
+      {},
+      {},
+      {}
+    ],
+    "translucent": false
+  },
+  "bne_bld_glow": {
+    "name": "bne_bld_glow",
+    "mapTo": "bne_bld_glow",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "ae408c44-8d97-5008-bd3c-2a3ed2f037f2",
+    "Stages": [
+      {
+        "baseColorFactor": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "roughnessFactor": 0.6,
+        "metallicFactor": 0,
+        "vertColor": true,
+        "emissiveFactor": [
+          0,
+          0,
+          0
+        ]
+      },
+      {},
+      {},
+      {}
+    ],
+    "translucent": false
   }
 }

@@ -268,6 +268,13 @@ def merge_buildings(feats, roof):
             grid.setdefault((int(math.floor(x / cell)), int(math.floor(y / cell))), []).append(i)
     replaced = set()
     donor = {}
+    # the landmark table's buildings (landmarks.json, by OSM id) keep their own outline and parts: a roofprint over one
+    # is left out (the State Capitol's dome is an OSM part; DRCOG has its roof levels, no dome)
+    import landmarks
+    prot = landmarks.protected_ids()
+    recs = feats.attrs.get("src_record")
+    prot_rows = {i for i in range(n_o) if prot and recs is not None and landmarks.osm_key(recs[i]) in prot}
+    dropped = set()
     for j in keep_r:
         r = rings_r[j]
         x0, y0 = r.min(0)
@@ -283,8 +290,15 @@ def merge_buildings(feats, roof):
                 continue
             ox, oy = cen_o[i]
             if (x0 <= ox <= x1 and y0 <= oy <= y1 and _pip(ox, oy, r)) or _pip(cx, cy, ro):
-                replaced.add(i)
-                donor.setdefault(j, i)
+                if i in prot_rows:
+                    dropped.add(j)
+                replaced.add((j, i))
+    keep_r = [j for j in keep_r if j not in dropped]
+    kept = set(keep_r)
+    for j, i in sorted(replaced):
+        if j in kept:
+            donor.setdefault(j, i)
+    replaced = {i for j, i in replaced if j in kept}
     keep_o = [i for i in range(n_o) if i not in replaced]
     ids = [str(feats.ids[i]) for i in keep_o] + [f"zdrcog-{int(roof['oid'][j]):012d}" for j in keep_r]
     geoms = [(feats.kind[i], [[np.asarray(rg, np.float64) for rg in p] for p in feats.parts(i)]) for i in keep_o]
