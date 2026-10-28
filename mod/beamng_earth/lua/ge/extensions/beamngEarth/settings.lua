@@ -29,6 +29,8 @@ local ui = require('beamngEarth/ui')
 local net = require('beamngEarth/net')
 local credits = require('beamngEarth/credits')
 local places = require('beamngEarth/places')
+local haze = require('beamngEarth/haze')
+local grade = require('beamngEarth/grade')
 
 M.FILE = '/settings/beamngEarth.json'
 M.VERSION = 1
@@ -45,7 +47,11 @@ M.SCHEMA = {
     max = rebase.MAX_DISTANCE, label = 'Rebase distance (m)' },
   viewDistanceMode = { kind = 'enum', default = 'horizon', values = { 'fixed', 'horizon' }, label = 'View distance' },
   viewDistanceKm = { kind = 'number', default = 100, min = 20, max = 1000, label = 'Fixed view distance (km)' },
-  hazeStrength = { kind = 'number', default = 0, min = 0, max = 1, label = 'Distance haze (placeholder)' },
+  -- the aerosol of the sky's aerial perspective (haze.lua): 0 = the stock clean air, 1 = a hazy summer day
+  hazeStrength = { kind = 'number', default = 0.5, min = 0, max = 1, label = 'Distance haze' },
+  -- our own colour grade on the tone mapped image (grade.lua): BeamNG 0.40 dropped the stock one
+  colorGrade = { kind = 'enum', default = 'colorado', values = { 'off', 'natural', 'colorado', 'vivid' },
+    label = 'Colour grade' },
   skyMode = { kind = 'enum', default = 'real', values = { 'real', 'manual' }, label = 'Sky' },
   clouds = { kind = 'bool', default = true, label = 'Clouds' },
   weatherMode = { kind = 'enum', default = 'real', values = { 'real', 'manual' }, label = 'Weather' },
@@ -97,7 +103,7 @@ M.SCHEMA = {
   updateDismissed = { kind = 'string', default = '', maxLen = 40, label = 'Update notice dismissed (version)' },
 }
 M.ORDER = { 'theDriveTime', 'theDriveAutodrive', 'rebaseDistance', 'viewDistanceMode', 'viewDistanceKm', 'hazeStrength',
-  'skyMode', 'clouds', 'weatherMode', 'realGravity', 'groundCover', 'groundCoverDensity', 'groundCoverDistance',
+  'colorGrade', 'skyMode', 'clouds', 'weatherMode', 'realGravity', 'groundCover', 'groundCoverDensity', 'groundCoverDistance',
   'groundGrass', 'rocks', 'roads', 'cityGlow', 'aiTraffic', 'drcog', 'lidarHeights', 'dashboardSatellite', 'hudVisible', 'statusBar',
   'placeNamesOnline', 'creditsVisible', 'beammpOnLaunch',
   'creditsCorner', 'creditsSize', 'cacheCapGb', 'devOutlineKm', 'devMapKm' }
@@ -305,7 +311,8 @@ M.APPLY = {
     local dev = ext('beamngEarth_dev')
     if dev and dev.setParam then dev.setParam('mapKm', v) end
   end,
-  -- hazeStrength: a placeholder until the haze exists (v1.4 M1h)
+  hazeStrength = function(v) haze.setStrength(v) end,
+  colorGrade = function(v) grade.setMode(v) end,
 }
 
 function M.apply(key)
