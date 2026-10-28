@@ -1,0 +1,74 @@
+[
+ {
+  "name": "base",
+  "settle": 3
+ },
+ {
+  "name": "amb_lo",
+  "sky": {
+   "nightColor": [
+    0.03,
+    0.024,
+    0.018,
+    1
+   ],
+   "nightFogColor": [
+    0.02,
+    0.016,
+    0.013,
+    1
+   ]
+  },
+  "settle": 3
+ },
+ {
+  "name": "amb_hi",
+  "sky": {
+   "nightColor": [
+    0.09,
+    0.07,
+    0.05,
+    1
+   ],
+   "nightFogColor": [
+    0.05,
+    0.04,
+    0.032,
+    1
+   ]
+  },
+  "settle": 3
+ },
+ {
+  "name": "spot_wide",
+  "lua": "local n = 0 for _, nm in ipairs(scenetree.findClassObjects('SpotLight') or {}) do local o = scenetree.findObject(nm) if o then o:setField('range', 0, '48') o:setField('innerAngle', 0, '60') o:setField('outerAngle', 0, '165') o:setField('brightness', 0, '8.0') n = n + 1 end end BNGE_SPOTS = n",
+  "undo": "local n = 0 for _, nm in ipairs(scenetree.findClassObjects('SpotLight') or {}) do local o = scenetree.findObject(nm) if o then o:setField('range', 0, '36') o:setField('innerAngle', 0, '50') o:setField('outerAngle', 0, '130') o:setField('brightness', 0, '8.0') n = n + 1 end end BNGE_SPOTS = n",
+  "settle": 3
+ },
+ {
+  "name": "fill",
+  "lua": "BNGE_FILL = BNGE_FILL or {} local nl = require('beamngEarth/nightlights') local c = core_camera.getPosition() local f = core_camera.getForward() local h = math.max(1e-3, math.sqrt(f.x * f.x + f.y * f.y)) for _, l in ipairs(nl.nearest(c.x, c.y, 450, 96, f.x / h, f.y / h, 90)) do local o = createObject('PointLight') o:setField('radius', 0, '20') o:setField('brightness', 0, '0.6') o:setField('color', 0, '1 0.70 0.42 1') o:setField('castShadows', 0, 'false') o.canSave = false o:registerObject('') local a = math.rad(l[4] or 0) o:setPosition(vec3(l[1] + math.cos(a) * 3, l[2] + math.sin(a) * 3, l[3] - 6)) scenetree.MissionGroup:addObject(o) BNGE_FILL[#BNGE_FILL + 1] = o:getID() end",
+  "undo": "for _, id in ipairs(BNGE_FILL or {}) do local o = scenetree.findObjectById(id) if o then o:delete() end end BNGE_FILL = {}",
+  "settle": 3
+ },
+ {
+  "name": "all_lo",
+  "sky": {
+   "nightColor": [
+    0.03,
+    0.024,
+    0.018,
+    1
+   ],
+   "nightFogColor": [
+    0.02,
+    0.016,
+    0.013,
+    1
+   ]
+  },
+  "lua": "local n = 0 for _, nm in ipairs(scenetree.findClassObjects('SpotLight') or {}) do local o = scenetree.findObject(nm) if o then o:setField('range', 0, '48') o:setField('innerAngle', 0, '60') o:setField('outerAngle', 0, '165') o:setField('brightness', 0, '8.0') n = n + 1 end end BNGE_SPOTS = n BNGE_FILL = BNGE_FILL or {} local nl = require('beamngEarth/nightlights') local c = core_camera.getPosition() local f = core_camera.getForward() local h = math.max(1e-3, math.sqrt(f.x * f.x + f.y * f.y)) for _, l in ipairs(nl.nearest(c.x, c.y, 450, 96, f.x / h, f.y / h, 90)) do local o = createObject('PointLight') o:setField('radius', 0, '20') o:setField('brightness', 0, '0.6') o:setField('color', 0, '1 0.70 0.42 1') o:setField('castShadows', 0, 'false') o.canSave = false o:registerObject('') local a = math.rad(l[4] or 0) o:setPosition(vec3(l[1] + math.cos(a) * 3, l[2] + math.sin(a) * 3, l[3] - 6)) scenetree.MissionGroup:addObject(o) BNGE_FILL[#BNGE_FILL + 1] = o:getID() end",
+  "undo": "local n = 0 for _, nm in ipairs(scenetree.findClassObjects('SpotLight') or {}) do local o = scenetree.findObject(nm) if o then o:setField('range', 0, '36') o:setField('innerAngle', 0, '50') o:setField('outerAngle', 0, '130') o:setField('brightness', 0, '8.0') n = n + 1 end end BNGE_SPOTS = n for _, id in ipairs(BNGE_FILL or {}) do local o = scenetree.findObjectById(id) if o then o:delete() end end BNGE_FILL = {}",
+  "settle": 3
+ }
+]
