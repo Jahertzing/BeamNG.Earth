@@ -3652,6 +3652,8 @@ class Connection:
         t0 = time.perf_counter()
         # a teleport's first block without its road plans, the graded one sent when built (make_provisional)
         provisional = teleport and PROVISIONAL_FIRST and self.s.grading
+        if provisional and revisitmod.has(self.s.cache_dir, blockcache.KIND, self.s._block_key(anchor, cx, cy)):
+            provisional = False         # (the graded block built here before: read back at once, blockcache.py)
         if self.s.surface is not None and not provisional:
             # the anchor's first block is built once and kept while the player stands still: give the
             # land cover around it a moment to arrive (blocks built while driving never wait)

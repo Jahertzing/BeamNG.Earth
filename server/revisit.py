@@ -151,6 +151,13 @@ def store(cache_dir, kind, k, blobs, extra=None):
         return False
 
 
+def has(cache_dir, kind, k):
+    """Whether an item is kept under key k (never reads it)."""
+    if not ON or kind in SKIP:
+        return False
+    return os.path.exists(_path(cache_dir, kind, k, PIN_SUBDIR)) or os.path.exists(_path(cache_dir, kind, k))
+
+
 def load(cache_dir, kind, k):
     """({name: bytes}, extra) of the item under key k, or None when there is none (or it cannot be read)."""
     if not ON or kind in SKIP:

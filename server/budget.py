@@ -5,7 +5,7 @@ On a Steam Deck (16 GB shared with the GPU, 4 cores) seven processes filled the 
 the game's 2.4 GB and the GPU's 1.9 GB, swap at 6.9 GB, and the system's out-of-memory guard killed the game in a
 Baltimore drive (the user, 2026-10-20: "the game just closed"; "I want to keep world generation fast on the deck as
 well"). SMALL machines (less than SMALL_GB of RAM) get smaller caches and fewer processes; the others keep the
-desktop sizes.
+desktop sizes; LARGE ones (LARGE_GB and more) keep more decoded map data.
 
     budget.apply()          # in each process before its caches are made (earthd main, blockworker.init)
 """
@@ -36,6 +36,12 @@ SMALL_SERVER_SHARE = 0.5    # of the physical cores for the server (cpupin.SERVE
 # threads busy (colour matching ~85 s of CPU in a Baltimore drive) and stream large arrays through the memory the GPU
 # shares (on a desktop such a thread made the game's shadow pass 5-6x slower, pacer.py)
 SMALL_ANALYSES_OFF = True
+# LARGE machines (at least LARGE_GB of RAM, a 64 GB PC) keep more decoded map data per process: downtown Denver's road
+# cells were decoded from disk again for every road tile (~0.25 s a tile), the DRCOG buildings read for the measured
+# widths pushing them out of the desktop's 192 MB (the turn-pockets profile, 2026-10-28)
+LARGE_GB = 48.0
+LARGE_MAPDATA_MB = 768      # decoded map data layers (mapdata.MEM_MB)
+LARGE_WALL_CELLS = 96       # cells of building walls for the street widths (roadwidth.WALL_CELLS)
 
 
 def total_gb():
@@ -87,7 +93,20 @@ def apply(is_small=None):
         for cells, tex in farfield.TEX_DEFAULT.items():
             farfield.TEX_DEFAULT[cells] = tuple(min(t, SMALL_FAR_TEX) for t in tex)
         _malloc_small()
+    elif large():
+        import mapdata
+        import roadwidth
+        mapdata.MEM_MB = max(mapdata.MEM_MB, LARGE_MAPDATA_MB)
+        roadwidth.WALL_CELLS = max(roadwidth.WALL_CELLS, LARGE_WALL_CELLS)
     return is_small
+
+
+def large(gb=None):
+    """Is this a large machine (bigger map data caches)? BNGE_BUDGET=small / desktop: no."""
+    if os.environ.get("BNGE_BUDGET", "").lower() in ("small", "desktop"):
+        return False
+    gb = total_gb() if gb is None else gb
+    return gb is not None and gb >= LARGE_GB
 
 
 def _libc():
