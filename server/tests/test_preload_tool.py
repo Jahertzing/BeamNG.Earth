@@ -136,6 +136,30 @@ class RegionsFileTest(unittest.TestCase):
         self.assertFalse(inside((39.7, -105.6)), "the mountains")
         self.assertEqual(r.home, FREDERICK)
 
+    def test_colorado_and_routes(self):
+        co = regions.region(self.data, "colorado")
+        tiers = {p.tier for p in co.parts}
+        self.assertEqual(tiers, {"town", "road", "fill", "medium", "low"})
+        low = [p for p in co.parts if p.tier == "low"]
+        self.assertTrue(low and low[0].contains(37.5, -107.0), "the whole state at far-ring detail")
+        self.assertEqual(co.opt("low", "dem"), 13)
+        self.assertEqual(co.opt("low", "exports"), [])
+        self.assertIn(18, co.opt("road", "exports"), "the drive between towns gets the county photos at z18")
+        for p in ((40.5872, -105.077), (39.0639, -108.5506), (37.2753, -107.8801)):    # Fort Collins, GJ, Durango
+            self.assertTrue(any(q.contains(*p) for q in co.parts if q.tier == "town"), p)
+        self.assertTrue(any(q.contains(39.64, -106.37) for q in co.parts if q.tier == "road"), "I-70 at Vail")
+        fr = regions.region(self.data, "front-range")
+        self.assertTrue(any(q.name == "co52" for q in fr.parts) and any(q.name == "us85" for q in fr.parts))
+        drive = regions.region(self.data, "frederick-castle-rock")
+        self.assertEqual(len(drive.parts), 2)
+        self.assertTrue(all(p.tier == "town" and p.kind == "corridor" for p in drive.parts))
+        via, i25 = drive.parts
+        self.assertTrue(via.contains(39.7475, -104.9930), "16th St Mall")
+        self.assertFalse(i25.contains(39.7475, -104.9930), "I-25 passes downtown by")
+        for p in drive.parts:
+            self.assertTrue(p.contains(*FREDERICK) and p.contains(39.3722, -104.8561))
+            self.assertFalse(p.contains(39.70, -104.73), "not E-470")
+
     def test_bad_regions(self):
         bad = {"regions": {"a": {"union": ["b"]}, "b": {"union": ["a"]}, "c": {"circle": [40, -105], "tier": "x"},
                            "d": {"nothing": 1}, "e": {"union": ["missing"]}}}
@@ -208,7 +232,50 @@ class PlanTest(unittest.TestCase):
     def test_cells(self):
         cells = preload.plan_cells(preload.disc_region(*FREDERICK, 3.0))
         self.assertEqual(cells[0][0], mapcells.cell_of(*FREDERICK))
-        self.assertTrue(all(c.z == mapcells.ZOOM for c, _ in cells))
+        self.assertTrue(all(c.z == mapcells.ZOOM and ly is preload.CELL_LAYERS for c, _, ly in cells))
+        self.assertNotIn("tall_buildings", preload.CELL_LAYERS, "the skyline's: per z12 cell")
+
+    def test_tier_settings(self):
+        """A low tier (DEM z13, USGS z14, no exports, no map cells) beside a town and a roads-only corridor."""
+        tiers = {"town": {"priority": 1, "exports": [17, 18]},
+                 "lane": {"priority": 2, "mapdata": "roads", "usgs": [16]},
+                 "low": {"priority": 5, "dem": 13, "exports": [], "usgs": [14], "mapdata": False}}
+        town = regions.circle("town", *FREDERICK, 1.0, "town")
+        lane = regions.corridor("lane", [offset(FREDERICK, 0, 6000), offset(FREDERICK, 0, 12000)], 1.0, "lane")
+        low = regions.circle("low", *FREDERICK, 20.0, "low")
+        reg = regions.Region("r", [town, lane, low], tiers, far_km=5.0, home=FREDERICK)
+        fz = demmod.zoom_for(FREDERICK[0], 1.25, demmod.FINE_ZOOM)
+        dem = dict(preload.plan_dem(reg))
+        fine = {k for k in dem if k[0] == fz}
+        self.assertTrue(fine)
+        for z, x, y in fine:                    # z16 only round the town and the lane, not the 20 km low circle
+            la, lo = (float(v[0]) for v in regions.tile_center(z, [x], [y]))
+            self.assertLess(min(town.dist_m([la], [lo])[0], lane.dist_m([la], [lo])[0]), 500.0)
+        z13 = {k for k in dem if k[0] == 13}
+        self.assertTrue(any(regions.tile_center(13, [x], [y])[0][0] > FREDERICK[0] + 0.12 for _, x, y in z13),
+                        "z13 over the whole low circle")
+        exports = preload.plan_exports(reg, self.chain)
+        self.assertTrue(exports)
+        for (z, x, y), _, _ in exports:
+            la, lo = (float(v[0]) for v in regions.tile_center(z - 2, [x >> 2], [y >> 2]))
+            self.assertLess(min(town.dist_m([la], [lo])[0], lane.dist_m([la], [lo])[0]), 1500.0, "none in the low")
+            if z == 18:
+                self.assertLess(town.dist_m([la], [lo])[0], 1000.0, "z18 only in the town")
+        usgs = dict(preload.plan_xyz(reg))[imagery.SOURCES["usgs"]]
+        zs = {}
+        for (s, z, x, y), _ in usgs:
+            zs.setdefault(z, 0)
+            zs[z] += 1
+        self.assertTrue({12, 13, 14, 15, 16} <= set(zs))
+        self.assertGreater(zs[14], zs[15], "z14 over the low circle")
+        cells = preload.plan_cells(reg)
+        kinds = {ly for _, _, ly in cells}
+        self.assertEqual(kinds, {preload.CELL_LAYERS, preload.ROAD_LAYERS})
+        for c, _, ly in cells:
+            la, lo = c.center()
+            if ly is preload.ROAD_LAYERS:
+                self.assertLess(lane.dist_m([la], [lo])[0], 3000.0)
+            self.assertLess(min(town.dist_m([la], [lo])[0], lane.dist_m([la], [lo])[0]), 3000.0, "no cells in the low")
 
     def test_dead_hosts_left_out(self):
         """One small request per host up front; a host that fails it (USDA's NAIP host not resolving) is left out,
@@ -231,6 +298,30 @@ class PlanTest(unittest.TestCase):
         self.assertIn("gis.frederickco.gov", asked)
         self.assertNotIn("mdgeodata.md.gov", asked, "Maryland's box is nowhere near")
         self.assertEqual(preload.check_hosts(Net(), reg, self.chain, {"mapdata"}), {})
+
+    def test_what_the_server_streams(self):
+        """DRCOG's edges for the DRCOG cells, the colour match's S2 reference at z14 round the region, the skyline's
+        layers per z12 cell (towers to 40 km, tall to 6 km) and the mid ring's buildings."""
+        import colormatch
+        import drcog
+        import skyline
+        reg = preload.disc_region(*FREDERICK, 2.0, 1.0, far_km=5.0)
+        cells = {c for c, _, _ in preload.plan_cells(reg)}
+        edges = preload.plan_edges(reg)
+        self.assertEqual({c for c, _ in edges}, {c for c in cells if drcog.covers(c.bounds())})
+        self.assertTrue(edges)
+        far = preload.plan_edges(preload.disc_region(38.83, -104.82, 2.0))     # Colorado Springs: not DRCOG's
+        self.assertEqual(far, [])
+        cm = preload.plan_colormatch(reg)
+        self.assertTrue(cm and all(k[0].name == colormatch.REFS[0] and k[1] == colormatch.GRID_Z for k, _ in cm))
+        sky = preload.plan_skyline(reg)
+        z12 = [(c, ly) for c, _, ly in sky if c.z == skyline.ZOOM]
+        towers = {c for c, ly in z12 if ly == skyline.LAYERS["towers"]}
+        tall = {c for c, ly in z12 if ly == skyline.LAYERS["tall"]}
+        self.assertTrue(tall and tall < towers, "tall within 6 km, towers to 40 km")
+        self.assertGreater(len(towers), 50)
+        mid = {c for c, _, ly in sky if c.z == skyline.MID_ZOOM}
+        self.assertTrue(mid and not (mid & cells), "the mid ring's cells beyond the map-data plan's")
 
     def test_classify_probe(self):
         a = np.full((64, 64, 3), 253, np.uint8)             # white past the county line ...
@@ -369,6 +460,33 @@ class RunTest(unittest.TestCase):
         run.go(every=1e9)
         self.assertEqual(len(img.asked), 3, "--over-budget: on")
 
+    def test_edges_lane(self):
+        """The DRCOG edges through drcog.Drcog.edges (its own cache path), once a cell; a second run asks none."""
+        asked = []
+        tmp = self.tmp.name
+
+        class Dc:
+            dir = os.path.join(tmp, "drcog", "2024")
+
+            def edges(self, key, kind="demand"):
+                asked.append((key, kind))
+                p = preload.edges_path(self, key)
+                os.makedirs(os.path.dirname(p), exist_ok=True)
+                open(p, "wb").close()
+
+        class Md:
+            def drcog(self):
+                return Dc()
+        keys = [mapcells.CellKey(14, 3400 + i, 6190) for i in range(3)]
+        plan = {"dem": [], "xyz": [], "exports": [], "cells": [], "skyline": [], "edges": [(k, 1) for k in keys]}
+        run = preload.run_all(FakeNet(), None, None, Md(), plan, preload.Manifest(None), {"mapdata"})
+        self.assertEqual(sorted(k for k, _ in asked), keys)
+        self.assertEqual({kd for _, kd in asked}, {"demand"})
+        self.assertEqual(run.lanes["DRCOG edges"].fetched, 3)
+        asked.clear()
+        preload.run_all(FakeNet(), None, None, Md(), plan, preload.Manifest(None), {"mapdata"})
+        self.assertEqual(asked, [], "on disk: not asked again")
+
     def test_manifest_file(self):
         p = os.path.join(self.tmp.name, "sub", "m.done")
         m = preload.Manifest(p)
@@ -380,6 +498,107 @@ class RunTest(unittest.TestCase):
             self.assertEqual(f.read().split(), ["dem", "16/1/2", "cell", "14/3/4"])
         self.assertIn("cell 14/3/4", preload.Manifest(p))
         self.assertNotIn("cell 14/3/4", preload.Manifest(p, read=False))
+
+
+class PMTilesTest(unittest.TestCase):
+    pm = preload.pmtilesmod
+
+    def test_ids(self):
+        self.assertEqual(self.pm.zxy_to_id(0, 0, 0), 0)
+        self.assertEqual([self.pm.zxy_to_id(1, x, y) for x, y in ((0, 0), (0, 1), (1, 1), (1, 0))], [1, 2, 3, 4])
+        for k in ((12, 851, 1547), (16, 13632, 24769), (17, 1, 131071), (5, 31, 0)):
+            self.assertEqual(self.pm.id_to_zxy(self.pm.zxy_to_id(*k)), k)
+
+    @staticmethod
+    def varints(vals):
+        out = bytearray()
+        for v in vals:
+            while True:
+                b = v & 0x7F
+                v >>= 7
+                out.append(b | (0x80 if v else 0))
+                if not v:
+                    break
+        return bytes(out)
+
+    def archive(self, tiles):
+        """A PMTiles v3 archive (no compression) of {(z, x, y): bytes}, its directory in one root (a leaf for every
+        second entry, to read both kinds)."""
+        import struct
+        items = sorted((self.pm.zxy_to_id(*k), b) for k, b in tiles.items())
+        data, offs = b"", []
+        for _, b in items:
+            offs.append(len(data))
+            data += b
+
+        def directory(entries):         # [(tid, off, len, run)]
+            ids, prev = [], 0
+            for tid, *_ in entries:
+                ids.append(tid - prev)
+                prev = tid
+            return self.varints([len(entries)] + ids + [e[3] for e in entries] + [e[2] for e in entries]
+                                + [e[1] + 1 for e in entries])
+        leaf_entries = [(t, o, len(b), 1) for (t, b), o in zip(items[1:], offs[1:])]
+        leaf = directory(leaf_entries)
+        root = directory([(items[0][0], offs[0], len(items[0][1]), 1), (leaf_entries[0][0], 0, len(leaf), 0)])
+        root_off, leaf_off = 127, 127 + len(root)
+        data_off = leaf_off + len(leaf)
+        head = b"PMTiles" + bytes([3]) + struct.pack("<11Q", root_off, len(root), 0, 0, leaf_off, len(leaf), data_off,
+                                                     len(data), len(items), len(items), len(items))
+        head += struct.pack("<6B", 1, 1, 1, 4, 0, 17) + b"\0" * (127 - len(head) - 6)
+        return head + root + leaf + data
+
+    def test_archive_find_and_ranges(self):
+        tiles = {(16, 13632 + i, 24769): bytes([i]) * (100 + i) for i in range(6)}
+        tiles[(12, 851, 1547)] = b"x" * 50
+        blob = self.archive(tiles)
+        a = self.pm.Archive(lambda off, n: blob[off:off + n])
+        want = {self.pm.zxy_to_id(*k): k for k in tiles}
+        want[self.pm.zxy_to_id(16, 1, 1)] = (16, 1, 1)              # not in it
+        spans = a.find(want)
+        self.assertEqual(len(spans), len(tiles))
+        for tid, (off, n) in spans.items():
+            self.assertEqual(blob[off:off + n], tiles[want[tid]])
+        r = self.pm.plan_ranges(spans)
+        self.assertEqual(len(r), 1, "neighbours in one request")
+        self.assertEqual(len(self.pm.plan_ranges(spans, gap=0, max_len=150)), len(tiles))
+        with self.assertRaises(self.pm.PMTilesError):
+            self.pm.Archive(lambda off, n: b"\0" * n)
+
+    def test_dem_range_lane(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        tiles = {(16, 13632 + i, 24769): bytes([i]) * (100 + i) for i in range(4)}
+        blob = self.archive(tiles)
+        reads = []
+
+        class Reader:
+            def read(self, off, n):
+                reads.append((off, n))
+                return blob[off:off + n]
+        a = self.pm.Archive(Reader().read)
+        ids = {self.pm.zxy_to_id(*k): k for k in tiles}
+        spans = a.find(ids)
+        reads.clear()
+        ranges = [(1, ("u", s, e, [(ids[t], spans[t][0], spans[t][1]) for t in tids], Reader()))
+                  for s, e, tids in self.pm.plan_ranges(spans)]
+        dem = demmod.Dem(os.path.join(tmp.name, "dem"))
+        dem.has = lambda z, x, y: os.path.exists(dem._path(demmod.MAPTERHORN, z, x, y))
+        man = preload.Manifest(None)
+        run = preload.Run(FakeNet())
+        preload.dem_range_lane(run, dem, (ranges, [(16, 1, 1)]), man)
+        run.go(every=1e9)
+        self.assertEqual(len(reads), 1, "one range request for the four")
+        for k, b in tiles.items():
+            with open(dem._path(demmod.MAPTERHORN, *k), "rb") as f:
+                self.assertEqual(f.read(), b)
+        self.assertTrue(os.path.exists(os.path.join(tmp.name, "dem", "mapterhorn", "16", "1", "1.404")))
+        self.assertEqual(len(man.done), 5)
+        reads.clear()
+        run = preload.Run(FakeNet())
+        preload.dem_range_lane(run, dem, (ranges, []), preload.Manifest(None))
+        run.go(every=1e9)
+        self.assertEqual(reads, [], "on disk: not read again")
 
 
 if __name__ == "__main__":
