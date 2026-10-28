@@ -326,7 +326,7 @@ def cmd_drive(a):
             if a.keep_going:
                 cmd.append("--keep-going")
             print(f"{n}: {na} -> {nb} ({km:.0f} km): {' '.join(cmd[1:])}", flush=True)
-            r = subprocess.run(cmd)
+            r = _drive_leg(cmd)
             summary = read_json(os.path.join(out, "summary.json"), {})
             run["legs"].append({"route": n, "from": na, "to": nb, "rc": r.returncode, "out": out,
                                 "summary": {k: summary.get(k) for k in ("seconds", "fps", "frame_ms", "frames_over",
@@ -344,6 +344,26 @@ def cmd_drive(a):
     write_json(os.path.join(bd, MANIFEST), man)
     cmd_status(a)
     return 0 if ok else 1
+
+
+def _drive_leg(cmd):
+    """Run one leg's autodrive_perf. It holds the read end of a pipe only this process writes (--parent-pipe), so
+    however this tool ends (Ctrl+C, killed by PID) the leg parks the car and turns the mod's autodrive off (the first PC
+    bake, killed by PID 2026-10-28, left both running)."""
+    p = subprocess.Popen(cmd + ["--parent-pipe"], stdin=subprocess.PIPE)
+    try:
+        p.wait()
+    except KeyboardInterrupt:
+        p.stdin.close()
+        try:
+            p.wait(60)
+        except subprocess.TimeoutExpired:
+            p.kill()
+        raise
+    finally:
+        if p.stdin and not p.stdin.closed:
+            p.stdin.close()
+    return p
 
 
 def cmd_clean(a):

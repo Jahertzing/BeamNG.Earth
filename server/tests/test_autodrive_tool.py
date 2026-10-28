@@ -78,5 +78,22 @@ class ProcSamplerTest(unittest.TestCase):
         self.assertEqual(got["game"]["procs"], 0)
 
 
+class ParentPipeTest(unittest.TestCase):
+    def test_a_drive_stops_when_its_caller_is_gone(self):
+        """route_bake.py's leg: its pipe closed (the bake stopped or killed) ends the drive loop."""
+        import route_bake as rb
+        import subprocess
+        tools = os.path.dirname(os.path.abspath(ad.__file__))
+        child = ("import sys; sys.path.insert(0, %r); import autodrive_perf as ad; g = ad.parent_gone(); "
+                 "print('ready', flush=True); sys.exit(0 if g.wait(20) else 3)" % tools)
+        p = subprocess.Popen([sys.executable, "-c", child], stdin=subprocess.PIPE, stdout=subprocess.PIPE)
+        self.assertEqual(p.stdout.readline().strip(), b"ready")
+        p.stdin.close()
+        self.assertEqual(p.wait(30), 0)
+        p.stdout.close()
+        leg = rb._drive_leg([sys.executable, "-c", "import sys; sys.exit(0 if '--parent-pipe' in sys.argv else 4)"])
+        self.assertEqual(leg.returncode, 0)
+
+
 if __name__ == "__main__":
     unittest.main()

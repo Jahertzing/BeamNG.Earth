@@ -25,6 +25,7 @@ import os
 import shutil
 import subprocess
 import sys
+import threading
 import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -103,6 +104,23 @@ def _psutil():
         return psutil
     except ImportError:
         return None
+
+
+def parent_gone():
+    """An Event set once standard input ends (--parent-pipe): the caller holds the pipe's only writing end, so a caller
+    stopped in any way (Ctrl+C, killed by PID: no handler of its own runs) ends the drive here, the car parked and the
+    autodrive off (route_bake 2026-10-28: a killed bake left its drive and the mod's autodrive running)."""
+    gone = threading.Event()
+
+    def watch():
+        try:
+            while sys.stdin.buffer.read(4096):
+                pass
+        except (OSError, ValueError):
+            pass
+        gone.set()
+    threading.Thread(target=watch, daemon=True).start()
+    return gone
 
 
 def _procs():
@@ -460,6 +478,8 @@ def main():
     ap.add_argument("--settle", type=float, default=45.0, help="seconds to wait after the teleport")
     ap.add_argument("--obs", action="store_true", help="record the screen with OBS (writes drive.mp4, no audio)")
     ap.add_argument("--keep-going", action="store_true", help="drive on after a crash or a stop")
+    ap.add_argument("--parent-pipe", action="store_true",
+                    help="stop when standard input ends (a calling tool gone: route_bake.py)")
     ap.add_argument("--rec", action="store_true", help="record the game's own frames (tools/gamerec.py: no screen "
                     "capture, no permission dialog; ~15 ms a frame, so the frame times are not the game's then)")
     ap.add_argument("--rec-fps", type=float, default=15.0)
@@ -532,6 +552,7 @@ def main():
         grec = gamerec.start(a.rec_fps)
     sampler = ProcSampler()
     sampler.sample()
+    gone = parent_gone() if a.parent_pipe else None
     rows, end = [], time.time() + a.minutes * 60
     evf = open(os.path.join(a.out, "events.jsonl"), "w")
     checks = Checks(lambda n, ev: shot(a.out, f"event_{n}_{ev['kind']}.jpg"))
@@ -539,6 +560,9 @@ def main():
         with open(os.path.join(a.out, "samples.jsonl"), "w") as f:
             while time.time() < end:
                 t0 = time.time()
+                if gone is not None and gone.is_set():
+                    print("the calling tool is gone: stopping", file=sys.stderr, flush=True)
+                    break
                 if fast_at is not None and t0 >= fast_at and road_limit() >= a.fast_kmh / 3.6:  # (--fast-after)
                     fast_at = None
                     # the AI's speed alone (its path kept; the override for the paths given later): restarted, the
