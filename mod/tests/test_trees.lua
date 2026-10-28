@@ -430,5 +430,25 @@ do  -- static parked cars: a group per model from cars.json, every paint at its 
   T.check(trees.preloadCars() == 2, 'both paints loaded up front')
   T.check(scenetree.findObject(trees.typeName(trees.CARS_DIR .. 'bne_car_midsize_red', false)) ~= nil, 'its item type made')
 end
+do  -- static cars come in a few shapes a frame (CAR_SHAPES_PER_FRAME), the rest on the next frames
+  local cars = {}
+  for k = 1, 5 do
+    local m = 'm' .. k
+    cars[m] = { height = 1.5, files = { 'bne_car_' .. m .. '_white.dae' } }
+  end
+  trees.installCars(cars)
+  local rows, groups = {}, {}
+  for k = 1, 5 do
+    groups[k] = 'car_m' .. k
+    rows[k] = { k - 1, 10 + k * 6, 10, 0, 0, 1, 1.5, 0.1 }
+  end
+  trees.onRows(14, 'cars', rows, groups)
+  local before = count()
+  trees.update(14, { x = 10, y = 10 })
+  T.check(count() - before == trees.CAR_SHAPES_PER_FRAME, 'a few car shapes this frame: ' .. (count() - before))
+  for _ = 1, 4 do trees.update(14, { x = 10, y = 10 }) end
+  T.check(count() - before == 5, 'all five after a few frames: ' .. (count() - before))
+  trees.clear()
+end
 trees.FRAME_MS, trees.POOL_SPARE = FRAME_MS, POOL_SPARE
 T.done('test_trees')

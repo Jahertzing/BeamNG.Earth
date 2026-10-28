@@ -542,12 +542,19 @@ local function removeItem(fd, it, shape)
 end
 
 -- This frame's shapes: may an item of this shape change now? (see SHAPE_ITEMS_PER_FRAME)
-local touched, touchedItems = {}, 0
+-- The static cars' shapes: at most CAR_SHAPES_PER_FRAME of them a frame (2026-10-28, ghost drives on I-25 with them on:
+-- the engine's tick 150-230 ms most minutes while cruising, with their LODs and paints cut to a quarter as before: a
+-- tile's cars touch ~25 of their 40 shapes at once, few items each, so SHAPE_ITEMS_PER_FRAME never held them back).
+M.CAR_SHAPES_PER_FRAME = 2
+local touched, touchedItems, touchedCars = {}, 0, 0
 local function allow(shape)
   if touched[shape] then return true end
+  local car = shape:sub(1, #M.CARS_DIR) == M.CARS_DIR
+  if car and touchedCars >= M.CAR_SHAPES_PER_FRAME then return false end
   local n = pop[shape] or 0
   if next(touched) ~= nil and touchedItems + n > M.SHAPE_ITEMS_PER_FRAME then return false end
   touched[shape], touchedItems = true, touchedItems + n
+  if car then touchedCars = touchedCars + 1 end
   return true
 end
 
@@ -737,7 +744,7 @@ function M.update(anchorId, player, view, frameMs)
   local limit, elapsed = frameMs or M.FRAME_MS, M.clock()
   newForests = 0
   M.lastShapeItems = touchedItems        -- the previous frame's (diagnostics)
-  touched, touchedItems = {}, 0
+  touched, touchedItems, touchedCars = {}, 0, 0
   releaseGhosts(anchorId, player)
   for key, t in pairs(tiles) do
     if (t.anchor ~= anchorId and not t.ghost) or t.drop then
