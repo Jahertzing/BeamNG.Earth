@@ -117,6 +117,7 @@ import seacarve as seacarvemod  # noqa: E402
 import seatiles as seatilesmod  # noqa: E402
 import vegetation as vegetationmod
 import buildings as buildingsmod  # noqa: E402
+import skyline as skylinemod  # noqa: E402
 import rockface as rockfacemod  # noqa: E402
 import riverlines as riverlinesmod  # noqa: E402
 import groundahead as groundaheadmod  # noqa: E402
@@ -531,7 +532,7 @@ class Server:
                  colormatch="off", credits=None, cache=None, retex_rate=RETEX_RATE, surface=None,
                  mapdata=None, grading=False, road_widths=False, block_pools=(), sidewalks=True, buildings=False, traffic=False, far_pool=None,
                  road_pool=None, airports_db=None, sea=None, vegetation=None, leaf_on=True, season_mode="off",
-                 far_bld_pool=None, gas_stations=False):
+                 far_bld_pool=None, gas_stations=False, skyline=False):
         """kfun: K(L) for every level (default: the layout's K table); near_radii: the min-level
         radii (default: the layout's); cells: 32 (v1.3.1) or 64 (M1, mesh mode only); tex: texture
         px per level from the finest (default: tex_near, tex_near, tex_far with 32 cells,
@@ -737,6 +738,7 @@ class Server:
         # street widths measured between the buildings (roadwidth.py), decided once per road per run
         self.sidewalks = sidewalks  # raised sidewalk meshes with the road tiles (sidewalks.py)
         self.buildings = buildings  # building meshes with the road tiles (buildings.py)
+        self.skyline = bool(skyline) and bool(buildings)    # the tall buildings to 40 km (skyline.py; --skyline on)
         # gas stations with refuelling with the road tiles (gasstations.py; the user, 2026-10-23)
         # (the settings page's switch turns them off and on again: set_gas_stations; never on without the flag)
         self.gas_allowed = bool(gas_stations) and mapdata is not None
@@ -1116,6 +1118,19 @@ class Server:
             return res
         return buildingsmod.far_tile(anchor.frame, tx, ty, self.mapdata,
                                      lambda la, lo: self.ground(anchor.frame, la, lo, self.dem.sample(la, lo, zoom)),
+                                     self.out_dir, self.vfs_dir, aid)
+
+    def build_skyline_tile(self, aid, key, tier):
+        """skyline.build_tile: the skyline tile of z12 cell `key` at `tier` for anchor aid, or None. Worker threads (the
+        Connection's skyline Tracker); on the far building pool, from the revisit cache when built here before."""
+        anchor = self.anchors.get(aid)
+        if anchor is None or self.mapdata is None or not self.skyline:
+            return None
+        if self.far_bld_pool is not None:
+            return self.far_bld_pool.submit(blockworker.skyline_tile, aid, anchor.lat, anchor.lon, tuple(key), tier,
+                                            self.out_dir, self.vfs_dir).result()
+        return skylinemod.build_tile(anchor.frame, key, tier, self.mapdata,
+                                     lambda la, lo: self.dem.sample(la, lo, skylinemod.DEM_ZOOM),
                                      self.out_dir, self.vfs_dir, aid)
 
     def build_terrain_patch(self, aid, key, box):
@@ -2689,7 +2704,8 @@ BOOST_MOVE_MS = 3.0         # the loading boost ends when the player moves faste
 BOOST_MAX_S = 120.0         # ... or this long after the teleport
 BOOST_GRACE_S = 5.0         # (the car dropped into place moves a little at first)
 
-ANCHOR_TILE_FILES = ("roads", "road", "walks", "walkcol", "deck", "bld", "bldcol", "bldfar", "wire", "veg", "navgraph")
+ANCHOR_TILE_FILES = ("roads", "road", "walks", "walkcol", "deck", "bld", "bldcol", "bldfar", "wire", "veg", "navgraph",
+                     "sky")
 
 
 class _BoundedLru:
@@ -2790,6 +2806,7 @@ class Connection:
         # version later"); without them the far ones came first and the car's surroundings last
         self.bldfar = vegetationmod.Tracker(buildingsmod.FAR_SEND_M, buildingsmod.FAR_DROP_M,
                                             buildingsmod.FAR_PER_POSE, "bldfar")
+        self.sky = skylinemod.Tracker()         # the skyline's z12 cells (--skyline on): after the far buildings
         self.nav = navgraphmod.Tracker()        # the AI road graph around the player (--traffic on)
         self.nav_wait = {}                      # anchor id -> monotonic time its first AI graph was wanted
         self.gravity = gravitymod.Tracker()     # real gravity: recompute rule, last message sent
@@ -3149,7 +3166,7 @@ class Connection:
             self.s.connections.discard(self)
             self.s.slots_let_go(list(self.slot_holds))
             self.slot_holds = {}
-            for tr in (self.roads, self.veg, self.bldfar, self.nav):
+            for tr in (self.roads, self.veg, self.bldfar, self.sky, self.nav):
                 tr.close()
             self.s.drop_claims(self)
             self.streamer.cancel()
@@ -3729,6 +3746,10 @@ class Connection:
         if self.s.buildings and aid == self.active:
             self.bldfar.on_pose(self, aid, *self.focus, asyncio.get_running_loop(), self.s.build_far_bld_tile,
                                 view=self.view_at)
+            anchor = self.s.anchors.get(aid)
+            if self.s.skyline and anchor is not None:  # (low priority: none starts while a far building tile builds)
+                self.sky.on_pose(self, aid, anchor.frame, *self.focus, asyncio.get_running_loop(),
+                                 self.s.build_skyline_tile, vel=self.vel, busy=bool(self.bldfar.building))
         if self.s.traffic and aid == self.active and self.nav_may_start(aid):
             self.nav.on_pose(self, aid, *self.focus, asyncio.get_running_loop(), self.s.build_navgraph)
         if aid == self.active:
@@ -4432,7 +4453,7 @@ async def main_async(args):
                     gas_stations=args.gas_stations == "on" and args.roads == "on",
                     traffic=args.traffic == "on" and args.roads == "on",
                     block_pools=block_pools, far_pool=far_pool, road_pool=road_pool, airports_db=airports_db,
-                    far_bld_pool=far_bld_pool,
+                    far_bld_pool=far_bld_pool, skyline=args.skyline == "on",
                     sea=seacarvemod.SeaCarver(mapdata, args.cache_dir) if args.sea == "on" else None,
                     vegetation=(vegetationmod.Vegetation(mapdata, args.cache_dir) if args.trees == "on" else None))
     server.update_check = args.update_check == "on"
@@ -4828,6 +4849,9 @@ def main():
     ap.add_argument("--buildings", choices=("on", "off"), default="off",
                     help="3D buildings from the Overture footprints with the road tiles (buildings.py; needs --roads "
                          "on): heights and roofs predicted where the data has none")
+    ap.add_argument("--skyline", choices=("on", "off"), default="on",
+                    help="the tall buildings out to 40 km (skyline.py; with --buildings on): towers of >= 50 m or "
+                         "15 floors, all of >= 20 m or 6 floors within 6 km, as simple tinted prisms")
     ap.add_argument("--gas-stations", choices=("on", "off"), default="off",
                     help="gas stations with refuelling at real stations (gasstations.py; Overture places, needs "
                          "--roads on): West Coast USA's pumps and canopies, the stock refuel prompt")

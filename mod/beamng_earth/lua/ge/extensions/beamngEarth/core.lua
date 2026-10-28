@@ -917,6 +917,11 @@ local function onMessage(msg)
     roads.onFarTile(msg, st.anchorId)
   elseif t == 'bldfar_drop' then
     roads.onFarDrop(msg)
+  elseif t == 'skyline_tile' then
+    -- the skyline (server skyline.py, --skyline on): tall buildings to 40 km, render-only, roads.lua
+    roads.onSkyTile(msg, st.anchorId)
+  elseif t == 'skyline_drop' then
+    roads.onSkyDrop(msg)
   elseif t == 'where_result' then
     statusbar.onResult(msg)
   elseif t == 'place_previews_ready' then      -- the level select's place pictures are there (levelinfo.lua)

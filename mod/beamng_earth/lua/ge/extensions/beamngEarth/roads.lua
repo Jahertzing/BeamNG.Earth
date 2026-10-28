@@ -95,6 +95,7 @@ local loadedMaterials = false
 local anchorId = nil
 local far = {}              -- far buildings (server buildings.far_tile): key "a:tx_ty" -> { anchor, id, shape, pos, hidden }
 local farQ = {}             -- keys of far tiles to make
+local sky = {}              -- skyline tiles (server skyline.py): key "a:x_y" -> entry (M.onSkyTile)
 local lastError = nil
 local sinceChange = stopwatch.new()  -- ms since a tile arrived / went or a road was made / deleted
 local sinceReload = stopwatch.new()
@@ -278,6 +279,9 @@ local function switchAnchor(aid)
       slotDrop(f.slot)
       far[key] = nil
     end
+  end
+  for key, e in pairs(sky) do
+    if e.anchor ~= aid and not e.ghost then M.skyDelete(e); sky[key] = nil end
   end
   local keep = {}
   for _, q in ipairs(createQ) do if tiles[q.key] then keep[#keep + 1] = q end end
@@ -529,6 +533,185 @@ local function updateFar(gov)
   end
 end
 
+-- The skyline (server skyline.py; `skyline_tile` {anchorId, key "x_y" (a z12 cell), path, n, tier, data, slots},
+-- `skyline_drop` {anchorId, key}): a cell's tall buildings out to 40 km, render-only, as one mesh per road tile square
+-- (`parts`, keyed "tx_ty" as the road and far building tiles) and the whole cell merged (`shapes`, pooled: slots
+-- "m<k>"). Near the cell (SKY_PARTS_M) or once a near tier covers one of its squares, the parts are drawn and each is
+-- hidden while its square's road tile or far building tile shows its buildings (the same buildings: drawn once); the
+-- merged mesh stays until every part is made. Farther, the merged mesh alone (one object instead of hundreds). Made
+-- last of all (after the near meshes and the far building tiles), nearest cell first. A tile sent again (another
+-- tier) replaces the old one once its own meshes are made.
+M.SKY_PARTS_M = 2600        -- m from the cell's square: its parts drawn (the far building tiles reach 1900 m)
+M.SKY_CHECK_S = 0.1         -- s between the hide / mode checks
+M.SKY_GHOST_MAX_S = 600     -- a rebase's skyline ghost goes after this long anyway (the new anchor's cells come after
+                            -- its far building tiles: a minute or more)
+local sinceSky = stopwatch.new()
+
+local function skyObjsDelete(list)
+  for _, o in ipairs(list) do
+    if o.id then deleteQ[#deleteQ + 1] = o.id; o.id = nil end
+    o.hidden, o.failed = nil, nil
+  end
+end
+
+function M.skyDelete(e)
+  skyObjsDelete(e.shapes)
+  skyObjsDelete(e.parts)
+  for _, o in ipairs(e.shapes) do slotDrop(o.slot); o.slot = nil end
+  if e.old then M.skyDelete(e.old); e.old = nil end
+end
+
+function M.onSkyTile(msg, currentAnchor)
+  if not M.enabled then return false end
+  switchAnchor(currentAnchor)
+  if msg.anchorId ~= currentAnchor then return false end
+  local ok, data = true, msg.data              -- (in the message, else the file: as onTile)
+  if type(data) ~= 'table' then ok, data = pcall(jsonDecode, readFile(msg.path) or '') end
+  if not ok or type(data) ~= 'table' then lastError = 'unreadable skyline tile ' .. tostring(msg.path); return false end
+  local key = tileKey(msg.anchorId, msg.key)
+  local e = { anchor = msg.anchorId, gkey = tostring(msg.key), tier = msg.tier, shapes = {}, parts = {},
+    box = (type(data.box) == 'table' and #data.box == 4) and data.box or nil }
+  for i, s in ipairs(type(data.shapes) == 'table' and data.shapes or {}) do
+    local sl = msgSlot(msg, 'm' .. tostring(i - 1))
+    if type(s) == 'table' and s.shape and type(s.pos) == 'table' then
+      e.shapes[#e.shapes + 1] = { shape = sl and sl.path or s.shape, pos = s.pos, slot = sl }
+    else
+      slotDrop(sl)
+    end
+  end
+  for _, p in ipairs(type(data.parts) == 'table' and data.parts or {}) do
+    if type(p) == 'table' and p.shape and type(p.pos) == 'table' and p.k then
+      e.parts[#e.parts + 1] = { k = tostring(p.k), shape = p.shape, pos = p.pos }
+    end
+  end
+  local old = sky[key]
+  if old and old.old then M.skyDelete(old.old); old.old = nil end
+  if #e.shapes == 0 and #e.parts == 0 then
+    if old then M.skyDelete(old) end
+    sky[key] = nil
+  else
+    e.old = old                 -- drawn until e's own meshes are made (updateSky)
+    sky[key] = e
+  end
+  return true
+end
+
+function M.onSkyDrop(msg)
+  local key = tileKey(msg.anchorId, msg.key)
+  local e = sky[key]
+  if e and e.ghost then return end
+  if e then M.skyDelete(e) end
+  sky[key] = nil
+end
+
+-- Does the near tier of anchor aid show the buildings of road tile square k ("tx_ty")?
+local function skyCovered(aid, k)
+  local key = tileKey(aid, k)
+  local t = tiles[key]
+  if t and t.bld ~= nil then return true end
+  local f = far[key]
+  return f ~= nil and f.id ~= nil
+end
+
+local function boxDist(b, p)
+  if not b or type(p) ~= 'table' or not p.x then return math.huge end
+  local dx = math.max(b[1] - p.x, 0, p.x - b[3])
+  local dy = math.max(b[2] - p.y, 0, p.y - b[4])
+  return math.sqrt(dx * dx + dy * dy)
+end
+
+local function allMade(list)
+  for _, o in ipairs(list) do if not o.id and not o.failed then return false end end
+  return true
+end
+
+-- A box {x0, y0, x1, y1} through a rebase's transform (the box round its moved corners).
+local function transformBox(xf, b)
+  if not b then return nil end
+  local x0, y0, x1, y1 = math.huge, math.huge, -math.huge, -math.huge
+  for _, c in ipairs({ { b[1], b[2] }, { b[3], b[2] }, { b[3], b[4] }, { b[1], b[4] } }) do
+    local x, y = xf:apply(c[1], c[2], 0)
+    x0, y0, x1, y1 = math.min(x0, x), math.min(y0, y), math.max(x1, x), math.max(y1, y)
+  end
+  return { x0, y0, x1, y1 }
+end
+
+local function skySetHidden(o, h)
+  if o.id and (o.hidden or false) ~= h then
+    local obj = scenetree.findObjectById(o.id)
+    if obj then obj:setHidden(h) end
+    o.hidden = h
+  end
+end
+
+-- The skyline's state (every SKY_CHECK_S: what is hidden, parts or merged), then its meshes made within the budget,
+-- only while nothing else waits (walkQ, farQ). player / view: { x, y } (view: the camera when away from the car).
+local function updateSky(gov, player, view)
+  if next(sky) == nil then return end
+  if sinceSky() >= M.SKY_CHECK_S * 1000 then
+    sinceSky = stopwatch.new()
+    local ready = {}
+    for _, e in pairs(sky) do
+      e.d = math.min(boxDist(e.box, player), boxDist(e.box, view))
+      if not e.ghost then
+        local any = false
+        for _, p in ipairs(e.parts) do p.cov = skyCovered(e.anchor, p.k); any = any or p.cov end
+        e.near = any or e.d < M.SKY_PARTS_M or #e.shapes == 0
+        local all
+        if e.near then
+          all = allMade(e.parts)
+          for _, p in ipairs(e.parts) do skySetHidden(p, p.cov) end
+          for _, s in ipairs(e.shapes) do skySetHidden(s, all) end     -- the merged mesh until every part is there
+        else
+          all = allMade(e.shapes)
+          for _, s in ipairs(e.shapes) do skySetHidden(s, false) end
+          if all then skyObjsDelete(e.parts) end
+        end
+        if all then
+          if e.old then M.skyDelete(e.old); e.old = nil end
+          ready[e.gkey] = true
+        end
+      end
+    end
+    for key, e in pairs(sky) do         -- a rebase's ghosts: gone once the new anchor's cell is drawn, or near the car
+      if e.ghost and (ready[e.gkey] or e.d < M.SKY_PARTS_M or e.ghostAt() > M.SKY_GHOST_MAX_S * 1000) then
+        M.skyDelete(e)
+        sky[key] = nil
+      end
+    end
+  end
+  if #walkQ > 0 or #farQ > 0 then return end
+  local order = {}
+  for _, e in pairs(sky) do if not e.ghost and e.d then order[#order + 1] = e end end
+  table.sort(order, function(a, b) return a.d < b.d end)
+  for _, e in ipairs(order) do
+    for _, o in ipairs(e.near and e.parts or e.shapes) do
+      if not o.id and not o.failed then
+        if not gov:try('roadWalk') then return end
+        local t0 = now()
+        loadMaterials()
+        local ok, id = pcall(createWalk, { shape = o.shape, pos = o.pos }, false)
+        if ok then
+          o.id = id
+          slotMade(id, o.shape)
+          local hide = (e.near and o.cov) or false
+          if hide then
+            local obj = scenetree.findObjectById(id)
+            if obj then obj:setHidden(true) end
+          end
+          o.hidden = hide
+        else
+          o.failed = true
+          lastError = tostring(id)
+        end
+        local ms = now() - t0
+        gov:charge('roadWalk', ms)
+        noteUnit('skyline', ms, o.shape)
+      end
+    end
+  end
+end
+
 -- Server message `roads_drop` {anchorId, key}. (A ghost goes when covered: releaseGhosts.)
 function M.onDrop(msg)
   local t = tiles[tileKey(msg.anchorId, msg.key)]
@@ -581,6 +764,21 @@ function M.transform(xf, geodesy)
       moveObj(f.id, f.q)
       f.ghost = true
       any = true
+    end
+  end
+  -- the skyline: a cell drawn merged moves along as a ghost (gone once the new anchor's is drawn: updateSky); one drawn
+  -- in parts lies under the near tiers, whose squares change with the anchor: it goes now
+  for key, e in pairs(sky) do
+    if e.old then M.skyDelete(e.old); e.old = nil end
+    if not e.ghost and (e.near or not allMade(e.shapes)) then
+      M.skyDelete(e)
+      sky[key] = nil
+    elseif not e.ghost then
+      skyObjsDelete(e.parts)
+      e.q = newQ(e.q or { 0, 0, 0, 1 })
+      for _, o in ipairs(e.shapes) do moveObj(o.id, e.q) end
+      e.box = transformBox(xf, e.box)
+      e.ghost, e.ghostAt = true, stopwatch.new()
     end
   end
   local function keepNew(list)
@@ -749,6 +947,7 @@ function M.update(gov, currentAnchor, player, view)
     end
   end
   updateFar(gov)                -- far buildings: only with the near meshes all made (they share the budget)
+  updateSky(gov, player, view)  -- the skyline: after both
   if swapQuiet then
     swapQuiet.frames = swapQuiet.frames - 1
     if swapQuiet.frames <= 0 and swapQuiet.since() >= M.SWAP_QUIET_MS then swapQuiet = nil end
@@ -1103,8 +1302,15 @@ function M.status()
   end
   local nf = 0
   for _, f in pairs(far) do if f.id and not f.hidden then nf = nf + 1 end end
+  local ns, nso = 0, 0          -- skyline cells, and their meshes drawn
+  for _, e in pairs(sky) do
+    ns = ns + 1
+    for _, l in ipairs({ e.shapes, e.parts }) do
+      for _, o in ipairs(l) do if o.id and not o.hidden then nso = nso + 1 end end
+    end
+  end
   return { enabled = M.enabled, tiles = nt, roads = no, queued = #createQ, deleting = #deleteQ, anchor = anchorId,
-    walks = nw, roadMeshes = nr, decks = nd, buildings = nb, farBuildings = nf, walksQueued = #walkQ, solidAround = M.solidAround or 0, urgentWalks = M.urgentWalks or 0,
+    walks = nw, roadMeshes = nr, decks = nd, buildings = nb, farBuildings = nf, skyCells = ns, skyMeshes = nso, walksQueued = #walkQ, solidAround = M.solidAround or 0, urgentWalks = M.urgentWalks or 0,
     quietS = sinceChange() / 1000, error = lastError, units = unitStats, unitLog = unitLog }
 end
 

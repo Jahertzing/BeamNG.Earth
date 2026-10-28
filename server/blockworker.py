@@ -648,6 +648,25 @@ def far_buildings_tile(aid, lat, lon, zoom, tx, ty, out_dir, vfs_dir):
                          lambda path, extra: (path, int(extra.get("n", 0))))
 
 
+def skyline_tile(aid, lat, lon, key, tier, out_dir, vfs_dir):
+    """earthd.Server.build_skyline_tile here (the far building pool): skyline.build_tile of z12 cell key (z, x, y) at
+    tier, from the revisit cache when built in this anchor's place before."""
+    import mapcells
+    import revisit
+    import skyline as skylinemod
+    frame = geodesy.EnuFrame(lat, lon)
+    key = mapcells.CellKey(*key)
+    k = revisit.key("sky", round(float(lat), 7), round(float(lon), 7), tuple(key), tier, skylinemod.DEM_ZOOM,
+                    _s.md.versions() if _s.md is not None else None)
+    name = f"sky_{aid}_{key.x}_{key.y}_{skylinemod.TIER_CODE[tier]}.json"
+    return _revisit_tile("sky", k, aid, key.x, key.y, out_dir, vfs_dir, name,
+                         lambda: skylinemod.build_tile(frame, key, tier, _s.md,
+                                                       lambda la, lo: _s.dem.sample(la, lo, skylinemod.DEM_ZOOM),
+                                                       out_dir, vfs_dir, aid),
+                         lambda res: {"n": int(res[1])},
+                         lambda path, extra: (path, int(extra.get("n", 0))))
+
+
 def base_entry(user_dir, base_vfs, ao_vfs, rgb, ao_value):
     """terraincache.base_entry here (its BC7 encode is the base photo's main cost)."""
     return terraincache.base_entry(user_dir, base_vfs, ao_vfs, rgb, ao_value)
@@ -894,6 +913,7 @@ build = _accounted(build)
 terrain_patch = _accounted(terrain_patch)
 roads_tile = _accounted(roads_tile)
 far_buildings_tile = _accounted(far_buildings_tile)
+skyline_tile = _accounted(skyline_tile)
 base_entry = _accounted(base_entry)
 far_geometry = _accounted(far_geometry)
 far_tile = _accounted(far_tile)
