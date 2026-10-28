@@ -60,28 +60,43 @@ class BlockCacheTest(unittest.TestCase):
             anchor = types.SimpleNamespace(id=3, hm_zoom=15)
             info = a.build(anchor, 128, -256)
             k = revisit.key("block", 39.9, -105.0, 128, -256)
+            kb = revisit.key("base", 39.9, -105.0, 128, -256)
             self.assertTrue(blockcache.store(a, anchor, 128, -256, k, info, revisit.faults()))
+            self.assertTrue(blockcache.store_base(a, anchor, 128, -256, kb, info["base"], revisit.faults()))
             b = FakeServer(d, "s2")
-            b.base_stale.add((7, 128, -256))
             other = types.SimpleNamespace(id=7, hm_zoom=15)
             got = blockcache.load(b, other, 128, -256, k)
             self.assertIsNotNone(got)
             self.assertEqual(got["ter"], "hm_7_128_-256_1.ter")
-            self.assertEqual(got["base"], "hm_7_128_-256_base.png")
+            self.assertNotIn("base", got, "the photo is an item of its own")
             self.assertEqual(got["layers"], surfacemod.mask_names("hm_7_128_-256"))
             self.assertEqual((got["zBase"], got["mats"], got["surfaceComplete"]), (1500.0, [0, 3], True))
             self.assertIn("revisit", got["stages"])
+            self.assertEqual(blockcache.load_base(b, other, 128, -256, kb), "hm_7_128_-256_base.png")
+
             def read(n):
                 with open(os.path.join(b.out_dir, n), "rb") as f:
                     return f.read()
             self.assertEqual(read("hm_7_128_-256.png"), b"heights")
             self.assertEqual(read(got["ter"]), b"terrain")
-            self.assertEqual(read(got["base"]), b"photo")
+            self.assertEqual(read("hm_7_128_-256_base.png"), b"photo")
             self.assertEqual(read(got["layers"][1]), b"mask1")
-            with open(blockcache._dds_path(b, got["base"]), "rb") as f:
+            with open(blockcache._dds_path(b, "hm_7_128_-256_base.png"), "rb") as f:
                 self.assertEqual(f.read(), b"packed")
-            self.assertNotIn((7, 128, -256), b.base_stale)
             self.assertIsNone(blockcache.load(b, other, 0, 0, revisit.key("block", 0)))
+            self.assertIsNone(blockcache.load_base(b, other, 0, 0, revisit.key("base", 0)))
+
+    def test_a_block_is_kept_without_its_photo(self):
+        """A fast player's block (its photo sent later) or one whose photo waits on NAIP is kept all the same."""
+        with tempfile.TemporaryDirectory() as d:
+            a = FakeServer(d, "s1")
+            anchor = types.SimpleNamespace(id=3, hm_zoom=15)
+            info = a.build(anchor, 0, 0)
+            a.base_stale.add((3, 0, 0))
+            k = revisit.key("block", 2)
+            self.assertTrue(blockcache.store(a, anchor, 0, 0, k, dict(info, base=None, stages={"baseLater": 1.0}),
+                                             revisit.faults()))
+            self.assertIsNotNone(revisit.load(a.cache_dir, "block", k))
 
     def test_incomplete_blocks_are_not_kept(self):
         with tempfile.TemporaryDirectory() as d:
@@ -92,13 +107,10 @@ class BlockCacheTest(unittest.TestCase):
             info = a.build(anchor, 0, 0)
             revisit.fault()                                     # something it read failed
             self.assertFalse(blockcache.store(a, anchor, 0, 0, k, info, f0))
-            for change in ({"surfaceComplete": False}, {"roadsComplete": False}, {"base": None},
-                           {"stages": {"baseLater": 1.0}}):
+            self.assertFalse(blockcache.store_base(a, anchor, 0, 0, revisit.key("base", 1), info["base"], f0))
+            for change in ({"surfaceComplete": False}, {"roadsComplete": False}, {"ter": None}):
                 self.assertFalse(blockcache.store(a, anchor, 0, 0, k, dict(info, **change), revisit.faults()), change)
-            a.base_stale.add((3, 0, 0))                         # its photo still waits on imagery
-            self.assertFalse(blockcache.store(a, anchor, 0, 0, k, info, revisit.faults()))
             self.assertIsNone(revisit.load(a.cache_dir, "block", k))
-
 
 if __name__ == "__main__":
     unittest.main()
