@@ -35,6 +35,7 @@ import math
 import os
 import struct
 import threading
+import time
 from collections import OrderedDict
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
@@ -73,6 +74,10 @@ FALLBACK_RGB = (100, 89, 69)       # no imagery anywhere: the terrain material's
 POLAR_RGB = (226, 232, 240)        # ... past Web Mercator's limit, where it is all ice (polar ice sheet, sea ice): snow
 BLANK_RANGE = 2                    # a tile whose pixels all lie within this many levels is uniform
 NODATA_MAX, NODATA_SHARE = 6, 0.02   # an export tile with > 2 % texels this black is outside the data
+# warm(): a lazy tile whose fetch failed is passed over for this long, the next lazy source's tile there fetched instead
+# (2026-10-27, Frederick CO: USDA's NAIP host did not resolve; the warm thread asked its first tile again every 30 s,
+# and warm(), called at every pose, put it first again: USGS's NAIP was never asked, the ground stayed USGS z16)
+WARM_RETRY_S = 120.0
 NODATA_BLOCK = 8                   # px: inside a tile, a square this size all this black is outside the data
 NODATA_EDGE = 2                    # ... and this much round it (the JPEG's grey fringe on the black)
 NODATA_WHITE_MIN, NODATA_WHITE_SHARE = 250, 0.25   # ... or (nodata "white") > 25 % this white: white roofs
@@ -418,6 +423,7 @@ class Imagery:
         self._lru = OrderedDict()           # (source, z, x, y) -> Tile, or None (404)
         self._export_locks = {}             # export parent -> its fetch lock (_download_export)
         self._warm_want = []                # warm(): lazy tiles ahead of the player, nearest first
+        self._warm_failed = {}              # warm key -> time.monotonic() until which it is passed over (failed)
         self._warm_cv = threading.Condition()
         self._warm_thread = None
         self._inflight = {}
@@ -871,16 +877,20 @@ class Imagery:
                 while key is None:
                     if self._warm_want is not want:     # a new list (the player moved on): looked at afresh
                         done, want = set(), self._warm_want
+                    now, passed = time.monotonic(), False
                     for k in self._warm_want:
                         if k in done:
                             continue
                         if self._warm_done(k):
                             done.add(k)
                             continue
+                        if self._warm_failed.get(k, 0.0) > now:     # (not done: asked again once it expires)
+                            passed = True
+                            continue
                         key = k
                         break
                     if key is None:
-                        self._warm_cv.wait()
+                        self._warm_cv.wait(WARM_RETRY_S if passed else None)
             src, z, x, y = key
             last = (1 << src.export) - 1
             try:
@@ -889,14 +899,42 @@ class Imagery:
                 # (170 s of the server process's CPU in a 4-minute drive, 2026-10-20)
                 self._download(src, z, x | last, y | last)
                 self._count(src.name + ":warm")
-            except ImageryError as e:       # the host takes no prefetch now / failed: later
+            except ImageryError as e:
                 with self._warm_cv:
-                    self._warm_cv.wait(5.0 if e.deferred else 30.0)
+                    if e.deferred:          # the host takes no prefetch now: later
+                        self._warm_cv.wait(5.0)
+                    else:                   # failed: passed over a while (the next lazy source fills in)
+                        self._warm_fail(key)
                 continue
             except Exception:
                 log.exception("imagery warm %s", key[1:])
             with self._warm_cv:             # fetched (or no use asking again): never the same key in a loop
                 done.add(key)
+
+    def _warm_fail(self, key):
+        """A warm key's fetch failed (under _warm_cv): pass it over for WARM_RETRY_S; with its host's breaker open,
+        every key of its source in the list (each would fail at once)."""
+        src = key[0]
+        now = time.monotonic()
+        until = now + WARM_RETRY_S
+        if self.fetcher.available(netfetch.host_of(src.url)):
+            self._warm_failed[key] = until
+        else:
+            for k in self._warm_want:
+                if k[0] is src:
+                    self._warm_failed[k] = until
+            self._warm_failed[key] = until
+        if len(self._warm_failed) > 4096:
+            self._warm_failed = {k: t for k, t in self._warm_failed.items() if t > now}
+
+    def _warm_passed(self, src, z, tx, ty):
+        """The lazy tile's warm fetch failed a moment ago (_warm_fail), or its host's breaker is open: nothing to
+        wait for there now."""
+        if not self.fetcher.available(netfetch.host_of(src.url)):
+            return True
+        k = src.export
+        with self._warm_cv:
+            return self._warm_failed.get((src, z, (tx >> k) << k, (ty >> k) << k), 0.0) > time.monotonic()
 
     def _warm_done(self, key):
         """Nothing (more) to fetch for key's parent: it was fetched (its last child, the one written last, is
@@ -942,7 +980,7 @@ class Imagery:
                     path, miss = self._paths(src, z, tx, ty)
                     if os.path.exists(path):
                         break
-                    if os.path.exists(miss):
+                    if os.path.exists(miss) or self._warm_passed(src, z, tx, ty):
                         continue
                     with self._lock:
                         if self._probe_status((src, z, tx, ty)) == "outside":

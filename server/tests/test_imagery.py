@@ -677,6 +677,49 @@ class ExportImageryTest(unittest.TestCase):
         # where a USDA tile meets a USGS-NAIP one, neither has all four bilinear taps: a texel line of USGS
         self.assertLess(used.get("usgs", 0), 0.001 * 1024 * 1024)
 
+    def test_dead_first_service_falls_through(self):
+        """naipusda's host does not answer at all (2026-10-27, Frederick CO: its name did not resolve): the warm thread
+        passes its tiles over and fetches naip's, and a new list (warm() at every pose) does not put the dead host's
+        tiles first again; the base photo is ready with naip's."""
+        def serve_export(z, x, y, size, name):
+            if name == "naipusda":
+                raise OSError("getaddrinfo failed")
+            a = np.zeros((size, size, 3), np.uint8) + np.array((90, 120, 60), np.uint8)
+            a[::2, ::2] += 3
+            b = io.BytesIO()
+            Image.fromarray(a).save(b, "JPEG", quality=95)
+            return 200, b.getvalue()
+
+        def serve_xyz(name, z, x, y):
+            a = np.zeros((256, 256, 3), np.uint8) + np.array((200, 30, 30), np.uint8)
+            a[::2, ::2] += 6
+            return 200, png(a)
+        self.requests = []
+        net = netfetch.Fetcher(transport=ExportTransport(serve_export, serve_xyz, self.requests, by_name=True),
+                               sleep=lambda s: None, policies=FAST)
+        im = imagery.Imagery(self.tmp.name, ("naipusda", "naip", "usgs"), fetcher=net, tone=0.0)
+        points = [(0.0, 0.0), (1500.0, 0.0)]
+
+        def naip_left():
+            with im._warm_cv:
+                return [k for k in im._warm_want if k[0].name == "naip" and not im._warm_done(k)]
+        im.warm(self.frame, points, 700.0, 1.0)
+        for _ in range(300):
+            if not naip_left():
+                break
+            time.sleep(0.02)
+        self.assertEqual(naip_left(), [], "every naip tile fetched")
+        self.assertTrue([r for r in self.requests if r[0] == "naip"])
+        n = len([r for r in self.requests if r[0] == "naipusda"])
+        self.assertLessEqual(n, 12, "the dead host: until its breaker opened, not once per tile")
+        for _ in range(5):                  # the poses that follow: new lists, the dead host's tiles still passed over
+            im.warm(self.frame, points, 700.0, 1.0)
+            time.sleep(0.05)
+        self.assertEqual(len([r for r in self.requests if r[0] == "naipusda"]), n)
+        self.assertTrue(im.lazy_ready(self.frame, -512.0, -512.0, 1024.0, 1024))
+        _, used = im._render(self.frame, -512.0, -512.0, 1024.0, 1024)
+        self.assertIn("naip", used)
+
     def test_state_source_bounds_and_white(self):
         """md6in: only asked inside its bounds; white (outside the state, inside the box) is missing, the
         next source fills it; big white roofs below the share are kept."""
