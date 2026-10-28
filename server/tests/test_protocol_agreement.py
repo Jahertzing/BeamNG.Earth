@@ -472,7 +472,7 @@ class CacheAgreementTest(unittest.TestCase):
         settings = (LUA / "settings.lua").read_text(encoding="utf-8")
         m = re.search(r"cacheCapGb = \{ kind = 'enum', default = '(\w+)', values = \{ ([^}]*) \}", settings)
         values = re.findall(r"'(\w+)'", m.group(2))
-        self.assertEqual((m.group(1), values), ("20", ["5", "10", "20", "50", "unlimited"]))
+        self.assertEqual((m.group(1), values), ("20", ["5", "10", "20", "50", "100", "200", "unlimited"]))
         self.assertEqual(float(m.group(1)), cachemod.DEFAULT_CAP_GB, "the page's default is the server's")
         page = (LUA.parents[3] / "ui" / "ui-vue" / "mods" / "beamngEarth" / "EarthSettings.vue").read_text(encoding="utf-8")
         row = re.search(r'\{ id: "cacheCapGb", type: "select", default: "(\w+)".*?options: \[(.*?)\] \}', page, re.S)

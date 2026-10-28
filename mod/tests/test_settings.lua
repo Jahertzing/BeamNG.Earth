@@ -249,6 +249,11 @@ settings.uiSet('cacheCapGb', '50')
 settings.uiSet('cacheCapGb', 'unlimited')
 T.check(capsSent[1] == 50 and capsSent[2] == 0 and files[settings.FILE].cacheCapGb == 'unlimited',
   'cache cap: saved, sent to the server in GB (unlimited = 0)')
+settings.uiSet('cacheCapGb', '200')
+T.check(capsSent[3] == 200 and files[settings.FILE].cacheCapGb == '200' and settings.validate('cacheCapGb', '100') == '100',
+  'cache cap: 100 and 200 GB (a pre-loaded state)')
+settings.uiSet('cacheCapGb', 'unlimited')
+capsSent = { capsSent[1], capsSent[2] }
 settings.applyAll()
 T.check(capsSent[3] == 0, 'cache cap: applied with the rest (the level start)')
 T.check(settings.cacheLine(nil) == 'no information from the server', 'cache line: no server (or one without a cache)')

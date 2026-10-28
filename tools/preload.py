@@ -1046,6 +1046,9 @@ def edge_parents(exports, coverage):
     return n
 
 
+PAGE_CAPS_GB = (5, 10, 20, 50, 100, 200)    # the mod's settings page (settings.lua cacheCapGb), besides Unlimited
+
+
 def check_cap(cache_dir, cap_gb, wrote, dry_run):
     """Print whether the cache (what is there plus what this run writes) fits the cap; True when it does."""
     c = cachemod.Cache(cache_dir, cap_gb, start=False)
@@ -1058,9 +1061,11 @@ def check_cap(cache_dir, cap_gb, wrote, dry_run):
     print(f"  cache: {used / GB:.1f} GB used of a {cap / GB:.0f} GB cap; after this run ~{need / GB:.1f} GB")
     if need > 0.9 * cap:
         want = math.ceil(need / 0.85 / GB / 5) * 5
-        hint = (f"raise the cap to {want} GB or more (the mod's settings page: 5-50 GB; --cache-cap {want} here)"
-                if want <= 50 else f"it needs ~{want} GB, past the settings page's 50 GB: start the server with "
-                                    f"--cache-cap {want}, or pre-load a smaller region")
+        page = next((v for v in PAGE_CAPS_GB if v >= want), None)
+        hint = (f"set the mod's settings page's \"Download cache size\" to {page} GB (or Unlimited), and --cache-cap "
+                f"{page} here" if page is not None else
+                f"it needs ~{want} GB, past the settings page's {PAGE_CAPS_GB[-1]} GB: set it to Unlimited (the mod "
+                f"sends its setting on every start), and --cache-cap 0 here; or pre-load a smaller region")
         print(f"  ! does not fit: the least recently used files would go again; {hint}", flush=True)
         return False
     return True
