@@ -1144,6 +1144,16 @@ class InGroundTest(unittest.TestCase):
         self.assertTrue([c for c in chunks if c["m"] not in surfaces], "its lines stay")
 
 
+class AlongTest(unittest.TestCase):
+    def test_along_is_point_and_direction(self):
+        """lane_marks' _along gives (point, unit direction); the tunnel sound boxes' point helper has its own name (a
+        second _along later in roads.py replaced it and every tile with lane marks failed, 2026-10-28)."""
+        p, u = roads._along(np.array([[0.0, 0.0], [10.0, 0.0]]), 4.0)
+        self.assertTrue(np.allclose(p, [4.0, 0.0]) and np.allclose(u, [1.0, 0.0]))
+        self.assertTrue(np.allclose(roads._point_along(np.array([[0.0, 0.0, 1.0], [10.0, 0.0, 1.0]]), 4.0),
+                                    [4.0, 0.0, 1.0]))
+
+
 if __name__ == "__main__":
     unittest.main()
 
@@ -1239,3 +1249,4 @@ class ChainResolveTest(unittest.TestCase):
                 pool = {("b", 0): pool[("b", 0)], ("a", 0): pool[("a", 0)]}
             self.assertEqual(res._resolve(("a", 0), pool, {}, set()), [("a", 0), ("b", 0)])
             self.assertEqual(float(pool[("b", 0)][1][-1][0]), 300.0)
+
