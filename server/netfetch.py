@@ -156,6 +156,14 @@ POLICIES = {
                                       allow_prefetch=True, offline_ok=True, miss_ttl=90 * DAY,
                                       binary=True, timeout=30.0, max_attempts=2, base_delay=2.0,
                                       breaker_threshold=6, breaker_window=120.0, optional=True),
+    # The Front Range counties' and cities' orthophoto MapServer / ImageServer exports (imagery_regional "co_boulder_county",
+    # "co_thornton", ...): 0.4-1.7 s a 1024² image (2026-10-28), municipal servers: two at a time, two a second; a
+    # Front Range pre-load (tools/preload.py --region front-range) is a few thousand images per host
+    **{h: HostPolicy(rate=2.0, burst=6.0, max_conc=2, daily_budget=8000, allow_prefetch=True, offline_ok=True,
+                     miss_ttl=90 * DAY, binary=True, timeout=30.0, max_attempts=2, base_delay=2.0,
+                     breaker_threshold=6, breaker_window=120.0, optional=True)
+       for h in ("maps.bouldercounty.org", "maps.thorntonco.gov", "gis.arapahoegov.com", "apps.douglas.co.us",
+                 "gisportal.jeffco.us", "egis.lakewood.org", "gis.coloradosprings.gov")},
     # NOAA NCEI's DEM global mosaic (bathymetry for the sea floor, seacarve.py): one export per map-data cell
     "gis.ngdc.noaa.gov": HostPolicy(rate=1.0, burst=4.0, max_conc=2, daily_budget=4000,
                                     allow_prefetch=True, offline_ok=True, miss_ttl=30 * DAY,

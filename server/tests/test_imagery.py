@@ -232,6 +232,36 @@ class ChainTest(unittest.TestCase):
         self.assertFalse(m[100:180, 62:].any())
         self.assertFalse(m[50:55, 50:55].any())
 
+    def test_nodata_mask_white(self):
+        """A county's MapServer export fills past its line with white (253): masked for a white source when it runs
+        off the tile; a white roof inside the tile, and white in a black source's tile, stay data."""
+        rng = np.random.default_rng(3)
+        a = rng.integers(20, 200, (256, 256, 3), dtype=np.uint8)
+        a[100:140, 100:140] = 255                       # a white roof in the middle
+        self.assertIsNone(imagery.nodata_mask(a, white=True))
+        a[:, 200:] = 253                                # past the county line
+        m = imagery.nodata_mask(a, white=True)
+        self.assertTrue(m[:, 200:].all())
+        self.assertTrue(m[:, 198:200].all(), "its JPEG fringe too")
+        self.assertFalse(m[:, :196].any())
+        self.assertIsNone(imagery.nodata_mask(a), "a black source: white is data")
+        a[:30, :30] = 0
+        m = imagery.nodata_mask(a, white=True)
+        self.assertTrue(m[:30, :30].all() and m[:, 200:].all(), "both at once")
+
+    def test_front_range_sources(self):
+        """The Front Range's county sources: lazy exports at z18, white past their lines, before NAIP; a newer or
+        finer one before an older one whose box overlaps it."""
+        names = ["co_boulder_county", "co_frederick", "co_thornton", "co_arapahoe", "co_douglas", "co_jeffco",
+                 "co_lakewood", "co_springs"]
+        idx = [imagery.DEFAULT_CHAIN.index(n) for n in names]
+        self.assertEqual(idx, sorted(idx))
+        self.assertLess(idx[-1], imagery.DEFAULT_CHAIN.index("naipusda"))
+        for n in names:
+            s = imagery.SOURCES[n]
+            self.assertTrue(s.lazy and s.export == 2 and s.max_zoom == 18 and s.nodata == "white", n)
+            self.assertIn(netfetch.host_of(s.url), netfetch.POLICIES, n)
+
     def test_blank_last_source_is_used(self):
         """EOX draws the open ocean as one uniform colour: accepted from the last source."""
         def serve(name, z, x, y):

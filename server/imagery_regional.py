@@ -46,6 +46,16 @@ REGIONAL = {
                  "tile/{z}/{y}/{x}", "Delaware FirstMap 2024 imagery", (38.45, -75.79, 39.84, -75.04), "xyz", True),
     "vermont": ("https://maps.vcgi.vermont.gov/arcgis/rest/services/EGC_services/IMG_VCGI_CLR_WM_CACHE/ImageServer/"
                 "tile/{z}/{y}/{x}", "VCGI orthoimagery", (42.72, -73.44, 45.02, -71.46), "xyz", True),
+    # Colorado's Front Range (the user, 2026-10-28: pre-load Longmont, Boulder, Denver, Colorado Springs and between).
+    # Probed 2026-10-28 at 23 points along I-25 / US-36: each county's or city's own service has data only inside its
+    # jurisdiction and fills the rest of its box with white (MapServer exports: 253) or black (Jeffco's ImageServer),
+    # so the next source fills in there (imagery.nodata_mask's white edges). Newer or finer first where boxes overlap.
+    # z18 (0.46 m) for the mesh's L-1 tiles: every one is 3-6 inch. ~0.4-1.7 s a 1024 px export.
+    # Boulder County's 2026 Pictometry (EagleView) flight, 6-inch, the whole county (Longmont, Boulder, Louisville,
+    # Lafayette, Superior, Nederland); no licence stated on the service (the county's public map server)
+    "co_boulder_county": ("https://maps.bouldercounty.org/arcgis/rest/services/RASTER/PICTOMETRY2026_6INCH_WebMerc/"
+                          "MapServer/export?" + ARCGIS_EXPORT, "Boulder County, CO 2026 Pictometry orthoimagery",
+                          (39.89, -105.69, 40.29, -105.00), "export", True, 18),
     # Colorado: the Town of Frederick's own 3-inch (0.25 ft) orthophotos, flown spring 2024 (leaf-off), ~38 x 21 km round
     # Frederick, Firestone, Dacono and north Erie (black outside); the user, 2026-10-27, playing there: USGS NAIP is
     # from 2019 at 0.6 m. The town's GIS terms: "copy, distribute, transmit and adapt ... freely", credit with a link to
@@ -53,6 +63,35 @@ REGIONAL = {
     "co_frederick": ("https://gis.frederickco.gov/arcgis/rest/services/Aerial_2024/ImageServer/exportImage?bandIds=0,1,2&"
                      + ARCGIS_EXPORT, "Town of Frederick, CO 2024 orthoimagery (town-frederickco.opendata.arcgis.com)",
                      (40.04, -105.16, 40.23, -104.70), "export", True, 18),
+    # DRAPP (the Denver Regional Council of Governments' aerial photography, 6-inch, spring; CC BY 3.0, drcog.org/legal-
+    # terms): no host serves the 2024 flight for the whole region, so each member's copy for its own area. Thornton's
+    # covers Thornton, Northglenn, Westminster and south Broomfield
+    "co_thornton": ("https://maps.thorntonco.gov/gisimaging/rest/services/Aerial2024DRCOG/MapServer/export?" + ARCGIS_EXPORT,
+                    "DRCOG DRAPP 2024 via City of Thornton, CO (CC BY 3.0)", (39.78, -105.08, 40.05, -104.82),
+                    "export", True, 18),
+    # Arapahoe County's own flight, layer "Aerials_2026" (Aurora, Centennial, Englewood, Littleton, the DTC); no licence
+    # stated on the service
+    "co_arapahoe": ("https://gis.arapahoegov.com/arcgis/rest/services/TiledServices/Aerials/MapServer/export?"
+                    + ARCGIS_EXPORT, "Arapahoe County, CO 2026 aerial imagery", (39.55, -105.07, 39.77, -103.70),
+                    "export", True, 18),
+    # DRAPP 2024 via Douglas County (Castle Rock, Parker, Lone Tree, Highlands Ranch, Larkspur)
+    "co_douglas": ("https://apps.douglas.co.us/gisis/rest/services/DRAPP2024/MapServer/export?" + ARCGIS_EXPORT,
+                   "DRCOG DRAPP 2024 via Douglas County, CO (CC BY 3.0)", (39.11, -105.42, 39.67, -104.52), "export",
+                   True, 18),
+    # DRAPP 2022 via Jefferson County (Arvada, Wheat Ridge, Lakewood, Golden, west Broomfield; black outside)
+    "co_jeffco": ("https://gisportal.jeffco.us/image/rest/services/DRAPP/DRAPP2022/ImageServer/exportImage?bandIds=0,1,2&"
+                  + ARCGIS_EXPORT, "DRCOG DRAPP 2022 via Jefferson County, CO (CC BY 3.0)",
+                  (39.11, -105.42, 39.93, -105.03), "export", True, 18),
+    # DRAPP 2020 via the City of Lakewood: the only DRAPP copy found that reaches central Denver (to ~-104.88; Denver's
+    # and Adams County's own servers did not answer or refused scripts, 2026-10-28)
+    "co_lakewood": ("https://egis.lakewood.org/server/rest/services/CW/Lakewood2020Aerial/MapServer/export?" + ARCGIS_EXPORT,
+                    "DRCOG DRAPP 2020 via City of Lakewood, CO (CC BY 3.0)", (39.56, -105.30, 39.83, -104.88), "export",
+                    True, 18),
+    # The City of Colorado Springs' latest city and El Paso County flights (Colorado Springs, Fountain, Monument,
+    # Palmer Lake); no licence stated on the service
+    "co_springs": ("https://gis.coloradosprings.gov/arcgis/rest/services/Basemaps/AerialsBasemap/MapServer/export?"
+                   + ARCGIS_EXPORT, "City of Colorado Springs / El Paso County, CO aerial imagery",
+                   (38.51, -105.09, 39.14, -104.03), "export", False, 18),
     # --- Europe -------------------------------------------------------------------------------------------------
     "swiss": ("https://wmts.geo.admin.ch/1.0.0/ch.swisstopo.swissimage/default/current/3857/{z}/{x}/{y}.jpeg",
               "(c) swisstopo SWISSIMAGE", (45.80, 5.95, 47.81, 10.50), "xyz", False),
