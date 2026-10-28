@@ -106,6 +106,8 @@ WORKERS = {"dem": 16, "xyz": 8, "cell": 8}     # cells: local CPU (the S3 hosts'
 MID_PAD = 0.25                  # the DEM's z15-z13 reach this share of far_km round the region
 PROBE_Z, PROBE_PX = 13, 64      # coverage: one 64 px export per z13 tile, 16 px per z15 parent
 PROBE_SHARE = 0.05              # a z15 parent with this share of texels neither white nor black has data
+PROBE_MIN_TILES = 16            # a source whose box spans fewer z13 tiles is not probed: every parent in it is asked
+                                # (a town's cached MapServer draws nothing at the probe's 76 m texels: Vail's minScale)
 COVERAGE_SUB = os.path.join("preload", "coverage")     # the probes' folder under the target (world: worldvol.COVERAGE)
 DISK_SPARE = 2e9                # bytes left free on the world folder's drive after a run
 
@@ -396,6 +398,14 @@ def classify_probe(rgb, cells=4):
             for j in range(cells)]
 
 
+def box_tiles(src, z=PROBE_Z):
+    """How many zoom-z tiles a source's box spans."""
+    s, w, n, e = src.bounds
+    x0, y0 = mapcells.tile_xy(n, w, z)
+    x1, y1 = mapcells.tile_xy(s, e, z)
+    return (int(x1) - int(x0) + 1) * (int(y1) - int(y0) + 1)
+
+
 def coverage_path(cache_dir, src):
     return os.path.join(cache_dir, COVERAGE_SUB, f"{src.name}.json")
 
@@ -428,7 +438,7 @@ def probe_coverage(net, cache_dir, region, chain, skip=(), stop=None, write=True
     from PIL import Image
     # (a statewide source with a resolver, the Planetary Computer's NAIP: data in the whole state, a 404 past it; its
     # probe would be one request per z13 tile of the state)
-    srcs = [s for s in export_sources(chain, skip) if s.bounds and not s.resolver]
+    srcs = [s for s in export_sources(chain, skip) if s.bounds and not s.resolver and box_tiles(s) >= PROBE_MIN_TILES]
     z13 = region.tiles(PROBE_Z, where=region.where("exports", bool))     # (a tier without photos asks none)
     out = {}
 
