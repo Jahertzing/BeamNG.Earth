@@ -609,17 +609,17 @@ local function upvalues(f)
   return im, ir
 end
 local function keepable(route, old, new)
-  local path = route.path
-  if not (path and path[1] and old and new and old.positions and new.positions and new.graph) then return 'nopath' end
+  local rpath = route.path
+  if not (rpath and rpath[1] and old and new and old.positions and new.positions and new.graph) then return 'nopath' end
   local plan = route.plan
   local k0 = math.max(1, (plan and plan[1] and plan[1].pathidx or 1) - 1)
-  if not path[k0] then return 'nopath' end
-  for i = k0, #path do
-    local a = path[i]
+  if not rpath[k0] then return 'nopath' end
+  for i = k0, #rpath do
+    local a = rpath[i]
     local g, p, q = new.graph[a], new.positions[a], old.positions[a]
     if not (g and p and q) then return 'missing' end
     if (p.x - q.x) ^ 2 + (p.y - q.y) ^ 2 > tol2 or math.abs(p.z - q.z) > dz then return 'moved' end
-    local b = path[i + 1]
+    local b = rpath[i + 1]
     if b and not g[b] then return new.graph[b] and 'link' or 'missing' end
   end
   return 'kept'
