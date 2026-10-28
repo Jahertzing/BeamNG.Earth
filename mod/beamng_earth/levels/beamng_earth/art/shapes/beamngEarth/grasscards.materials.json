@@ -1,0 +1,31 @@
+{
+  "bngEarthGrassCard": {
+    "name": "bngEarthGrassCard",
+    "mapTo": "bngEarthGrassCard",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "6684a0d7-0ec1-51dc-aad9-1c6838c6f5d2",
+    "Stages": [
+      {
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/grasscard_b.color.dds",
+        "opacityMap": "/levels/beamng_earth/art/shapes/beamngEarth/grasscard_o.data.dds",
+        "baseColorFactor": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "roughnessFactor": 1,
+        "metallicFactor": 0,
+        "vertColor": true
+      },
+      {},
+      {},
+      {}
+    ],
+    "alphaTest": true,
+    "alphaRef": 80,
+    "doubleSided": true,
+    "translucent": false
+  }
+}

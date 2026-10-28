@@ -63,6 +63,8 @@ M.SCHEMA = {
   groundCoverDistance = { kind = 'enum', default = 'normal', values = { 'near', 'normal', 'far', 'max' }, label = 'Grass distance' },
   -- the grass grain in the ground tiles past the 3D grass (satmat.lua GRASS_LAYER; the server's grass masks)
   groundGrass = { kind = 'bool', default = true, label = 'Grass in the distant ground' },
+  -- grass cards on grassland from the 3D grass out to ~1 km (roads.lua M.grassCards; the server's grasscards.py)
+  grassCards = { kind = 'bool', default = true, label = 'Grass to 1 km' },
   -- BeamNG's own AI traffic on our roads when the level-start configurator leaves it to the settings (its default):
   -- off, light, normal (the game's amount for this PC), busy (navgraph.lua MODES)
   aiTraffic = { kind = 'enum', default = 'normal', values = { 'off', 'light', 'normal', 'busy' }, label = 'AI traffic' },
@@ -104,7 +106,7 @@ M.SCHEMA = {
 }
 M.ORDER = { 'theDriveTime', 'theDriveAutodrive', 'rebaseDistance', 'viewDistanceMode', 'viewDistanceKm', 'hazeStrength',
   'colorGrade', 'skyMode', 'clouds', 'weatherMode', 'realGravity', 'groundCover', 'groundCoverDensity', 'groundCoverDistance',
-  'groundGrass', 'rocks', 'roads', 'cityGlow', 'aiTraffic', 'drcog', 'lidarHeights', 'dashboardSatellite', 'hudVisible', 'statusBar',
+  'groundGrass', 'grassCards', 'rocks', 'roads', 'cityGlow', 'aiTraffic', 'drcog', 'lidarHeights', 'dashboardSatellite', 'hudVisible', 'statusBar',
   'placeNamesOnline', 'creditsVisible', 'beammpOnLaunch',
   'creditsCorner', 'creditsSize', 'cacheCapGb', 'devOutlineKm', 'devMapKm' }
 
@@ -281,6 +283,7 @@ M.APPLY = {
   groundCoverDensity = function(v) require('beamngEarth/groundcover').setDensity(v) end,
   groundCoverDistance = function(v) require('beamngEarth/groundcover').setReach(v) end,
   groundGrass = function(v) require('beamngEarth/satmat').GRASS_LAYER = v and true or false end,
+  grassCards = function(v) require('beamngEarth/roads').grassCards = v and true or false end,
   cityGlow = function(v) require('beamngEarth/nightglow').setEnabled(v) end,
   rocks = function(v) require('beamngEarth/trees').setGroupEnabled({ 'rock', 'desert_rock' }, v) end,
   aiTraffic = function(v) require('beamngEarth/navgraph').setMode(v) end,     -- (from the next level start)

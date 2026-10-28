@@ -1022,6 +1022,11 @@ local function onMessage(msg)
     roads.onFarTile(msg, st.anchorId, 'B')
   elseif t == 'brfar_drop' then
     roads.onFarDrop(msg, 'B')
+  elseif t == 'grfar_tile' then
+    -- grass cards past the 3D grass (server grasscards.py, --grass-cards on): render-only, roads.lua
+    roads.onFarTile(msg, st.anchorId, 'G')
+  elseif t == 'grfar_drop' then
+    roads.onFarDrop(msg, 'G')
   elseif t == 'where_result' then
     statusbar.onResult(msg)
   elseif t == 'place_previews_ready' then      -- the level select's place pictures are there (levelinfo.lua)

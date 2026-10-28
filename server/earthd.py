@@ -120,6 +120,7 @@ import seatiles as seatilesmod  # noqa: E402
 import vegetation as vegetationmod
 import buildings as buildingsmod  # noqa: E402
 import skyline as skylinemod  # noqa: E402
+import grasscards as grasscardsmod  # noqa: E402
 import rockface as rockfacemod  # noqa: E402
 import riverlines as riverlinesmod  # noqa: E402
 import groundahead as groundaheadmod  # noqa: E402
@@ -534,7 +535,7 @@ class Server:
                  colormatch="off", credits=None, cache=None, retex_rate=RETEX_RATE, surface=None,
                  mapdata=None, grading=False, road_widths=False, block_pools=(), sidewalks=True, buildings=False, traffic=False, far_pool=None,
                  road_pool=None, airports_db=None, sea=None, vegetation=None, leaf_on=True, season_mode="off",
-                 far_bld_pool=None, gas_stations=False, skyline=False):
+                 far_bld_pool=None, gas_stations=False, skyline=False, grass_cards=False):
         """kfun: K(L) for every level (default: the layout's K table); near_radii: the min-level
         radii (default: the layout's); cells: 32 (v1.3.1) or 64 (M1, mesh mode only); tex: texture
         px per level from the finest (default: tex_near, tex_near, tex_far with 32 cells,
@@ -750,6 +751,9 @@ class Server:
         self.sidewalks = sidewalks  # raised sidewalk meshes with the road tiles (sidewalks.py)
         self.buildings = buildings  # building meshes with the road tiles (buildings.py)
         self.skyline = bool(skyline) and bool(buildings)    # the tall buildings to 40 km (skyline.py; --skyline on)
+        # grass cards past the 3D grass (grasscards.py; --grass-cards on): with the surfaces and worker processes, in any
+        # mode (on the DEM: in terrain / detail mode the drawn block's ground, graded only at the roads the mask cuts)
+        self.grass_cards = bool(grass_cards) and surface is not None
         # gas stations with refuelling with the road tiles (gasstations.py; the user, 2026-10-23)
         # (the settings page's switch turns them off and on again: set_gas_stations; never on without the flag)
         self.gas_allowed = bool(gas_stations) and mapdata is not None
@@ -1165,6 +1169,20 @@ class Server:
         return buildingsmod.skyline_tile(anchor.frame, ux, uy, self.mapdata,
                                          lambda la, lo: self.ground(anchor.frame, la, lo, self.dem.sample(la, lo, zoom)),
                                          self.out_dir, self.vfs_dir, aid, self.lamp_region(anchor))
+
+    def build_grass_card_tile(self, aid, tx, ty):
+        """grasscards.py: the grass card tile of road tile square (tx, ty) of anchor aid, or None (its land cover not
+        cached yet, or no worker processes). Worker threads (the Connection's grfar Tracker)."""
+        anchor = self.anchors.get(aid)
+        if anchor is None or not self.grass_cards or self.far_bld_pool is None:
+            return None
+        tex = None
+        if self.imagery is not None:
+            im = self.imagery
+            tex = {"chain": [src.name for src in im.chain], "tone": self.tone, "leaf_on": im.leaf_on,
+                   "season_mode": im.season_mode}
+        return self.far_bld_pool.submit(blockworker.grass_cards_tile, aid, anchor.lat, anchor.lon, anchor.zooms[0],
+                                        tx, ty, self.out_dir, self.vfs_dir, tex).result()
 
     def build_far_bridge_tile(self, aid, tx, ty):
         """buildings.far_bridge_tile: a far bridge (render-only) tile of anchor aid, or None (its road cells not at
@@ -2849,7 +2867,7 @@ BOOST_MAX_S = 120.0         # ... or this long after the teleport
 BOOST_GRACE_S = 5.0         # (the car dropped into place moves a little at first)
 
 ANCHOR_TILE_FILES = ("roads", "road", "walks", "walkcol", "deck", "bld", "bldcol", "bldfar", "wire", "veg", "navgraph",
-                     "sky")
+                     "sky", "grfar")
 
 
 class _BoundedLru:
@@ -2977,6 +2995,9 @@ class Connection:
                                             buildingsmod.BRIDGE_FAR_PER_POSE, "brfar",
                                             skip_m=roadsmod.SEND_M - roadsmod.TILE)
                       if buildingsmod.BRIDGE_FAR_SEND_M > roadsmod.SEND_M else None)
+        # grass cards past the 3D grass (grasscards.py, --grass-cards on): not under it (skip_m)
+        self.grfar = vegetationmod.Tracker(grasscardsmod.SEND_M, grasscardsmod.DROP_M, grasscardsmod.PER_POSE, "grfar",
+                                           skip_m=grasscardsmod.SKIP_M)
         self.sky = skylinemod.Tracker()         # the skyline's z12 cells (--skyline on): after the far buildings
         self.mid = skylinemod.mid_tracker()     # ... and its mid ring of z14 cells (2-6 km)
         self.nav = navgraphmod.Tracker()        # the AI road graph around the player (--traffic on)
@@ -3365,7 +3386,8 @@ class Connection:
             self.s.connections.discard(self)
             self.s.slots_let_go(list(self.slot_holds))
             self.slot_holds = {}
-            for tr in (self.roads, self.veg, self.bldfar, self.bldsky, self.brfar, self.sky, self.mid, self.nav):
+            for tr in (self.roads, self.veg, self.bldfar, self.bldsky, self.brfar, self.grfar, self.sky, self.mid,
+                       self.nav):
                 if tr is not None:
                     tr.close()
             self.s.drop_claims(self)
@@ -3970,6 +3992,10 @@ class Connection:
             if self.brfar is not None and self.bldfar.progress()[0] >= self.bldfar.progress()[1]:
                 self.brfar.on_pose(self, aid, *self.focus, asyncio.get_running_loop(), self.s.build_far_bridge_tile,
                                    view=self.view_at)
+        if self.s.grass_cards and aid == self.active and self.roads.progress()[0] >= self.roads.progress()[1]:
+            # (after the road tiles round the car: the least urgent of the near things)
+            self.grfar.on_pose(self, aid, *self.focus, asyncio.get_running_loop(), self.s.build_grass_card_tile,
+                               view=self.view_at)
         if self.s.traffic and aid == self.active and self.nav_may_start(aid):
             self.nav.on_pose(self, aid, *self.focus, asyncio.get_running_loop(), self.s.build_navgraph)
         if aid == self.active:
@@ -4719,6 +4745,7 @@ async def main_async(args):
                     traffic=args.traffic == "on" and args.roads == "on",
                     block_pools=block_pools, far_pool=far_pool, road_pool=road_pool, airports_db=airports_db,
                     far_bld_pool=far_bld_pool, skyline=args.skyline == "on",
+                    grass_cards=args.grass_cards == "on" and args.surface == "on",
                     sea=seacarvemod.SeaCarver(mapdata, args.cache_dir) if args.sea == "on" else None,
                     vegetation=(vegetationmod.Vegetation(mapdata, args.cache_dir) if args.trees == "on" else None))
     server.update_check = args.update_check == "on"
@@ -5158,6 +5185,9 @@ def main():
     ap.add_argument("--buildings", choices=("on", "off"), default="off",
                     help="3D buildings from the Overture footprints with the road tiles (buildings.py; needs --roads "
                          "on): heights and roofs predicted where the data has none")
+    ap.add_argument("--grass-cards", choices=("on", "off"), default="on",
+                    help="grass cards on grassy land past the 3D grass, out to ~1 km (grasscards.py; with --surface "
+                         "on): crossed cards coloured from the ground photo")
     ap.add_argument("--skyline", choices=("on", "off"), default="on",
                     help="the tall buildings out to 40 km (skyline.py; with --buildings on): towers of >= 50 m or "
                          "15 floors, all of >= 20 m or 6 floors within 6 km, as simple tinted prisms")

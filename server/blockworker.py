@@ -707,6 +707,37 @@ def far_buildings_tile(aid, lat, lon, zoom, tx, ty, out_dir, vfs_dir, lamp_regio
                          lambda path, extra: (path, int(extra.get("n", 0))))
 
 
+def grass_cards_tile(aid, lat, lon, zoom, tx, ty, out_dir, vfs_dir, tex=None):
+    """earthd.Server.build_grass_card_tile here (the far buildings' pool): grasscards.build over road tile square
+    (tx, ty), coloured from the photo on disk (tex: the imagery chain settings, as far_tile's; None or a photo tile not
+    on disk: the fallback colour). (vfs path of its JSON, card count), or None when its land cover is not cached yet
+    (asked again on a later pose)."""
+    import grasscards
+    import imagery as imagerymod
+    import roads as roadsmod
+    if getattr(_s, "surface", None) is None:
+        return None
+    frame = geodesy.EnuFrame(lat, lon)
+    x0, y0, x1, _ = roadsmod.tile_bbox(tx, ty)
+    size = x1 - x0
+    mask, complete = surfacemod.grass_mask_ex(frame, x0, y0, size, grasscards.MASK_PX, _s.surface)
+    if not complete:
+        return None
+    if mask is None:
+        return grasscards.empty_tile(out_dir, vfs_dir, aid, tx, ty)
+    photo = None
+    if tex is not None:
+        try:
+            photo, _ = _imagery(tex).render(frame, x0, y0, size, grasscards.PHOTO_PX)
+        except imagerymod.ImageryError:
+            photo = None
+    mesh = grasscards.build(frame, x0, y0, size, mask,
+                            lambda la, lo: ground(frame, la, lo, _s.dem.sample(la, lo, zoom)), photo)
+    if mesh is None:
+        return grasscards.empty_tile(out_dir, vfs_dir, aid, tx, ty)
+    return grasscards.write_tile(mesh, out_dir, vfs_dir, aid, tx, ty, x0, y0)
+
+
 def skyline_tile(aid, lat, lon, zoom, ux, uy, out_dir, vfs_dir, lamp_region=None):
     """earthd.Server.build_sky_tile here (the far buildings' pool): buildings.skyline_tile (from the revisit cache when
     built in this anchor's place before)."""
