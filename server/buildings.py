@@ -3011,6 +3011,7 @@ def doors(items, lines, x0, y0, drives=None):
     L2 = np.maximum((D * D).sum(1), 1e-12)
     rows = []
     others = [(spec, spec.ring + np.array([x0, y0])) for spec, _, _ in items if (spec.min_h or 0.0) <= 0.5]
+    others_box = np.array([(*r.min(0)[:2], *r.max(0)[:2]) for _, r in others], np.float64).reshape(-1, 4)
     for spec, gmin, gmax in items:
         no_door = False
         if spec.plain or spec.floors >= 7 or spec.band in (BAND_OFFICE, BAND_OFFICE2) or spec.wall:
@@ -3087,16 +3088,17 @@ def doors(items, lines, x0, y0, drives=None):
                 sg = s1 - half_w if s1 - sd > sd - s0 else s0 + half_w
                 if abs(sg - sd) >= DRIVEWAY_W / 2 + DRIVE_DOOR_GAP_M:
                     p0 = a + d * sg + out * 0.2
-                    # (not out through a wing that stands forward of the front wall there: a car parked in it)
-                    if any(_inside(ring, p0 + out * k) for k in (1.0, 3.0, 5.0, 7.0, 9.0)):
+                    # (not from inside a concave roofprint's notch, nor out through a wing that stands forward of
+                    # the front wall there: a car parked in it)
+                    if any(_inside(ring, p0 + out * k) for k in (0.0, 1.0, 3.0, 5.0, 7.0, 9.0)):
                         p0 = None
         if p0 is not None:
             t = float(np.clip(((p0 - A[kseg]) * D[kseg]).sum() / L2[kseg], 0, 1))
             q = A[kseg] + t * D[kseg]
             v = p0 - q
             dl = float(np.hypot(*v))
-            if SHALF[kseg] + 1.0 < dl < DOOR_ROAD_M:
-                p1 = q + v / dl * (SHALF[kseg] + 0.1)
+            p1 = q + v / dl * (SHALF[kseg] + 0.1) if dl > 0 else q
+            if SHALF[kseg] + 1.0 < dl < DOOR_ROAD_M and not _drive_blocked(p0, p1, spec, others, others_box):
                 n = max(2, int(dl // 4.0) + 1)
                 pts = [p0 + (p1 - p0) * (j / (n - 1)) for j in range(n)]
                 drives.append({"m": DRIVEWAY["m"], "w": DRIVEWAY_W, "tl": DRIVEWAY["tl"], "p": DRIVEWAY["p"],
@@ -3113,6 +3115,27 @@ def doors(items, lines, x0, y0, drives=None):
                      round(math.degrees(math.atan2(d[1], d[0])) % 360.0, 1), 1.0, 2.2,
                      round(_hash01(spec.seed, "dv"), 3)])
     return rows
+
+
+def _drive_blocked(p0, p1, spec, others, boxes, step=1.0):
+    """Whether the driveway p0 -> p1 (its house's front to the road's edge) runs through another building (doors'
+    others: (spec, ring in the anchor frame); boxes: their bounding boxes): a neighbour's house or garage across it
+    (DRCOG's roofprints are detailed enough to meet; Old Town Frederick's drives crossed the next house, 2026-10-28)."""
+    if not len(boxes):
+        return False
+    lo, hi = np.minimum(p0, p1), np.maximum(p0, p1)
+    near = np.flatnonzero((boxes[:, 0] <= hi[0]) & (boxes[:, 2] >= lo[0]) & (boxes[:, 1] <= hi[1]) & (boxes[:, 3] >= lo[1]))
+    if not len(near):
+        return False
+    L = float(np.hypot(*(p1 - p0)))
+    pts = [p0 + (p1 - p0) * (t / L) for t in np.arange(0.5, L + 1e-9, step)] + [p1]
+    for i in near:
+        o, ring = others[i]
+        if o is spec:
+            continue
+        if any(_inside(ring[:, :2], p) for p in pts):
+            return True
+    return False
 
 
 # Company signs on walls (West Coast USA's, for its fictional firms): (prop group, width m, height m, panel thin

@@ -480,6 +480,17 @@ class DoorTest(unittest.TestCase):
         self.assertAlmostEqual(n[0, 1], 19.8, delta=0.3, msg="from the front wall")
         self.assertAlmostEqual(n[-1, 1], 10.1, delta=0.3, msg="to the road's edge")
 
+    def test_no_driveway_through_another_building(self):
+        for k in range(40):
+            spec = bld.plan(rect(k * 40, 20, 12, 9), {"class": "house"}, 0, 39.2, -76.9)
+            if spec.wall:
+                break
+        shed = bld.plan(rect(k * 40 - 2, 12.5, 16, 4), {"class": "garage"}, 0, 39.2, -76.9)
+        road = [(np.array([(-50.0, 6.0), (2000.0, 6.0)]), 4.0, "residential", True)]
+        drives = []
+        bld.doors([(spec, 0.0, 0.0), (shed, 0.0, 0.0)], road, 0.0, 0.0, drives)
+        self.assertEqual([d for d in drives if np.array(d["n"])[0, 1] > 19.0], [])
+
     def test_driveway_on_a_front_cut_into_short_walls(self):
         # a DRCOG-like roofprint: a 12 m front with a 1.5 m deep, 4 m wide recess in its middle (4 m walls only)
         def ring(x):
