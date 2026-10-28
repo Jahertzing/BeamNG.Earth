@@ -19,6 +19,15 @@ import roads  # noqa: E402
 from test_roads import FRAME, LAT, LON, features  # noqa: E402
 
 
+
+class NamesTest(unittest.TestCase):
+    def test_no_function_defined_twice(self):
+        """(a second skyline_tile hid the far buildings' one: every bldsky tile failed with a TypeError, 2026-10-28)"""
+        import ast
+        tree = ast.parse(Path(blockworker.__file__).read_text(encoding="utf-8"))
+        names = [n.name for n in tree.body if isinstance(n, (ast.FunctionDef, ast.ClassDef))]
+        self.assertEqual(sorted({n for n in names if names.count(n) > 1}), [])
+
 class FakeMapData:
     """The roads layer of the tile's first cell only (every cell the same object would double them)."""
 
