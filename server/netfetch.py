@@ -175,6 +175,11 @@ POLICIES = {
     "tiles.mapterhorn.com": HostPolicy(rate=50.0, burst=200.0, max_conc=32, daily_budget=80000,
                                        allow_prefetch=True, offline_ok=True, revalidate_after=180 * DAY,
                                        miss_ttl=90 * DAY, **TILE_HOST),
+    # Mapterhorn's PMTiles archives (its data-access page offers them for extracts by range: tools/preload.py reads runs
+    # of ~60 tiles, up to 8 MB, a request; ~12 MB/s a request, 2026-10-28): a few at once, a modest daily count
+    "download.mapterhorn.com": HostPolicy(rate=4.0, burst=8.0, max_conc=4, daily_budget=20000, allow_prefetch=True,
+                                          offline_ok=True, miss_ttl=90 * DAY, binary=True, timeout=120.0,
+                                          max_attempts=3, base_delay=2.0),
     "s3.amazonaws.com": HostPolicy(rate=50.0, burst=100.0, max_conc=8, daily_budget=None,
                                    allow_prefetch=True, offline_ok=True, miss_ttl=None, **TILE_HOST),
     # 20 variables a request = 2 Open-Meteo calls: 500 requests = 1,000 calls a day, hard
