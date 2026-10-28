@@ -948,7 +948,9 @@ three days of testing: dem 741 MB / 7.5k files, imagery 1.4 GB / 35k, deshadow 7
   blank frame). GPU placement also reads a layer copy the hidden block never refreshes; CPU
   placement reads the layer map directly, so no refresh is needed. Price: one slower frame per block
   move (every ~128-192 m), growing with the element count. That is why the shares are low and the
-  long grass reaches 70 m instead of 120. Two drives at 30 m/s over 3 km on Serengeti grassland
+  long grass reached 70 m instead of 120 (now the settings page's "Grass distance" Near; Normal, the default
+  since 2026-10-28, gives the stock 120 m and Far 200 m, each object's elements grown by (radius / near
+  radius)^1.5 to fill the larger cells). Two drives at 30 m/s over 3 km on Serengeti grassland
   (15 and 17 block moves) showed no blank grass frame at any move; the rebuild frame was ~43 ms with
   the first shares and ~25 ms with the tuned ones, next to the import's ~28 ms frame.
   The earlier cuts (GPU placement with a one-frame sunk-block refresh) blanked the grass for 2-4

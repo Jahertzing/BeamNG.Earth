@@ -22,7 +22,7 @@
 -- with its plant types' layer pointed at ours and its element count scaled by `share`. Green Hirochi
 -- Raceway grass with a little of West Coast USA's dry grass on grassland, West Coast scrub with sparse
 -- green grass between on dusty ground. Generic: one rule for every place; per-biome / per-climate /
--- per-season variants are a later step. Console: beamngEarth_groundcover.setEnabled(bool), .status()
+-- per-season variants are a later step. Console: beamngEarth_groundcover.setEnabled(bool), .setReach('far'), .status()
 
 local M = {}
 
@@ -48,21 +48,29 @@ M.SOURCES = {
             items = WCUSA .. 'main/MissionGroup/vegetation/items.level.json' },
 }
 -- stock GroundCover (source, src name) -> our layer, element share; `name` (default src) names our
--- object, for a stock definition used on two layers; `fields` override stock fields. The shares keep
--- the block-move rebuild near +15 ms (in-game at Serengeti grassland 2026-10-11: stock-ish shares
--- +30 ms; the dense near grass costs most, the long grass is kept close, radius 70 m instead of 120).
-local LONG_NEAR = { radius = 70, dissolveRadius = 45 }
+-- object, for a stock definition used on two layers; `fields` override stock fields; `reach` gives
+-- the object's { radius, dissolveRadius } per grass distance (M.REACH, the settings page). The shares
+-- keep the block-move rebuild near +15 ms at 'near' (in-game at Serengeti grassland 2026-10-11:
+-- stock-ish shares +30 ms; the dense near grass costs most, the long grass was kept close, radius 70 m
+-- instead of 120). 'near' is that tuning; 'normal' gives the stock maps' distances (Hirochi's long
+-- grass to 120 m), 'far' more. The user (2026-10-28): grass only showed up really close to the camera.
+local LONG = { near = { 70, 45 }, normal = { 120, 80 }, far = { 200, 150 } }
+local SHORT = { near = { 50, 30 }, normal = { 60, 42 }, far = { 80, 60 } }
+local DRY = { near = { 60, 30 }, normal = { 90, 60 }, far = { 150, 110 } }
+local SHRUB = { near = { 100 }, normal = { 150, 110 }, far = { 250, 190 } }
 M.DEFS = {
-  { source = 'hirochi', src = 'small_grass_close', layer = 'bngEarthGroundGrass', share = 0.25 },
-  { source = 'hirochi', src = 'long_grass_distant', layer = 'bngEarthGroundGrass', share = 0.17, fields = LONG_NEAR },
-  { source = 'wcusa', src = 'grass_dry_1', layer = 'bngEarthGroundGrass', share = 0.05 },
+  { source = 'hirochi', src = 'small_grass_close', layer = 'bngEarthGroundGrass', share = 0.25, reach = SHORT },
+  { source = 'hirochi', src = 'long_grass_distant', layer = 'bngEarthGroundGrass', share = 0.17, reach = LONG },
+  { source = 'wcusa', src = 'grass_dry_1', layer = 'bngEarthGroundGrass', share = 0.05, reach = DRY },
   -- mown town yards: a little short grass, nothing long (server/surface.py LAWN)
-  { source = 'hirochi', src = 'small_grass_close', name = 'small_grass_close_lawn', layer = 'bngEarthGroundLawn', share = 0.1 },
-  { source = 'wcusa', src = 'shrubs_near', layer = 'bngEarthGroundDusty', share = 0.15 },
+  { source = 'hirochi', src = 'small_grass_close', name = 'small_grass_close_lawn', layer = 'bngEarthGroundLawn', share = 0.1,
+    reach = SHORT },
+  { source = 'wcusa', src = 'shrubs_near', layer = 'bngEarthGroundDusty', share = 0.15, reach = SHRUB },
   -- sparse grass between the shrubs (user 2026-10-11: a hard line between grassland and shrubland)
-  { source = 'hirochi', src = 'small_grass_close', name = 'small_grass_close_scrub', layer = 'bngEarthGroundDusty', share = 0.08 },
+  { source = 'hirochi', src = 'small_grass_close', name = 'small_grass_close_scrub', layer = 'bngEarthGroundDusty', share = 0.08,
+    reach = SHORT },
   { source = 'hirochi', src = 'long_grass_distant', name = 'long_grass_distant_scrub', layer = 'bngEarthGroundDusty', share = 0.05,
-    fields = LONG_NEAR },
+    reach = LONG },
 }
 M.PREFIX = 'bngEarthGC_'
 -- set on every object after the stock fields (see the header)
@@ -72,6 +80,14 @@ M.enabled = true
 -- rebuild frame grows with it where tools/gcpatch is not loaded
 M.DENSITY = { low = 0.5, normal = 1.0, high = 2.0 }
 M.density = 1.0
+-- grass distance (the settings page): which `reach` of each definition. maxElements is per object, not
+-- per area, so a larger radius alone would thin the grass out; the elements grow with it, by
+-- (radius / near radius)^REACH_EXP: 2 would keep the near density everywhere, a little less is enough
+-- where far blades overlap on screen. More elements make the block-move rebuild frame longer where
+-- tools/gcpatch is not loaded (it is Linux only).
+M.REACH = { near = true, normal = true, far = true }
+M.REACH_EXP = 1.5
+M.reach = 'normal'
 
 local created = {}        -- object names we made
 local layered = false     -- a block with surface layers was loaded this level (objects can exist)
@@ -133,6 +149,21 @@ function M.fieldsFor(def, layer, share)
   return calls
 end
 
+-- Pure: the { field = value } overrides and the element factor of definition `d` at grass distance
+-- `reach` ('near' / 'normal' / 'far'): its `fields`, then its reach's radius / dissolveRadius.
+function M.reachFor(d, reach)
+  local out = {}
+  for k, v in pairs(d.fields or {}) do out[k] = v end
+  local r = d.reach and (d.reach[reach] or d.reach.normal)
+  local factor = 1
+  if r then
+    out.radius = r[1]
+    if r[2] then out.dissolveRadius = r[2] end
+    factor = (r[1] / d.reach.near[1]) ^ M.REACH_EXP
+  end
+  return out, factor
+end
+
 local function removeAll()
   for _, name in ipairs(created) do
     local o = scenetree.findObject(name)
@@ -167,8 +198,9 @@ function M.ensure()
         if old then old:delete() end
         do
           local gc = createObject('GroundCover')
-          for _, c in ipairs(M.fieldsFor(def, d.layer, d.share * M.density)) do gc:setField(c[1], c[2], c[3]) end
-          for k, v in pairs(d.fields or {}) do gc:setField(k, 0, tostring(v)) end
+          local fields, factor = M.reachFor(d, M.reach)
+          for _, c in ipairs(M.fieldsFor(def, d.layer, d.share * M.density * factor)) do gc:setField(c[1], c[2], c[3]) end
+          for k, v in pairs(fields) do gc:setField(k, 0, tostring(v)) end
           for _, f in ipairs(M.PLACEMENT) do gc:setField(f[1], 0, f[2]) end
           gc.canSave = false
           gc:registerObject(name)
@@ -220,6 +252,16 @@ function M.setDensity(v)
   return true
 end
 
+-- Grass distance (the settings page): 'near' / 'normal' / 'far'; existing objects are made again
+-- with it.
+function M.setReach(v)
+  if not M.REACH[v] then return false end
+  if v == M.reach then return true end
+  M.reach = v
+  if #created > 0 then M.rebuild() end
+  return true
+end
+
 -- The level ended (its objects are gone with it, the stock materials loaded for it too: a level started again in
 -- the same game session found no m_grass_* / wca_groundcover and drew no grass, 2026-10-19).
 function M.reset()
@@ -239,7 +281,7 @@ function M.rebuild()
 end
 
 function M.status()
-  return { enabled = M.enabled, density = M.density, objects = #created, materialsLoaded = next(loadedMaterials) ~= nil, error = lastError }
+  return { enabled = M.enabled, density = M.density, reach = M.reach, objects = #created, materialsLoaded = next(loadedMaterials) ~= nil, error = lastError }
 end
 
 return M
