@@ -90,6 +90,7 @@ STREET_WIDE_M = 7.0             # a junction whose widest street is wider than t
 VERTS_MAX = 60000               # a tile's sign mesh at most (the engine's 16-bit indices)
 
 MILE_M = 1609.344
+ROUTE_MILE_CLEAR_M = 1000.0     # a route's mile marker (routesigns) dropped this close to an exit-numbered one
 
 
 # ---------------------------------------------------------------------------------------------------------- lettering
@@ -1085,21 +1086,82 @@ class Plans:
             if os.path.isdir(d):
                 paths += [os.path.join(d, n) for n in os.listdir(d) if n.endswith(".json.gz")]
         paths.sort(key=lambda p: (-os.path.getsize(p), p))     # the biggest (the whole state's) first
-        grid = {}
+        grid, later = {}, []
         for fi, path in enumerate(paths):
             with gzip.open(path, "rt", encoding="utf-8") as f:
                 data = json.load(f)
+            if data.get("kind") == "routes":        # (tools/build_route_signs.py's: routesigns, after the exits')
+                import routesigns
+                later += [dict(it, _f=fi) for it in routesigns.plan(data)]
+                continue
             for it in plan(data):
                 it["_f"] = fi
                 if fi and self._seen(grid, it):
                     continue
                 grid.setdefault(self._key(it["lat"], it["lon"]), []).append(it)
+        for it in later:
+            if it["k"] == "rmile" and self._near(grid, it, "mile", ROUTE_MILE_CLEAR_M):
+                continue                # (a freeway with numbered exits: its exits' mile markers)
+            if self._seen(grid, it):
+                continue
+            grid.setdefault(self._key(it["lat"], it["lon"]), []).append(it)
         return grid
+
+    def _near(self, grid, it, kind, within):
+        """Is there an item of kind within m of it, for the traffic its way?"""
+        i, j = self._key(it["lat"], it["lon"])
+        r = int(math.ceil(within / (self.CELL * 111_195.0 * 0.75)))
+        for di in range(-r, r + 1):
+            for dj in range(-r, r + 1):
+                for o in grid.get((i + di, j + dj), ()):
+                    if o["k"] == kind and abs(_turn(o["brg"], it["brg"])) < 45 and \
+                            _dist((o["lat"], o["lon"]), (it["lat"], it["lon"])) < within:
+                        return True
+        return False
+
+    def _cache_path(self):
+        """The planned grid's pickle in the server's cache (revisit.CACHE_DIR), named by the region files (name, size,
+        time) and this code: a statewide plan takes ~15 s, every worker process wants it."""
+        import hashlib
+        import revisit
+        if not revisit.CACHE_DIR:
+            return None
+        h = hashlib.sha1(str(PLAN_V).encode())
+        for d in self.dirs:
+            if os.path.isdir(d):
+                for n in sorted(os.listdir(d)):
+                    if n.endswith(".json.gz"):
+                        st = os.stat(os.path.join(d, n))
+                        h.update(f"{d}|{n}|{st.st_size}|{int(st.st_mtime)}".encode())
+        for mod in ("guidesigns.py", "routesigns.py"):
+            with open(os.path.join(HERE, mod), "rb") as f:
+                h.update(f.read())
+        return os.path.join(revisit.CACHE_DIR, "hwysigns", f"plan-{h.hexdigest()[:16]}.pkl")
 
     def grid(self):
         with self._lock:
             if self._grid is None:
-                self._grid = self._load()
+                import pickle
+                try:
+                    path = self._cache_path()
+                except Exception:
+                    path = None
+                if path and os.path.exists(path):
+                    try:
+                        with open(path, "rb") as f:
+                            self._grid = pickle.load(f)
+                    except Exception:
+                        self._grid = None
+                if self._grid is None:
+                    self._grid = self._load()
+                    if path:
+                        try:
+                            os.makedirs(os.path.dirname(path), exist_ok=True)
+                            with open(path + f".{os.getpid()}.tmp", "wb") as f:
+                                pickle.dump(self._grid, f, protocol=pickle.HIGHEST_PROTOCOL)
+                            os.replace(path + f".{os.getpid()}.tmp", path)
+                        except OSError:
+                            pass
             return self._grid
 
     def near(self, lat0, lon0, lat1, lon1):
@@ -1523,6 +1585,68 @@ def street_signs(mesh, col, roads, box, names, ground=None, avoid=(), left_hand=
     return n
 
 
+MAST_ARM = ((0.3, 4.75), (3.7, 6.0), (6.0, 6.1))  # the stock boom's (s_trafficlight_boom_sn) mast arm: its
+                                # underside's height over the foot (m) at m out from the pole (rising to 3.7 m out)
+MAST_SIGN_AT = (1.5, 4.95)      # m out along the arm where a sign may hang (its overhead head from 5.1 m)
+MAST_CAP = 0.20                 # its lettering (8")
+MAST_ARM_AXIS = -1.0            # the arm reaches along the boom's local x this way (-1: over the road from the kerb)
+
+
+def _arm_z(u):
+    """The mast arm's underside over the boom's foot, u m out from its pole."""
+    xs, zs = zip(*MAST_ARM)
+    return float(np.interp(u, xs, zs))
+
+
+def mast_arm_signs(mesh, roads, box, names, booms, left_hand=False):
+    """Street name signs on the signals' mast arms (MUTCD D3-1 overhead): on each boom (junction_props' "signal"
+    rows), the name of the street its approach crosses, facing the drivers who come in, hung under the arm between
+    the pole and the first head. names: {fid: name}; booms: the tile's own (box: unused, each boom is its
+    junction's tile's)."""
+    import furniture
+    junctions = [(np.asarray(arms[0][3], float)[:2], arms) for arms in furniture._arms(roads).values()
+                 if len(arms) >= 3]
+    if not junctions:
+        return 0
+    C = np.array([c for c, _ in junctions])
+    n = 0
+    for row in booms:
+        if len(row) < 5 or len(mesh.P) > VERTS_MAX:
+            break
+        x, y, z, yaw = float(row[1]), float(row[2]), float(row[3]), math.radians(float(row[4]))
+        R = np.array([math.cos(yaw), math.sin(yaw)])           # (the boom's local +x: the approach's kerb side)
+        trav = np.array([-math.sin(yaw), math.cos(yaw)])       # (its local +y: the approach's travel)
+        d = np.hypot(C[:, 0] - x, C[:, 1] - y)
+        j = int(np.argmin(d))
+        if d[j] > 45.0:
+            continue
+        arms = junctions[j][1]
+        appr = min(arms, key=lambda a: float(np.dot(a[2], trav)))
+        if float(np.dot(appr[2], trav)) > -0.7:
+            continue
+        own = street_name(names.get(appr[0]))
+        cross = [(abs(float(a[2][0] * trav[1] - a[2][1] * trav[0])), street_name(names.get(a[0])), a) for a in arms
+                 if a[1].cls in STREET_CLASSES and not a[1].link]
+        cross = [c for c in cross if c[1] and c[1] != own and c[0] > 0.6]
+        if not cross:
+            continue
+        cross.sort(key=lambda c: (c[2][1].cls not in STREET_MAJOR, -c[0], c[1]))
+        face, (W, H) = blade_face(cross[0][1], MAST_CAP)
+        if W > MAST_SIGN_AT[1] - MAST_SIGN_AT[0]:
+            continue                # (too long a name for the arm's free span)
+        out = MAST_SIGN_AT[1] - W / 2                           # (as far out as the head lets: the level part)
+        mid = np.array([x, y]) + R * (MAST_ARM_AXIS * out)
+        zb = z + _arm_z(out - W / 2) - 0.04 - H                 # (its top under the arm's lowest point over it)
+        o = mid - trav * 0.18                                   # (in front of the arm: the heads' side, the drivers')
+        draw_face(mesh, face, (o[0], o[1], zb), _v3(R), -_v3(trav))
+        for u in (-W * 0.3, W * 0.3):                          # (its two hangers up to the arm)
+            h = mid + R * u - trav * 0.1
+            zt = z + _arm_z(out + MAST_ARM_AXIS * u) + 0.05
+            mesh.box((h[0], h[1], zb + H * 0.5), (h[0], h[1], zt), 0.015, 0.015, M_STEEL)
+        n += 1
+    return n
+
+
 def billboards(roads, box, frame, urban, ground, avoid, left_hand=False):
     """Prop rows (trees.lua) of billboards along motorways outside towns: West Coast USA's drag-strip billboard
     and one of its ads, BILLBOARD_EVERY_M or so apart, BILLBOARD_OFF_M beyond the right edge, facing the traffic,
@@ -1589,24 +1713,29 @@ def items_near(frame, box, margin=400.0, source=None):
 
 
 def tile(frame, roads, box, ground=None, urban=None, barriers=None, mph=True, left_hand=False, items=None,
-         names=None, avoid=()):
+         names=None, avoid=(), booms=()):
     """A road tile's highway signs: {"mesh": Mesh.result (render-only), "col": Boxes.result (posts and legs,
     collision only), "props": billboard rows}, positions relative to the tile's corner (box[0], box[1], 0). roads:
     roads.build_tile's (fid, spec, centreline (k, 3), lon); items: items_near's (None: looked up); names: {fid: the
     street's name} for the street name signs (where mph: the American blades), avoid: the props' (x, y) they keep
-    clear of."""
+    clear of; booms: the signals' prop rows (their mast arms' street name signs)."""
+    import routesigns
     x0, y0, x1, y1 = box
     origin = (x0, y0, 0.0)
     mesh, col = Mesh(), Boxes()
     if names and mph:
         try:
             street_signs(mesh, col, roads, box, names, ground, avoid, left_hand)
+            if booms:
+                mast_arm_signs(mesh, roads, box, names, booms, left_hand)
         except Exception:               # (the highway signs regardless)
             mesh, col = Mesh(), Boxes()
-    if not any(sp.cls in HIGHWAY_MAIN for _, sp, _, _ in roads):
-        return {"mesh": mesh.result(origin), "col": col.result(origin), "props": []}
     if items is None:
         items = items_near(frame, box) if frame is not None else []
+    if not any(sp.cls in HIGHWAY_MAIN for _, sp, _, _ in roads):
+        items = [(it, xy) for it, xy in items if it["k"] in routesigns.KINDS]
+        if not items:
+            return {"mesh": mesh.result(origin), "col": col.result(origin), "props": []}
     avoid = []
     for it, (x, y) in items:
         xy = np.array([x, y])
@@ -1617,6 +1746,10 @@ def tile(frame, roads, box, ground=None, urban=None, barriers=None, mph=True, le
         b = np.array([math.sin(math.radians(it["brg"])), math.cos(math.radians(it["brg"]))])
         k = it["k"]
         try:
+            if k in routesigns.KINDS:
+                if mph or k in ("pass", "city"):
+                    routesigns.build(mesh, col, roads, it, xy, ground, left_hand)
+                continue
             if k == "gore":
                 gore(mesh, col, roads, it, xy, ground, left_hand)
                 continue
