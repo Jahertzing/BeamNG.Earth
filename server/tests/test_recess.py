@@ -84,7 +84,7 @@ def normals(Q):
 
 
 class RecessTest(unittest.TestCase):
-    SWITCHES = {"RECESS": True, "RECESS_SHOP": False, "FINS": False}     # (the windows alone)
+    SWITCHES = {"RECESS": True, "RECESS_SHOP": False, "FINS": False, "HOUSE_VARIETY": False}     # (the windows alone)
 
     def setUp(self):
         self.was = {k: getattr(fk, k) for k in self.SWITCHES}
@@ -418,7 +418,7 @@ def on_plane(Q, ring, w):
 
 class ShopFinTest(RecessTest):
     """Shopfronts set back and curtain walls' fins (facadekit.shopfronts, fins)."""
-    SWITCHES = {"RECESS": False, "RECESS_SHOP": True, "FINS": True}
+    SWITCHES = {"RECESS": False, "RECESS_SHOP": True, "FINS": True, "HOUSE_VARIETY": False}
 
     # (the window tests are RecessTest's own)
     test_houses = test_sheet_buildings = test_whole_bay_shift = test_tall_sheet_capped = None
