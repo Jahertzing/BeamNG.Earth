@@ -494,6 +494,77 @@ def road_mask(frame, x0, y0, size, px, surface, widths=None):
     return out if out.any() else None
 
 
+# The ground tiles' grass (mesh near-visual mode; the user, 2026-10-28: "im looking miles ahead so like 200m is
+# NOTHING"): the 3D grass (the mod's GroundCover) only grows on the physics block, ~300 m at most. Past it the ground
+# itself has to read as grass: a mask of grassy land cover beside the tile's texture, far_<a>_<key>_grass.dds
+# (grass_mask_name), through which the mod's material lays a stock grass texture's grain, bumps and macro variation
+# over the photo (satmat.lua GRASS_LAYERS), on every tile up to GRASS_MASK_MAX_LEVEL. Soft-edged (the land cover is
+# 10 m squares, warped like the block's), roads and pads cut out, built-up land only where lawns() says.
+GRASS_MASK_PX = 128
+GRASS_MASK_MAX_LEVEL = 3        # 2 km tiles (64 cells: L-1 = 128 m): farther, the layers' grain is below a pixel
+# WorldCover class -> grass weight (0-1): grassland, moss and lichen full; shrubland, cropland and the floor between
+# trees partly; built-up at lawns
+GRASS_WEIGHT = {30: 1.0, 100: 0.8, 20: 0.7, 40: 0.6, 10: 0.4}
+GRASS_LAWN_WEIGHT = 0.8
+GRASS_BLUR_PX = 1               # box blur radius (texels) of the mask: no stair-stepped 10 m squares
+_GRASS_LUT = np.zeros(256, np.float32)
+for _c, _w in GRASS_WEIGHT.items():
+    _GRASS_LUT[_c] = _w
+
+
+def grass_mask_name(texture):
+    """The grass mask file beside a far tile's texture (far_<a>_<key>[_r<n>].dds -> far_<a>_<key>_grass.dds)."""
+    import re
+    return re.sub(r"(_r\d+)?\.dds$", "_grass.dds", texture)
+
+
+def _box_blur(a, r):
+    """a (h, w) float averaged over (2r + 1)² texels, the edges clamped. Pure."""
+    if r <= 0:
+        return a
+    p = np.pad(a, r, mode="edge")
+    c = np.cumsum(np.cumsum(p, 0), 1)
+    c = np.pad(c, ((1, 0), (1, 0)))
+    k = 2 * r + 1
+    h, w = a.shape
+    return (c[k:k + h, k:k + w] - c[:h, k:k + w] - c[k:k + h, :w] + c[:h, :w]) / (k * k)
+
+
+def grass_mask(frame, x0, y0, size, px, surface, widths=None):
+    """The grassy land cover (px x px uint8, 0-255, row 0 north) of a tile photo's square [x0, x0 + size]² (its gutter
+    included: the mask lines up with it on UV0), or None (no surface, nothing grassy, or a cell not cached yet: then
+    the tile goes without, rather than with a hole where the cell was missing)."""
+    if surface is None:
+        return None
+    t = (np.arange(px) + 0.5) * (size / px)
+    gx, gy = np.meshgrid(x0 + t, y0 + size - t)           # row 0 = north
+    la, lo, _ = frame.enu_to_geodetic(gx.ravel(), gy.ravel(), np.zeros(px * px))
+    la, lo = np.asarray(la, np.float64), np.asarray(lo, np.float64)
+    classes, complete = surface.classes(la, lo)
+    if not complete:
+        return None
+    w = _GRASS_LUT[classes]
+    urban = classes == roadsmod.URBAN_CLASS
+    if urban.any():
+        w[urban] = np.where(lawns(la[urban], lo[urban]), GRASS_LAWN_WEIGHT, 0.0)
+    w = _box_blur(w.reshape(px, px), GRASS_BLUR_PX)
+    if not (w > 0.02).any():
+        return None
+    out = np.clip(w * 255.0 + 0.5, 0, 255).astype(np.uint8)
+    # no grass grain on the roads and forecourts the photo has painted in (any surface: dirt tracks too)
+    feats = _square_roads(frame, x0, y0, size, surface)
+    got = _road_segments(frame, x0, y0, size, px, px, feats, surface.urban, widths) if feats else None
+    roads = None
+    if got is not None and fast.AVAILABLE:
+        colors = np.array([(255.0, 255.0, 255.0, 1.0)] * len(PHOTO_ROAD_RGBA), np.float32)
+        roads = fast._ef.paint_lines(np.zeros((px, px, 3), np.uint8), *got, colors)[..., 0]
+    pads = pads_mask(frame, x0, y0, size, px, _square_pads(frame, x0, y0, size, surface))
+    for cut in (roads, pads):
+        if cut is not None:
+            out = (out.astype(np.uint16) * (255 - cut.astype(np.uint16)) // 255).astype(np.uint8)
+    return out if out.any() else None
+
+
 # A road without sidewalks gets a verge of VERGE_M a side painted bare where the ground would carry grass or shrubs:
 # the ground cover goes by the 2 m layer samples, and tufts stood on the asphalt along its edges in many places (the
 # user, 2026-10-20: "grass on the road")

@@ -50,7 +50,9 @@ M.SCHEMA = {
   groundCover = { kind = 'bool', default = true, label = 'Grass and shrubs' },
   groundCoverDensity = { kind = 'enum', default = 'normal', values = { 'low', 'normal', 'high' }, label = 'Grass density' },
   -- how far out the grass reaches (groundcover.REACH; 'near' was the only distance before 2026-10-28)
-  groundCoverDistance = { kind = 'enum', default = 'normal', values = { 'near', 'normal', 'far' }, label = 'Grass distance' },
+  groundCoverDistance = { kind = 'enum', default = 'normal', values = { 'near', 'normal', 'far', 'max' }, label = 'Grass distance' },
+  -- the grass grain in the ground tiles past the 3D grass (satmat.lua GRASS_LAYER; the server's grass masks)
+  groundGrass = { kind = 'bool', default = true, label = 'Grass in the distant ground' },
   -- roads near the player (roads.lua; the server's --roads on)
   roads = { kind = 'bool', default = true, label = 'Roads' },
   -- the Denver region's DRCOG planimetrics (server drcog.py): launcher.py reads this file and starts the server with
@@ -79,7 +81,7 @@ M.SCHEMA = {
   updateDismissed = { kind = 'string', default = '', maxLen = 40, label = 'Update notice dismissed (version)' },
 }
 M.ORDER = { 'rebaseDistance', 'viewDistanceMode', 'viewDistanceKm', 'hazeStrength', 'skyMode', 'clouds',
-  'weatherMode', 'realGravity', 'groundCover', 'groundCoverDensity', 'groundCoverDistance', 'roads', 'drcog', 'hudVisible',
+  'weatherMode', 'realGravity', 'groundCover', 'groundCoverDensity', 'groundCoverDistance', 'groundGrass', 'roads', 'drcog', 'hudVisible',
   'statusBar',
   'placeNamesOnline', 'creditsVisible', 'beammpOnLaunch',
   'creditsCorner', 'creditsSize', 'cacheCapGb', 'devOutlineKm', 'devMapKm' }
@@ -256,6 +258,7 @@ M.APPLY = {
   groundCover = function(v) require('beamngEarth/groundcover').setEnabled(v) end,
   groundCoverDensity = function(v) require('beamngEarth/groundcover').setDensity(v) end,
   groundCoverDistance = function(v) require('beamngEarth/groundcover').setReach(v) end,
+  groundGrass = function(v) require('beamngEarth/satmat').GRASS_LAYER = v and true or false end,
   roads = function(v)
     local core = ext('beamngEarth_core')
     if core and core.setRoadsEnabled then core.setRoadsEnabled(v) else require('beamngEarth/roads').setEnabled(v) end

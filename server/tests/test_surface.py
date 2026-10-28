@@ -532,5 +532,57 @@ class FuelPadTest(unittest.TestCase):
         self.assertEqual(int(m[10, 10]), 0)
 
 
+class GrassMaskTest(unittest.TestCase):
+    """The ground tiles' grass layer (the user, 2026-10-28: grass that reads out to miles): surface.grass_mask."""
+
+    class Fake:
+        """A Surface with grassland west of the frame's origin, bare ground east, and `feats` as its roads."""
+
+        def __init__(self, frame, feats=(), complete=True, cls=30):
+            self.frame, self.feats, self.complete, self.cls = frame, list(feats), complete, cls
+            self.gas_pads = False
+
+        def classes(self, lat, lon):
+            e, _, _ = self.frame.geodetic_to_enu(np.asarray(lat), np.asarray(lon), np.zeros(np.shape(lat)))
+            return np.where(np.asarray(e) < 0, self.cls, 60).astype(np.uint8), self.complete
+
+        def roads(self, lat, lon):
+            return self.feats, True
+
+        def urban(self, lat, lon):
+            return self.classes(lat, lon)[0] == 50
+
+    def test_name_beside_the_texture(self):
+        self.assertEqual(sf.grass_mask_name("far_3_1_2_0_r4.dds"), "far_3_1_2_0_grass.dds")
+        self.assertEqual(sf.grass_mask_name("far_3_1_2_0.dds"), "far_3_1_2_0_grass.dds")
+
+    def test_grassland_only(self):
+        import geodesy
+        frame = geodesy.EnuFrame(40.0, -105.0)
+        m = sf.grass_mask(frame, -64.0, -64.0, 128.0, 64, self.Fake(frame))
+        self.assertEqual(m.shape, (64, 64))
+        self.assertEqual(int(m[32, 5]), 255, "grassland west: full")
+        self.assertEqual(int(m[32, 58]), 0, "bare ground east: none")
+        self.assertTrue(0 < int(m[32, 32]) < 255 or 0 < int(m[32, 31]) < 255, "a soft edge")
+        shrub = sf.grass_mask(frame, -64.0, -64.0, 128.0, 64, self.Fake(frame, cls=20))
+        self.assertAlmostEqual(int(shrub[32, 5]) / 255, sf.GRASS_WEIGHT[20], delta=0.01)
+
+    def test_none_when_incomplete_or_bare(self):
+        import geodesy
+        frame = geodesy.EnuFrame(40.0, -105.0)
+        self.assertIsNone(sf.grass_mask(frame, -64.0, -64.0, 128.0, 64, self.Fake(frame, complete=False)))
+        self.assertIsNone(sf.grass_mask(frame, 100.0, -64.0, 128.0, 64, self.Fake(frame)))     # all east of 0
+        self.assertIsNone(sf.grass_mask(frame, -64.0, -64.0, 128.0, 64, None))
+
+    def test_roads_cut_out(self):
+        import geodesy
+        import test_roads
+        frame = geodesy.EnuFrame(test_roads.LAT, test_roads.LON)
+        f = test_roads.features([[(-60, 0), (-4, 0)]], ["residential"])
+        m = sf.grass_mask(frame, -64.0, -64.0, 128.0, 128, self.Fake(frame, [f]))
+        self.assertLess(int(m[64, 30]), 40, "no grass grain on the road")
+        self.assertEqual(int(m[20, 30]), 255, "grass beside it")
+
+
 if __name__ == "__main__":
     unittest.main()

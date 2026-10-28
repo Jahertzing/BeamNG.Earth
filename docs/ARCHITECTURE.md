@@ -956,6 +956,17 @@ three days of testing: dem 741 MB / 7.5k files, imagery 1.4 GB / 35k, deshadow 7
   The earlier cuts (GPU placement with a one-frame sunk-block refresh) blanked the grass for 2-4
   frames and regrew it over ~10 frames per move. CPU placement's normal-driving cost is tracked by
   the benchmark.
+- Grass past the 3D grass (2026-10-28; the user: "im looking miles ahead so like 200m is NOTHING"). GroundCover
+  only places on the physics block (its layer map; the 512² block reaches ~250 m ahead at worst), so the settings
+  page's "Max" grass distance stops at 300 m. Beyond, the ground tiles carry it: the server writes a grass mask
+  beside each textured tile up to L3 (`surface.grass_mask`: WorldCover grassland / moss full, shrubland, cropland
+  and the floor between trees partly, built-up land at lawns(), roads and pads cut out, 128 px, soft-edged;
+  `far_<a>_<key>_grass.dds`, shared by the texture's revisions), and `satmat.lua` gives the material a layer of
+  the same photo with our procedural grass detail and detail normal maps on UV1 (`tools/make_grass_textures.py`:
+  one 32 m repeat holding tufts, clumps and patches, so each mip level carries the scale that fits its distance),
+  shown through the mask, under the asphalt layer. Mean 0.5 grey: the photo's colour stays. A tile built before
+  its land cover was cached goes without (no mask rather than a hole). The settings page's "Grass in the distant
+  ground" turns it off for the tiles loaded after.
 - Optional preload library `tools/gcpatch` (Linux, 0.39.4 only, README there): at game start it
   changes the handler's `and esi, 0x0E` to `and esi, 0` in memory (after checking its first 54
   bytes), so block imports and moves free no grass at all. BeamNG's Lua FFI refuses C function
