@@ -1331,7 +1331,7 @@ def lane_centres(m):
     return [hw - sh_r - 1.8 - 3.6 * i for i in range(n)]
 
 
-def overhead(mesh, col, m, panels, ground=None, left_hand=False):
+def overhead(mesh, col, m, panels, ground=None, left_hand=False, clear=None):
     """Panels on a gantry over the carriageway m (match()): [(face, (W, H), u)] u: the panel's middle, m to the right
     of the centreline. A leg beyond the right edge (POST_OFF_M) and one in the median where it is wide enough
     (MEDIAN_LEG_GAP_M), else a cantilever from the right. Returns the structure's xy."""
@@ -1355,6 +1355,15 @@ def overhead(mesh, col, m, panels, ground=None, left_hand=False):
         u_l = -m["hw"] - POST_OFF_M
     if median_leg and u_l > u_left - 0.3:
         u_l, median_leg = u_left - 0.4, False
+    if clear is not None:               # (the legs off every road: further out, else no median leg / no gantry)
+        for extra in CLEAR_SHIFT_M:
+            if clear.free(pt[:2] + R * (u_r + extra), 0.9):
+                u_r += extra
+                break
+        else:
+            return None
+        if median_leg and not clear.free(pt[:2] + R * u_l, 0.3):
+            u_l, median_leg = u_left - 0.4, False
     c = np.array([pt[0], pt[1], tz])
     a3, b3 = c + _v3(R) * u_l, c + _v3(R) * u_r
     truss(mesh, a3, b3, along=_v3(t))
@@ -1397,18 +1406,64 @@ def _guide_panels(it, m, overhead_ok):
     return out
 
 
+CLEAR_M = 0.6                   # m a sign, its posts or a gantry leg stand clear of every carriageway's edge
+CLEAR_SHIFT_M = (0.0, 1.0, 2.0, 3.5, 5.0)   # ... moved this much further out to find a clear spot (else none)
+ELEVATED_M = 3.0                # a road this far over the ground beside it: on a bridge (no sign down there)
+FOOT_CLASSES = {"footway", "path", "cycleway", "pedestrian", "steps", "bridleway", "corridor"}
+
+
+class Clear:
+    """The tile's carriageways (every road but the footpaths, bridges and roads under them alike): is a spot clear
+    of all of them? (Signs stood in I-25's lanes and in the streets: the user, 2026-10-28.)"""
+
+    def __init__(self, roads):
+        A, B, H = [], [], []
+        for _, sp, line, _ in roads:
+            if len(line) < 2 or sp.cls in FOOT_CLASSES:
+                continue
+            ln = np.asarray(line, float)[:, :2]
+            A.append(ln[:-1])
+            B.append(ln[1:])
+            H.append(np.full(len(ln) - 1, sp.width / 2))
+        self.A = np.concatenate(A) if A else np.zeros((0, 2))
+        self.B = np.concatenate(B) if B else np.zeros((0, 2))
+        self.H = np.concatenate(H) if H else np.zeros(0)
+
+    def free(self, pts, margin=CLEAR_M):
+        """Are all pts ((k, 2) or (2,)) at least margin beyond every carriageway's edge?"""
+        if not len(self.H):
+            return True
+        q = np.asarray(pts, float).reshape(-1, 2)
+        d = self.B - self.A
+        L2 = np.maximum((d * d).sum(1), 1e-12)
+        for p in q:
+            t = np.clip(((p - self.A) * d).sum(1) / L2, 0.0, 1.0)
+            near = self.A + t[:, None] * d
+            if (np.hypot(*(near - p).T) - self.H < margin).any():
+                return False
+        return True
+
+
 def _side_sign(mesh, col, m, face, size, ground, left_hand=False, off=POST_OFF_M, bottom=POST_SIGN_BOTTOM_M,
-               collide=True):
-    """A ground-mounted face beside the carriageway's right edge (its near edge off m out), facing the traffic."""
+               collide=True, clear=None):
+    """A ground-mounted face beside the carriageway's right edge (its near edge off m out), facing the traffic; moved
+    further out until it and its posts are clear of every road (clear: Clear), not at all on a bridge. Its base, or
+    None (nowhere clear)."""
     R = _right(m["t"], left_hand)
-    base = m["pt"][:2] + R * (m["hw"] + off + size[0] / 2)
-    gz = _gz(ground, base[0], base[1], m["pt"][2])
-    ground_mount(mesh, col if collide else Boxes(), face, size, (base[0], base[1], gz), _v3(R), -_v3(m["t"]), gz,
-                 bottom)
-    return base
+    W = size[0]
+    for extra in CLEAR_SHIFT_M if clear is not None else (0.0,):
+        base = m["pt"][:2] + R * (m["hw"] + off + extra + W / 2)
+        gz = _gz(ground, base[0], base[1], m["pt"][2])
+        if float(m["pt"][2]) - gz > ELEVATED_M:
+            return None                 # (on a bridge or high over the ground: it would stand down there)
+        if clear is None or clear.free([base + R * (u * W / 2) for u in (-1.0, -0.5, 0.0, 0.5, 1.0)]):
+            ground_mount(mesh, col if collide else Boxes(), face, size, (base[0], base[1], gz), _v3(R),
+                         -_v3(m["t"]), gz, bottom)
+            return base
+    return None
 
 
-def gore(mesh, col, roads, it, xy, ground, left_hand=False):
+def gore(mesh, col, roads, it, xy, ground, left_hand=False, clear=None):
     """The painted chevrons between a ramp and its carriageway where they part, and the EXIT sign in the gore."""
     bl = np.array([math.sin(math.radians(it["brg"])), math.cos(math.radians(it["brg"]))])
     bm = np.array([math.sin(math.radians(it["mbrg"])), math.cos(math.radians(it["mbrg"]))])
@@ -1472,7 +1527,9 @@ def gore(mesh, col, roads, it, xy, ground, left_hand=False):
         face, size = gore_face(it.get("ref"))
         gz = _gz(ground, mid[0], mid[1], (q[2] + pm[2]) / 2)
         R = _right(tv, left_hand)
-        ground_mount(mesh, col, face, size, (mid[0], mid[1], gz), _v3(R), -_v3(tv), gz, 1.5)
+        ok = clear is None or clear.free([mid + R * u for u in (-size[0] / 2, 0.0, size[0] / 2)], 0.3)
+        if ok and (q[2] + pm[2]) / 2 - gz <= ELEVATED_M:
+            ground_mount(mesh, col, face, size, (mid[0], mid[1], gz), _v3(R), -_v3(tv), gz, 1.5)
     return xy
 
 
@@ -1810,6 +1867,7 @@ def tile(frame, roads, box, ground=None, urban=None, barriers=None, mph=True, le
         if not items:
             return {"mesh": mesh.result(origin), "col": col.result(origin), "props": []}
     avoid = []
+    clear = Clear(roads)
     for it, (x, y) in items:
         xy = np.array([x, y])
         if it["k"] in ("exit_dir", "adv_1", "adv_half", "gore"):
@@ -1821,10 +1879,10 @@ def tile(frame, roads, box, ground=None, urban=None, barriers=None, mph=True, le
         try:
             if k in routesigns.KINDS:
                 if mph or k in ("pass", "city"):
-                    routesigns.build(mesh, col, roads, it, xy, ground, left_hand)
+                    routesigns.build(mesh, col, roads, it, xy, ground, left_hand, clear=clear)
                 continue
             if k == "gore":
-                gore(mesh, col, roads, it, xy, ground, left_hand)
+                gore(mesh, col, roads, it, xy, ground, left_hand, clear)
                 continue
             m = match(roads, xy, b)
             if m is None:
@@ -1833,19 +1891,20 @@ def tile(frame, roads, box, ground=None, urban=None, barriers=None, mph=True, le
                 up = not it.get("svc") and (k == "exit_dir" or m["spec"].urban or m["lanes"] >= 3)
                 panels = _guide_panels(it, m, up)
                 if up:
-                    overhead(mesh, col, m, panels, ground, left_hand)
+                    overhead(mesh, col, m, panels, ground, left_hand, clear)
                 else:
                     face, size, _ = panels[0]
-                    _side_sign(mesh, col, m, face, size, ground, left_hand)
+                    _side_sign(mesh, col, m, face, size, ground, left_hand, clear=clear)
             elif k == "reassure":
                 face, size = reassurance_face([tuple(s) for s in it.get("sh", ())])
-                _side_sign(mesh, col, m, face, size, ground, left_hand)
+                _side_sign(mesh, col, m, face, size, ground, left_hand, clear=clear)
             elif k == "speed" and mph:
                 face, size = speed_face(it["mph"])
-                _side_sign(mesh, col, m, face, size, ground, left_hand)
+                _side_sign(mesh, col, m, face, size, ground, left_hand, clear=clear)
             elif k == "mile":
                 face, size = mile_face(it["n"])
-                _side_sign(mesh, col, m, face, size, ground, left_hand, off=1.8, bottom=1.2, collide=False)
+                _side_sign(mesh, col, m, face, size, ground, left_hand, off=1.8, bottom=1.2, collide=False,
+                           clear=clear)
         except Exception:               # (one odd item: the rest of the tile's signs)
             continue
     delineators(mesh, roads, box, barriers, left_hand)
