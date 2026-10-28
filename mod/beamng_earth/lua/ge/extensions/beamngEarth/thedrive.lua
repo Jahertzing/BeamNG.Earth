@@ -1,10 +1,11 @@
 -- The Drive (the user, 2026-10-28: "a great drive from Frederick to downtown Denver, into Castle Rock", then "id also
 -- like to add going straight down i-25 to castle rock too, not just through downtown"). One key, Stream Deck button or
 -- settings-page button puts the car in Frederick, sets the GPS to Castle Rock (through Denver Union Station, or
--- straight down I-25 keeping off the toll roads, else the router goes round Denver on E-470), sets the time of day
--- (golden hour by default: it starts before sunset and gets dark on the way) and times the run. The clock starts when
--- the car first moves, shows on the status bar, takes a split at each waypoint and keeps the best times per route in
--- FILE. The car can drive itself the whole way (the GPS autodrive, gps.lua).
+-- straight down I-25, keeping off the toll roads where the router can; routing.openstreetmap.de can't, but its
+-- plain route stays on I-25), sets the time of day (golden hour by default: it starts before sunset and gets dark
+-- on the way) and times the run. The clock starts when the car first moves, shows on the status bar, takes a split
+-- at each waypoint and keeps the best times per route in FILE. The car can drive itself the whole way (the GPS
+-- autodrive, gps.lua).
 --
 -- Phases: nil (none) -> 'teleport' (the world loading at the start) -> 'ready' (the GPS set, waiting for the car to
 -- move) -> 'driving' -> 'done' (the result on the bar for DONE_S). The GPS cleared or sent elsewhere ends it.
@@ -15,10 +16,10 @@ local gps = require('beamngEarth/gps')
 local places = require('beamngEarth/places')
 local sky = require('beamngEarth/sky')
 
--- Old Town Frederick (Town Hall, Oak and 4th): the start
-M.START = { lat = 40.09950, lon = -104.93730, name = 'Frederick' }
--- downtown Castle Rock (Wilcox Street at 3rd): the finish
-M.DEST = { lat = 39.37210, lon = -104.85980, name = 'Castle Rock' }
+-- Old Town Frederick (4th Street): the start
+M.START = { lat = 40.09953, lon = -104.93700, name = 'Frederick' }
+-- downtown Castle Rock (Wilcox Street just south of 3rd): the finish
+M.DEST = { lat = 39.37180, lon = -104.86002, name = 'Castle Rock' }
 M.ROUTES = {
   downtown = { label = 'through downtown Denver', short = 'Downtown',
     vias = { { lat = 39.75292, lon = -104.99975, name = 'Union Station' } } },   -- Wynkoop Street at the station

@@ -7,7 +7,7 @@ What changed in each release of BeamNG.Earth, newest first.
 ### New
 - **The Drive**: one key, Stream Deck button or settings-page button for a timed drive from Old Town Frederick to
   downtown Castle Rock, either through downtown Denver past Union Station (Ctrl+Alt+D) or straight down I-25
-  (Ctrl+Alt+I; the GPS keeps off the toll roads so it doesn't go round on E-470). It puts the car in Frederick, sets
+  (Ctrl+Alt+I; no E-470 or other toll roads). It puts the car in Frederick, sets
   the GPS and the time of day (golden hour by default: 45 minutes before today's real sunset, so it gets dark on the
   way; or midday, night, or as it is), and starts the clock when the car first moves. The status bar shows the clock,
   you get a split at Union Station, and the best times per route are kept. Optional autodrive (the setting, or

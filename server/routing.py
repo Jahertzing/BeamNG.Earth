@@ -21,7 +21,8 @@ ATTRIBUTION = "Routing: OSRM (FOSSGIS), data (c) OpenStreetMap contributors (ODb
 BEARING_RANGE = 60          # degrees either side of the car's heading the start may take
 MAX_VIA = 8                 # waypoints a route may pass through on the way (The Drive: Union Station)
 # road classes a route may leave out (OSRM's car profile: exclude=toll|motorway|ferry); The Drive's "straight down
-# I-25" leaves out the toll roads, else Frederick to Castle Rock goes round Denver on E-470
+# I-25" asks to leave out the toll roads (routing.openstreetmap.de answers 400 InvalidValue to any exclude, so plan
+# routes without it; its plain Frederick to Castle Rock route stays on I-25, tools/thedrive_check.py)
 EXCLUDE = ("toll", "motorway", "ferry")
 
 
