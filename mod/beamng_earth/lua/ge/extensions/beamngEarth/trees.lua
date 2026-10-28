@@ -221,10 +221,15 @@ M.GROUP_MAX_M.bussign, M.GROUP_MAX_M.busshelter = 400, 400
 -- from the game's own content into cars/, its cars.json listing them). A group per model ('car_' .. model), shown at
 -- scale 1 whatever the row's height (M.FIXED_SCALE: a model's colours share its size). No cars.json: no groups (the
 -- server's rows are dropped as an unknown group's).
+-- Cheap (2026-10-28, a 20 km ghost drive on I-25 with them on: 70 instead of 88 fps, the engine's tick over 100 ms 43
+-- times instead of 8): they never collide (a solid item's tile re-made at SOLID_M and the collision rebuilt each time,
+-- dozens of cars a tile), show out to CAR_MAX_M only, and every model's shapes are loaded at the level's start
+-- (M.preloadCars: an 80k-triangle .dae's first load and its textures cost the next frame's tick hundreds of ms, one
+-- such hitch per shape as the drive met each model and paint).
 M.CARS_DIR = BNE .. 'cars/'
 M.STATIC_CARS = {}
 M.FIXED_SCALE = {}
-M.CAR_MAX_M = 300
+M.CAR_MAX_M = 160
 function M.installCars(cars)
   if type(cars) ~= 'table' then return 0 end
   local n = 0
@@ -240,6 +245,7 @@ function M.installCars(cars)
         M.CATALOG[g] = list
         M.FIXED_SCALE[g] = true
         M.GROUP_MAX_M[g] = M.CAR_MAX_M
+        M.NO_COLLIDE[g] = true
       end
     end
   end
@@ -356,12 +362,29 @@ local function releaseForest(t)
   t.forestId = nil
 end
 
+local itemType
+-- Every static car shape's item type made now (their shapes loaded): at the level's start, not one hitch per shape as
+-- the drive meets them. Returns how many.
+function M.preloadCars()
+  local n = 0
+  for _, g in ipairs(M.STATIC_CARS) do
+    if not M.groupOff[g] then
+      for _, v in ipairs(M.CATALOG[g] or {}) do
+        if itemType(v[1], false) then n = n + 1 end
+      end
+    end
+  end
+  return n
+end
+
 local function setup()
   if ready then return true end
   for _, m in ipairs(MATERIALS) do
     local p = m .. '/main.materials.json'
     if not FS or FS:fileExists(p) then pcall(loadJsonMaterialsFile, p) end
   end
+  local ok, n = pcall(M.preloadCars)
+  if ok and n > 0 then log('I', 'beamngEarth.trees', 'static cars: ' .. n .. ' shapes loaded') end
   ready = true
   return true
 end
@@ -374,7 +397,7 @@ function M.typeName(shape, solid)
   return 'bngEarthTree_' .. shape:gsub('[^%w]', '_') .. (solid and '' or '_n')
 end
 
-local function itemType(shape, solid)
+function itemType(shape, solid)
   local key = solid and shape or (shape .. '#n')
   local d = types[key]
   if d then return d end
