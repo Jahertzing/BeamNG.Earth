@@ -67,22 +67,11 @@
    ]
   },
   {
-   "id": "sg_speer_colfax",
-   "name": "Speer Blvd at Colfax / 14th, southbound approach",
-   "lat": 39.74043,
-   "lon": -104.99512,
-   "heading": 160,
-   "group": "look",
-   "tags": [
-    "colorado"
-   ]
-  },
-  {
-   "id": "sg_i25_gantry",
-   "name": "I-25 southbound north of the Broadway exit: guide sign gantry",
-   "lat": 39.709,
-   "lon": -104.9905,
-   "heading": 180,
+   "id": "sg_i25_212b",
+   "name": "I-25 southbound at exit 212B Speer Blvd: the exit direction gantry",
+   "lat": 39.75847,
+   "lon": -105.0086,
+   "heading": 226,
    "group": "look",
    "tags": [
     "colorado"
@@ -101,6 +90,60 @@
      "pitch": 1,
      "fov": 60,
      "back": 250
+    }
+   ]
+  },
+  {
+   "id": "sg_i25_211",
+   "name": "I-25 northbound at exit 211 23rd Ave: the exit direction gantry",
+   "lat": 39.7488,
+   "lon": -105.01764,
+   "heading": 18,
+   "group": "look",
+   "tags": [
+    "colorado"
+   ],
+   "views": [
+    {
+     "name": "d120",
+     "agl": 1.2,
+     "pitch": 2,
+     "fov": 60,
+     "back": 120
+    },
+    {
+     "name": "d250",
+     "agl": 1.2,
+     "pitch": 1,
+     "fov": 60,
+     "back": 250
+    }
+   ]
+  },
+  {
+   "id": "sg_frederick_limit",
+   "name": "CO 52 westbound entering Frederick: the town limit sign",
+   "lat": 40.08792,
+   "lon": -104.94231,
+   "heading": 271,
+   "group": "look",
+   "tags": [
+    "colorado"
+   ],
+   "views": [
+    {
+     "name": "d30",
+     "agl": 1.2,
+     "pitch": 0,
+     "fov": 60,
+     "back": 30
+    },
+    {
+     "name": "d70",
+     "agl": 1.2,
+     "pitch": 0,
+     "fov": 60,
+     "back": 70
     }
    ]
   }
