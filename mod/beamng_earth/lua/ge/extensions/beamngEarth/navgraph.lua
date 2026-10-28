@@ -85,6 +85,7 @@ M.WATCH_S = 90
 local watch = nil       -- { until os.clock(), seenOn, done } while the traffic is watched
 local lastGuard = -math.huge
 local cuts = {}         -- { x, y } of the applied graph's nodes that lost a road to the clip
+local cutNames = {}     -- their names
 -- The merge assist (mergeassist.lua: ramp cars find a gap in the motorway's traffic), every MERGE_S on the applied graph
 M.MERGE = true
 M.MERGE_S = 0.5           -- (it runs with the guard, every GUARD_S at most)
@@ -151,7 +152,7 @@ function M.toNodes(g, b, edgeM, leftHand, yieldEvery)
       local k = pair[1]
       if keep[k] and not keep[pair[2]] and g.nodes[pair[2]] and not cut[k] then
         cut[k] = true
-        cutList[#cutList + 1] = { keep[k][1], keep[k][2] }
+        cutList[#cutList + 1] = { keep[k][1], keep[k][2], name = k }
       end
     end
     if keep[a] and keep[bb] and a ~= bb and not M.tooSteep(keep[a], keep[bb]) then
@@ -169,7 +170,67 @@ function M.toNodes(g, b, edgeM, leftHand, yieldEvery)
   return nodes, nn, ne, cutList
 end
 
+-- Pure: does the road ahead of a car at (px, py) moving along unit (dx, dy) on the edge a - b of node table nodes run
+-- into a cut (cutSet: name -> true) within reach m: following the straightest way on at each node (the one-way edges
+-- only their way), a node with no way on that is a cut, i.e. a dead end the clip made? nil when the edge is not in nodes.
+-- The cone test (headingToCut) respawned cars for any cut node ahead within 45 degrees: a side street cut at the block's
+-- edge beside the motorway, or a motorway junction whose cross street was cut while the motorway went on. On I-25 that
+-- was one respawn every ~2 s (bench4, 2026-10-28: 163 in 4 min), each car popping out and in again ahead.
+function M.cutAhead(nodes, cutSet, a, b, px, py, dx, dy, reach)
+  local na, nb = nodes[a], nodes[b]
+  local e = na and nb and na.links[b]
+  if not e then return nil end
+  local from, to
+  if e.oneWay then
+    from, to = e.inNode, e.outNode
+  else
+    local ahead = (nb.pos.x - na.pos.x) * dx + (nb.pos.y - na.pos.y) * dy >= 0
+    from, to = ahead and a or b, ahead and b or a
+  end
+  local d = math.sqrt((nodes[to].pos.x - px) ^ 2 + (nodes[to].pos.y - py) ^ 2)
+  for _ = 1, 128 do
+    if d > reach then return false end
+    local f, t = nodes[from].pos, nodes[to].pos
+    local ux, uy = t.x - f.x, t.y - f.y
+    local ul = math.sqrt(ux * ux + uy * uy)
+    if ul > 1e-6 then ux, uy = ux / ul, uy / ul end
+    local best, bestDot = nil, -math.huge
+    for o, eo in pairs(nodes[to].links) do
+      if o ~= from and (not eo.oneWay or eo.inNode == to) then
+        local q = nodes[o].pos
+        local vx, vy = q.x - t.x, q.y - t.y
+        local vl = math.sqrt(vx * vx + vy * vy)
+        local dot = vl > 1e-6 and (vx * ux + vy * uy) / vl or -1
+        if dot > bestDot then best, bestDot = o, dot end
+      end
+    end
+    if not best then return cutSet[to] == true end
+    d = d + math.sqrt((nodes[best].pos.x - t.x) ^ 2 + (nodes[best].pos.y - t.y) ^ 2)
+    from, to = to, best
+  end
+  return false
+end
+
+-- Pure: node table nodes (toNodes') as { name = { pos, radius, links } } sharing its links tables: map.reset swaps
+-- each node's links for a single-sided one, these stay as they were.
+function M.adjacency(nodes)
+  local out = {}
+  for name, n in pairs(nodes) do out[name] = { pos = n.pos, radius = n.radius, links = n.links } end
+  return out
+end
+
+-- The graph applied last, both ways round (adjacency), or nil.
+function M.graphNodes() return lastNodes end
+
+-- Pure: the names of the cuts in list (toNodes' cutList) as a set.
+function M.cutSet(list)
+  local set = {}
+  for _, c in ipairs(list) do if c.name then set[c.name] = true end end
+  return set
+end
+
 -- Pure: is a car at (px, py) moving along unit (dx, dy) heading for one of the cuts within reach m (45 degrees)?
+-- (the fallback where the car is not on the graph)
 function M.headingToCut(px, py, dx, dy, list, reach)
   for _, c in ipairs(list) do
     local vx, vy = c[1] - px, c[2] - py
@@ -320,6 +381,9 @@ local function apply(b, pre)
   local keep = okG and gps.beforeGraph and gps.beforeGraph(mOld and mOld.nodes) or nil
   stats.gpsMs = (os.clock() - tG) * 1000
   local t0 = os.clock()
+  -- both ways round, for the guard's and the merge assist's walks: map.reset makes the links single-sided (map.lua
+  -- convertToSingleSided gives each node a new links table with only the edges coming into it), so keep the tables
+  lastNodes = M.adjacency(nodes)
   ours = true
   local ok, err = pcall(map.reset, nodes)
   ours = false
@@ -348,7 +412,7 @@ local function apply(b, pre)
   if mr and mr.reset then pcall(mr.reset) end
   pendingSignals = ts and nodes or nil     -- next frame: a second, smaller hitch instead of one big one
   cuts = cl
-  lastNodes = nodes
+  cutNames = M.cutSet(cl)
   stats.applies, stats.lastMs, stats.nodes, stats.edges = stats.applies + 1, (os.clock() - t0) * 1000, nn, ne
   stats.applyMs = (os.clock() - tN) * 1000
   stats.cuts = #cl
@@ -505,12 +569,17 @@ end
 -- same links between them, is still good: the car's ai.lua is told the map did not change (its mapData upvalue set to
 -- the new map, read with the debug library as ai.lua's own inspect_upvalues does) and keeps it. Anything else (a
 -- rebase moves every node, a clip cut the route) drops it as before. The car reports kept / dropped (routeKept).
+-- Only the route from the car's plan on counts (the stock route keeps up to ten nodes behind the car, which the block's
+-- move had clipped away: on 420983b7 every route was dropped, bench4), and it is checked against the map the route was
+-- made on (ai.lua's own, which may be older than the map just replaced: a car respawned since the last map has none).
+-- Heights may differ a little (the ground under a node is sampled again as the terrain streams in): KEEP_DZ_M.
 M.KEEP_ROUTE = true
-M.KEEP_TOL_M = 0.25
+M.KEEP_TOL_M = 0.5
+M.KEEP_DZ_M = 3
 
 function M.keepRouteLua()
   return string.format([[do
-local tol2 = %.4f
+local tol2, dz = %.4f, %.2f
 local function upvalues(f)
   local im, ir
   for i = 1, 255 do
@@ -520,44 +589,56 @@ local function upvalues(f)
   end
   return im, ir
 end
-local function keepable(path, old, new)
-  if not (path and path[1] and old and new and old.positions and new.positions and new.graph) then return false end
-  for i = 1, #path do
+local function keepable(route, old, new)
+  local path = route.path
+  if not (path and path[1] and old and new and old.positions and new.positions and new.graph) then return 'nopath' end
+  local plan = route.plan
+  local k0 = math.max(1, (plan and plan[1] and plan[1].pathidx or 1) - 1)
+  if not path[k0] then return 'nopath' end
+  for i = k0, #path do
     local a = path[i]
     local g, p, q = new.graph[a], new.positions[a], old.positions[a]
-    if not (g and p and q) or (p.x - q.x) ^ 2 + (p.y - q.y) ^ 2 + (p.z - q.z) ^ 2 > tol2 then return false end
+    if not (g and p and q) then return 'missing' end
+    if (p.x - q.x) ^ 2 + (p.y - q.y) ^ 2 > tol2 or math.abs(p.z - q.z) > dz then return 'moved' end
     local b = path[i + 1]
-    if b and not g[b] then return false end
+    if b and not g[b] then return new.graph[b] and 'link' or 'missing' end
   end
-  return true
+  return 'kept'
 end
-mapmgr._bneKeepRoute = function(old)
+mapmgr._bneKeepRoute = function()
   if not (ai and ai.mode == 'traffic' and type(ai.updateGFX) == 'function') then return end
   local f = ai.updateGFX
   local im, ir = upvalues(f)
   if not (im and ir) then return end
   local _, aiMap = debug.getupvalue(f, im)
   local _, route = debug.getupvalue(f, ir)
-  if not route or aiMap ~= old or old == mapmgr.mapData then return end
-  local kept = keepable(route.path, old, mapmgr.mapData)
-  if kept then debug.setupvalue(f, im, mapmgr.mapData) end
-  obj:queueGameEngineLua(string.format('local n = package.loaded["beamngEarth/navgraph"] if n and n.routeKept then n.routeKept(%%d, %%s) end', objectId, tostring(kept)))
+  if not route or not aiMap or aiMap == mapmgr.mapData then return end
+  local why = keepable(route, aiMap, mapmgr.mapData)
+  if why == 'kept' then debug.setupvalue(f, im, mapmgr.mapData) end
+  obj:queueGameEngineLua(string.format('local n = package.loaded["beamngEarth/navgraph"] if n and n.routeKept then n.routeKept(%%d, %%q) end', objectId, why))
 end
 if not mapmgr._bneKeepSetMap then
   mapmgr._bneKeepSetMap = mapmgr.setMap
   mapmgr.setMap = function(...)
-    local old = mapmgr.mapData
     local r = mapmgr._bneKeepSetMap(...)
-    pcall(mapmgr._bneKeepRoute, old)
+    pcall(mapmgr._bneKeepRoute)
     return r
   end
 end
-end]], M.KEEP_TOL_M * M.KEEP_TOL_M)
+end]], M.KEEP_TOL_M * M.KEEP_TOL_M, M.KEEP_DZ_M)
 end
 
--- A car's report after a new map (keepRouteLua): its route kept or dropped.
-function M.routeKept(id, kept)
-  if kept then stats.routesKept = (stats.routesKept or 0) + 1 else stats.routesDropped = (stats.routesDropped or 0) + 1 end
+-- A car's report after a new map (keepRouteLua): 'kept', or why its route was dropped ('missing': a node of it is not in
+-- the new map, 'moved', 'link', 'nopath').
+function M.routeKept(id, why)
+  if why == 'kept' or why == true then
+    stats.routesKept = (stats.routesKept or 0) + 1
+  else
+    stats.routesDropped = (stats.routesDropped or 0) + 1
+    stats.routeDrops = stats.routeDrops or {}
+    local k = tostring(why)
+    stats.routeDrops[k] = (stats.routeDrops[k] or 0) + 1
+  end
 end
 
 local paced = {}        -- car id -> its pace factor (set in its Lua)
@@ -597,7 +678,15 @@ local function guard(b, all)
         end
         seenAt[id] = { p.x, p.y, s0[3] }
         local reach = M.cutReach(now - s0[3], sp, putAhead[id])
-        local toCut = dl > 1e-6 and M.headingToCut(p.x, p.y, dir.x / dl, dir.y / dl, cuts, reach)
+        local toCut = false
+        if dl > 1e-6 then
+          local ux, uy = dir.x / dl, dir.y / dl
+          local n1, n2 = nil, nil
+          if lastNodes and map and map.findBestRoad then n1, n2 = map.findBestRoad(p, vec3(ux, uy, 0)) end
+          local ahead = n1 and n2 and M.cutAhead(lastNodes, cutNames, n1, n2, p.x, p.y, ux, uy, reach)
+          if ahead == nil then ahead = M.headingToCut(p.x, p.y, ux, uy, cuts, reach) end
+          toCut = ahead
+        end
         if toCut then stats.cutRespawns = (stats.cutRespawns or 0) + 1 end
         if not paused and o:getVelocity():length() < M.STUCK_MS then
           stillSince[id] = stillSince[id] or now
@@ -1042,6 +1131,7 @@ function M.transform(xf, aid)
   for _, c in ipairs(cuts) do c[1], c[2] = xf:apply(c[1], c[2], 0) end
   for _, s in pairs(seenAt) do s[1], s[2] = xf:apply(s[1], s[2], 0) end
   pendingSignals, prep = nil, nil
+  lastNodes = nil         -- (the old frame's: the guard's cut test falls back to the cone until the apply)
   dirty, lastApply = true, -math.huge
   return true
 end
@@ -1061,7 +1151,7 @@ function M.status()
            merging = stats.merging, mergeAssists = stats.mergeAssists,
            resetMs = stats.resetMs, signalsMs = stats.signalsMs, nodesMs = stats.nodesMs, gpsMs = stats.gpsMs,
            applyMs = stats.applyMs, guardMs = stats.guardMs, guardMaxMs = stats.guardMaxMs,
-           routesKept = stats.routesKept, routesDropped = stats.routesDropped,
+           routesKept = stats.routesKept, routesDropped = stats.routesDropped, routeDrops = stats.routeDrops,
            traffic = gameplay_traffic and gameplay_traffic.getState() or nil }
 end
 
@@ -1075,6 +1165,7 @@ function M.reset()
   putAhead = {}
   paced = {}
   cuts = {}
+  cutNames = {}
   lastNodes, capped, lastMerge = nil, {}, -math.huge
   M.restoreChoice()
   stats = { applies = 0, lastMs = 0, nodes = 0, edges = 0 }
