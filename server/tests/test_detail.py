@@ -205,6 +205,39 @@ class DetailBaseRefreshTest(ServerHarness):
         self.assertFalse([m for m in c.drain(1.0) if m["type"] == "block_base"], "once")
 
 
+class DetailRevisitStaleTest(DetailBaseRefreshTest):
+    """A block whose photo waits on NAIP (base_stale) is kept all the same, and its photo too; read back, the photo
+    is stale again until its NAIP is here (the first route bake kept no block at all, 2026-10-28)."""
+
+    def test_refresh(self):         # (the parent's test: not again here)
+        pass
+
+    def test_a_stale_photos_block_is_kept(self):
+        c = self.c
+        self.hello()
+        aid = self.prepare_anchor(1, LAT, LON)["anchorId"]
+        c.send({"type": "commit_anchor", "anchorId": aid})
+        c.send({"type": "commit_terrain", "anchorId": aid, "cx": 0, "cy": 0})
+        c.send({"type": "prepare_terrain", "requestId": 9, "anchorId": aid, "cx": 130.0, "cy": -190.0})
+        c.until(lambda m: m["type"] == "terrain_ready" and m.get("requestId") == 9, timeout=60)
+        key = (aid, 128.0, -128.0)
+        self.assertIn(key, self.server.base_stale, "NAIP not on disk")
+        self.assertNotIn("revisit", self.server.hm[key]["stages"])
+        self.server.hm_committed.clear(); self.server.hm_sent.clear()
+        old_cache = earthd.HM_CACHE
+        earthd.HM_CACHE = 0
+        try:
+            self.server.evict_heightmaps()
+        finally:
+            earthd.HM_CACHE = old_cache
+        self.assertNotIn(key, self.server.base_stale)
+        c.send({"type": "prepare_terrain", "requestId": 10, "anchorId": aid, "cx": 130.0, "cy": -190.0})
+        tr, _ = c.until(lambda m: m["type"] == "terrain_ready" and m.get("requestId") == 10, timeout=60)
+        self.assertIn("revisit", self.server.hm[key]["stages"], "read back")
+        self.assertTrue(os.path.exists(self.fs(tr["base"])), "with its photo")
+        self.assertIn(key, self.server.base_stale, "still waiting on NAIP: rendered again once it is here")
+
+
 class DetailQuickPhotoTest(ServerHarness):
     """A teleport's provisional photo (write_base quick) does not wait for a fresh place's buildings and roads: it goes
     without the roofs' mask while they are not on disk, and is rendered again in full later (base_stale)."""

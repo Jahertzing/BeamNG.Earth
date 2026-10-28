@@ -1619,6 +1619,14 @@ class Server:
             fb = anchor.first_base
             if fb is not None and fb[0] == (cx, cy):    # (the provisional block's photo: not needed now)
                 anchor.first_base = None
+            if self.near_visual == "detail" and self.imagery is not None:
+                name = blockcache.load_base(self, anchor, cx, cy, self._block_key(anchor, cx, cy, blockcache.BASE_KIND))
+                if name is None:            # (rendered as for a block built: the photo kept apart was not final)
+                    base = (self.urgent_base_pool if lane == LANE_REQUEST else self.base_pool).submit(
+                        self._base_photo, anchor, cx, cy, self._base_process(lane), lane == LANE_REQUEST)
+                    return self._finish_heightmap(anchor, cx, cy, info, t0, base)
+                info["base"] = name
+                self._base_kept(anchor, cx, cy, frozenset())    # (redone with its NAIP when stale: base_refresh)
             info["seconds"] = time.perf_counter() - t0
             return info
         f0 = revisitmod.faults()
@@ -1626,9 +1634,9 @@ class Server:
         blockcache.store(self, anchor, cx, cy, bk, info, f0)
         return info
 
-    def _block_key(self, anchor, cx, cy):
-        """The revisit cache's key of a block built here: the anchor's place, the block and every setting that
-        changes its heights, surface or base photo."""
+    def _block_key(self, anchor, cx, cy, kind=blockcache.KIND):
+        """The revisit cache's key of a block built here (kind blockcache.KIND; blockcache.BASE_KIND: its base photo):
+        the anchor's place, the block and every setting that changes its heights, surface or base photo."""
         im = self.imagery
         photo = None
         if self.near_visual == "detail" and im is not None:
@@ -1636,7 +1644,7 @@ class Server:
                      self.deshadow is not None, self.colormatch is not None,
                      bool(self.buildings and self.mapdata is not None), roadsmod.ROADS_IN_GROUND)
         return revisitmod.key(
-            "block", round(float(anchor.lat), 7), round(float(anchor.lon), 7), float(cx), float(cy),
+            kind, round(float(anchor.lat), 7), round(float(anchor.lon), 7), float(cx), float(cy),
             self.layout.block, anchor.hm_zoom, float(self.anchor_q(anchor)), self.near_visual, photo,
             self.mapdata.versions() if self.mapdata is not None else None, self.surface is not None,
             self.road_widths is not None, self.grading, self.sea is not None, self.airports is not None,
@@ -1844,11 +1852,14 @@ class Server:
         player waits on this block (a teleport's first, or one the mod asked for): its missing photo tiles are
         fetched ahead of the far field's (Imagery.urgent, netfetch "urgent"). quick: write_base's."""
         t1 = time.perf_counter()
+        f0 = revisitmod.faults()
         photo = []
         name = self._base_elsewhere(anchor, cx, cy, pool, photo) if pool is not None else None
         if name is None:
             with self.imagery.urgent() if urgent and hasattr(self.imagery, "urgent") else contextlib.nullcontext():
                 name = self.write_base(anchor, cx, cy, photo=photo, quick=quick)
+        if name and not quick:          # (kept for the next visit: blockcache.py; a quick one lacks roofs and roads)
+            blockcache.store_base(self, anchor, cx, cy, self._block_key(anchor, cx, cy, blockcache.BASE_KIND), name, f0)
         return name, photo, time.perf_counter() - t1
 
     def _base_elsewhere(self, anchor, cx, cy, pool, photo):
@@ -4070,11 +4081,15 @@ class Connection:
         async def run():
             try:
                 pool = s.block_pools[LANE_PREFETCH][0] if s.block_pools else None     # its BC7 encode
+                f0 = revisitmod.faults()
                 name = await self.loop.run_in_executor(s.hm_pool, s.write_base, anchor, key[1], key[2], pool,
                                                        next(s.base_rev))
                 info = s.hm.get(key)
                 if name is None or info is None:
                     return
+                await self.loop.run_in_executor(          # (replaces the one kept before its NAIP: blockcache.py)
+                    s.hm_pool, blockcache.store_base, s, anchor, key[1], key[2],
+                    s._block_key(anchor, key[1], key[2], blockcache.BASE_KIND), name, f0)
                 old, info["base"] = info.get("base"), name
                 if old and old != name and old != s.base_name(key):
                     s._remove(os.path.join(s.out_dir, old))
