@@ -101,6 +101,7 @@ class _State:
 
 ANCHORS_KEPT = 2
 SIGNALS_MARGIN_M = 60.0         # m around a road tile its junctions' mapped traffic signals are taken from
+BARRIER_HOMES_MARGIN_M = 150.0  # m around a road tile its residential land use is taken from (barriers.py: noise walls)
 WATER_BED_M = 0.05           # ground carved deeper than this under the water gets the bed layer (MUD)
 
 
@@ -521,7 +522,9 @@ def _roads_tile(aid, lat, lon, zoom, tx, ty, out_dir, vfs_dir, sidewalks, lift, 
                                                                roadsmod.cells_of_tile(frame, tx, ty, SIGNALS_MARGIN_M)),
                                  barriers=rbars,
                                  barrier_lines=barriersmod.mapped_for(
-                                     _s.md, frame, roadsmod.cells_of_tile(frame, tx, ty, SIGNALS_MARGIN_M)))
+                                     _s.md, frame, roadsmod.cells_of_tile(frame, tx, ty, SIGNALS_MARGIN_M)),
+                                 barrier_homes=barriersmod.residential_for(
+                                     _s.md, frame, roadsmod.cells_of_tile(frame, tx, ty, BARRIER_HOMES_MARGIN_M)))
     chunks += railsmod.tile_chunks(frame, tx, ty, cells)     # railway and tram tracks on the ground
     if _s.airports is not None:         # runway markings, drawn by the road mesh like the lane lines
         chunks += _s.airports.tile_chunks(frame, tx, ty, elev, roadsmod.tile_bbox)

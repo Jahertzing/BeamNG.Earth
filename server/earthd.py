@@ -1311,7 +1311,10 @@ class Server:
                                      barriers=rbars,
                                      barrier_lines=barriersmod.mapped_for(
                                          self.mapdata, anchor.frame,
-                                         roadsmod.cells_of_tile(anchor.frame, tx, ty, blockworker.SIGNALS_MARGIN_M)))
+                                         roadsmod.cells_of_tile(anchor.frame, tx, ty, blockworker.SIGNALS_MARGIN_M)),
+                                     barrier_homes=barriersmod.residential_for(
+                                         self.mapdata, anchor.frame,
+                                         roadsmod.cells_of_tile(anchor.frame, tx, ty, blockworker.BARRIER_HOMES_MARGIN_M)))
         chunks += railsmod.tile_chunks(anchor.frame, tx, ty, cells)     # railway and tram tracks on the ground
         if self.airports is not None:   # runway markings, drawn by the road mesh like the lane lines
             chunks += self.airports.tile_chunks(anchor.frame, tx, ty, elev, roadsmod.tile_bbox)

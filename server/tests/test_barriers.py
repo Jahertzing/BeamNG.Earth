@@ -209,6 +209,38 @@ class GuardrailTest(unittest.TestCase):
         self.assertTrue(np.allclose(a[0]["line"][-1], nxt[0]["line"][0], atol=0.01), "meets the next tile's")
 
 
+class NoiseWallTest(unittest.TestCase):
+    HOMES = [[np.array([[-300.0, 40.0], [600.0, 40.0], [600.0, 300.0], [-300.0, 300.0]])]]    # north of the road
+
+    def test_noise_wall_along_the_homes(self):
+        """Thornton: homes north of I-25's northbound carriageway: a noise wall NOISE_OFF_M off its outer edge, none in
+        the median nor on the south side."""
+        rs = [road("a", 9.0, 1), road("b", -9.0, -1)]
+        bs = barriers.tile_barriers(FRAME, rs, flat, BOX, homes=self.HOMES)
+        noise = [b for b in bs if b["kind"] == "noise"]
+        self.assertEqual(len(noise), 1)
+        self.assertTrue(np.allclose(noise[0]["line"][:, 1], 9.0 + 5.9 + barriers.NOISE_OFF_M, atol=0.05))
+        self.assertEqual(noise[0]["h"], barriers.NOISE_PROC_H_M)
+        self.assertEqual(kinds(barriers.tile_barriers(FRAME, rs, flat, BOX, homes=[])), ["jersey"])
+
+    def test_mapped_noise_wall_or_a_ramp_beside_none(self):
+        rs = [road("a", 9.0, 1), road("b", -9.0, -1)]
+        osm = [("noise", np.array([[-300.0, 30.0], [600.0, 30.0]]), 5.0, "osm1")]
+        bs = barriers.tile_barriers(FRAME, rs, flat, BOX, homes=self.HOMES, mapped=osm)
+        self.assertEqual([b["fid"] for b in bs if b["kind"] == "noise"], ["osm1"])
+        ramp = ("r", spec(width=6.0, link=True), np.array([[-300.0, 22.0, 10.0], [600.0, 22.0, 10.0]]), LON)
+        bs = barriers.tile_barriers(FRAME, rs + [ramp], flat, BOX, homes=self.HOMES)
+        self.assertEqual([b for b in bs if b["kind"] == "noise"], [])
+
+    def test_residential_parts(self):
+        f = features([[(0, 0), (100, 0), (100, 100), (0, 100), (0, 0)], [(200, 0), (300, 0), (300, 100), (200, 0)]],
+                     ["residential", "farmland"], subtypes=["residential", "agriculture"])
+        f.layer = "land_use"
+        parts = barriers.residential_parts(FRAME, [f, f])
+        self.assertEqual(len(parts), 1)
+        self.assertEqual(list(barriers._in_parts(parts, np.array([[50.0, 50.0], [250.0, 20.0]]))), [True, False])
+
+
 class MappedTest(unittest.TestCase):
     def test_mapped_lines(self):
         f = features([[(0, 10), (100, 10)], [(0, 30), (100, 30)], [(0, 50), (100, 50)], [(0, 70), (100, 70)]],

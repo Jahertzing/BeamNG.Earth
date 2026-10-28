@@ -14,6 +14,8 @@ Where they stand:
 - a motorway's, expressway's or ramp's outer edge (and a wide median's): a W-beam guardrail (31 in MGS on steel posts
   every 6 ft 3 in) where the ground falls GUARD_DROP_M within GUARD_PROBE_M of the edge (an embankment), over
   GUARD_DECK_M before a bridge or a tunnel (the road ends with no ground road going on) and past an overpass' piers;
+- a motorway's outer side along homes (residential land use NOISE_PROBES_M off its edge), where OpenStreetMap maps no
+  noise wall near: a NOISE_PROC_H_M concrete noise wall NOISE_OFF_M off the edge, clear of the ramps beside it;
 - in the US and Canada the rural roads' stone parapets (roads._parapets: Alpine dry-stone walls) as W-beam guardrails.
 Procedural barriers give way to mapped ones nearby (OSM_NEAR_M). A W-beam's real ends turn down into the ground (a
 buried terminal) over TERMINAL_M; where a run only stops at a tile edge or the end of a road feature it goes on in the
@@ -85,6 +87,15 @@ NOISE_T = 0.25              # its panels' thickness ...
 PILASTER_EVERY = 6.0        # ... between pilasters (H-piles in concrete) every 6 m ...
 PILASTER_W = (0.45, 0.5)    # ... this wide along it and across ...
 PILASTER_OVER = 0.15        # ... standing this over the panels
+# procedural noise walls: OpenStreetMap maps few (one in ten places along I-25, 2026-10-28), CDOT builds them where
+# homes back onto a motorway (Thornton, Northglenn, Highlands Ranch)
+NOISE_OFF_M = 10.0          # m off a motorway's edge (its right of way's edge) ...
+NOISE_PROBES_M = (25.0, 45.0, 70.0)     # ... where residential land use lies this far off the edge (any of them)
+NOISE_ROAD_GAP_M = 4.0      # m it keeps from another carriageway (a ramp or frontage road beside: none there)
+NOISE_MAPPED_M = 40.0       # m: none this near a mapped noise wall
+NOISE_FILL_N = 12           # gaps of up to this many samples closed (24 m), ...
+NOISE_MIN_N = 40            # ... runs under this many dropped (80 m)
+NOISE_PROC_H_M = 4.3        # m tall (14 ft, CDOT's most common)
 UV_M = 4.0                  # m per texture repeat (as roadmesh.CONCRETE_UV_M)
 STEEL_UV_M = 2.0
 # the tunnel mesh's material indices (roadmesh.tunnel's allm)
@@ -166,6 +177,67 @@ def mapped_for(md, frame, keys):
         import logging
         logging.getLogger("earthd.barriers").debug("mapped barriers: %s: %s", type(e).__name__, e)
         return []
+
+
+def residential_parts(frame, landuse_list):
+    """[[ring (k, 2) frame metres, ...] per polygon part] of the residential land use (Overture land_use subtype or
+    class "residential") in landuse_list (land_use Features of map cells; duplicates taken once). Pure."""
+    import mapgeom
+    seen, out = set(), []
+    for f in landuse_list or ():
+        if f is None or len(f) == 0:
+            continue
+        sub, cls = f.attrs.get("subtype"), f.attrs.get("class")
+        hit = np.zeros(len(f), bool)
+        for col in (sub, cls):
+            if col is not None:
+                hit |= np.asarray(col).astype(str) == "residential"
+        for i in np.flatnonzero(hit):
+            # (land use is clipped per cell: the same id in two cells is two halves, both kept)
+            key = (str(f.ids[i]), float(f.lonlat[f.coord_off[f.ring_off[f.part_off[i]]]][0]))
+            if key in seen:
+                continue
+            seen.add(key)
+            for part in f.parts(i):
+                rings = []
+                for ring in part:
+                    if len(ring) >= 3:
+                        e, n = mapgeom.enu_xy(f, frame, ring)
+                        rings.append(np.column_stack([np.asarray(e, np.float64), np.asarray(n, np.float64)]))
+                if rings:
+                    out.append(rings)
+    return out
+
+
+def residential_for(md, frame, keys):
+    """residential_parts of the map cells keys (md: mapdata.MapData); [] when their land use cannot be read."""
+    try:
+        return residential_parts(frame, [md.cell(k, layers=("land_use",), kind="demand").layers.get("land_use")
+                                         for k in keys])
+    except Exception as e:          # no procedural noise walls rather than no road tile
+        import logging
+        logging.getLogger("earthd.barriers").debug("residential land use: %s: %s", type(e).__name__, e)
+        return []
+
+
+def _in_parts(parts, pts):
+    """Which points (k, 2) lie in any of the polygon parts (even-odd over each part's rings: its holes out)."""
+    import polygon
+    pts = np.asarray(pts, np.float64).reshape(-1, 2)
+    hit = np.zeros(len(pts), bool)
+    if not len(pts) or not parts:
+        return hit
+    lo, hi = pts.min(0), pts.max(0)
+    for rings in parts:
+        outer = rings[0]
+        if outer[:, 0].max() < lo[0] or outer[:, 0].min() > hi[0] or outer[:, 1].max() < lo[1] or \
+                outer[:, 1].min() > hi[1]:
+            continue
+        inside = np.zeros(len(pts), bool)
+        for ring in rings:
+            inside ^= np.asarray(polygon.contains_points(ring, pts), bool)
+        hit |= inside
+    return hit
 
 
 def _main(spec):
@@ -286,11 +358,12 @@ class _Mains:
         return out
 
 
-def tile_barriers(frame, roads, elev, exact, decks=(), mapped=None, parapets=(), left_hand=False):
+def tile_barriers(frame, roads, elev, exact, decks=(), mapped=None, parapets=(), left_hand=False, homes=None):
     """The barriers (see the module doc) of the tile box `exact` (x0, y0, x1, y1): roads as roads.build_tile's (fid,
     spec, centreline (k, 3), lon) near the tile, elev(lat, lon) the graded ground, decks the bridge deck chunks near the
     tile (roads._under_decks), mapped: mapped_lines near the tile, parapets: roads._parapets' walls to stand as W-beam
-    guardrails instead. Deterministic (sorted by feature id)."""
+    guardrails instead, homes: residential_parts near the tile (noise walls along a motorway's homes). Deterministic
+    (sorted by feature id)."""
     import grading
     import roads as roadsmod
     x0, y0, x1, y1 = exact
@@ -315,6 +388,7 @@ def tile_barriers(frame, roads, elev, exact, decks=(), mapped=None, parapets=(),
     ends = np.array([p for _, _, pts in built for p in (pts[0, :2], pts[-1, :2])], np.float64).reshape(-1, 2)
 
     keep_off = [(xy, 0.0) for kind, xy, _h, _f in mapped if kind in SAFETY]
+    noise_mapped = roadsmod._Segs({str(n): (xy, 0.0) for n, (kind, xy, _h, _f) in enumerate(mapped) if kind == "noise"})
 
     def off_mapped(pts):
         """Which points (k, 2) keep OSM_NEAR_M from every mapped safety barrier."""
@@ -358,6 +432,11 @@ def tile_barriers(frame, roads, elev, exact, decks=(), mapped=None, parapets=(),
             probe_pts.append(xy + N * sd * (rh + EDGE_OFF_M))                   # the guardrail's face
             for o in steps:
                 probe_pts.append(xy + N * sd * o)
+            probe_pts.append(xy + N * sd * (rh + NOISE_OFF_M))                  # a noise wall's line
+        if homes and spec.cls == "motorway" and _main(spec):
+            # (homes beside it: residential land use off either edge)
+            rec["homes"] = {sd: np.any([_in_parts(homes, xy + N * sd * (rh + o)) for o in NOISE_PROBES_M], axis=0)
+                            for sd in (1, -1)}
         info.append(rec)
     g = ground(np.concatenate(probe_pts)) if probe_pts else np.zeros(0)
     probe_off = np.r_[0, np.cumsum([len(pp) for pp in probe_pts])]
@@ -372,9 +451,10 @@ def tile_barriers(frame, roads, elev, exact, decks=(), mapped=None, parapets=(),
         for si, sd in enumerate((1, -1)):
             gap, partner, opp = rec["bes"][sd]
             # (each side's probes: its face's points, then each step's; k points each)
-            off = int(probe_off[rec["k0"] + si * (1 + len(steps))])
+            off = int(probe_off[rec["k0"] + si * (2 + len(steps))])
             gface = g[off:off + k]
             gs = g[off + k:off + k * (1 + len(steps))].reshape(len(steps), k).T
+            gwall = g[off + k * (1 + len(steps)):off + k * (2 + len(steps))]
             jersey = np.isfinite(gap) & (gap <= MEDIAN_JERSEY_M)
             # (opposite ways: the other's travel against this one's, opp along the geometry times its direction)
             cable = np.isfinite(gap) & (gap > MEDIAN_JERSEY_M) & (gap <= MEDIAN_CABLE_M) & (opp * (spec.dir or 0) < 0)
@@ -393,6 +473,18 @@ def tile_barriers(frame, roads, elev, exact, decks=(), mapped=None, parapets=(),
                                         xy[sl] + N[sl] * sd * (rh + gap[sl, None])))
                         raw.append([kind, mid[sl], None, None, JERSEY_H if kind == "jersey" else CABLE_POST_H, 0,
                                     (i > 0 and bool(ext[i - 1]), j < k - 1 and bool(ext[j + 1])), fid, 0])
+            # a noise wall along the homes on the outer side (no carriageway beside it within MEDIAN_CABLE_M)
+            if "homes" in rec:
+                wall = xy + N * sd * (rh + NOISE_OFF_M)
+                want = rec["homes"][sd] & ~np.isfinite(gap) & ext
+                if want.any():
+                    want &= ~others.near(wall, NOISE_ROAD_GAP_M, skip=fid) & ~noise_mapped.near(wall, NOISE_MAPPED_M)
+                    if decks:
+                        want &= ~roadsmod._under_decks(wall, z, list(decks))
+                    for i, j in _runs(want, fill=NOISE_FILL_N, min_n=NOISE_MIN_N):
+                        sl = slice(i, j + 1)
+                        raw.append(["noise", wall[sl], gwall[sl], gwall[sl] - FOOT_M, NOISE_PROC_H_M, 0,
+                                    (i > 0 and bool(ext[i - 1]), j < k - 1 and bool(ext[j + 1])), fid, sd])
             # the edge: a guardrail on an embankment, before a bridge, past an overpass
             covered = jersey | cable
             drop = (gface[:, None] - gs).max(axis=1) >= GUARD_DROP_M
