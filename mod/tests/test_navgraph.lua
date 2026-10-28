@@ -135,4 +135,27 @@ do
   T.check(g1.signals[1].kind == 'signal' and g1.signals[1].j == 'a', 'moved: the junction\'s fields kept')
   T.check(not N.transform(xf, 8), 'transform: no graph yet: nothing')
 end
+-- each traffic car's pace on fast roads (paceFactor, paceLua run in a stand-in for the car's Lua)
+do
+  T.check(N.paceFactor(0.5, 0.5, 0.5) == 1, 'paceFactor: the middle draw: the AI\'s target')
+  T.check(math.abs(N.paceFactor(1, 1, 1) - (1 + N.SPREAD_MAX)) < 1e-12 and math.abs(N.paceFactor(0, 0, 0) - (1 - N.SPREAD_MAX)) < 1e-12,
+    'paceFactor: clipped to 1 +- SPREAD_MAX')
+  local fast = { inNode = 'a', outNode = 'b', speedLimit = 31.3 }
+  local slow = { inNode = 'b', outNode = 'c', speedLimit = 11.2 }
+  local md = { graph = { a = { b = fast }, b = { a = fast, c = slow }, c = { b = slow } } }
+  local handed = md
+  mapmgr = { mapData = md, setMap = function() mapmgr.mapData = handed end }
+  local run = function(code) assert(loadstring(code))() end
+  run(N.paceLua(1.1))
+  T.check(math.abs(fast.speedLimit - 31.3 * 1.1) < 1e-9 and slow.speedLimit == 11.2,
+    'paceLua: a fast edge scaled once (shared by both directions), a town street not')
+  run(N.paceLua(1.1))
+  mapmgr.setMap(7)
+  T.check(math.abs(fast.speedLimit - 31.3 * 1.1) < 1e-9, 'paceLua: run again, the same map handed again: not scaled twice')
+  local fast2 = { inNode = 'a', outNode = 'b', speedLimit = 29.0 }
+  handed = { graph = { a = { b = fast2 }, b = { a = fast2 } } }
+  mapmgr.setMap(8)
+  T.check(math.abs(fast2.speedLimit - 29.0 * 1.1) < 1e-9, 'paceLua: a new map scaled as it comes (setMap wrapped once)')
+  mapmgr = nil
+end
 T.done('test_navgraph')

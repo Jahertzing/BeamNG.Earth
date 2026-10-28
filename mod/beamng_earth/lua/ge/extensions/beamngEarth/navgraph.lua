@@ -408,6 +408,50 @@ function M.stuck(since, now, d)
   return since ~= nil and now - since >= M.STUCK_S and d >= M.STUCK_FAR_M
 end
 
+-- Each traffic car's own pace on fast roads: the stock AI's "legal" mode drives every edge's speed exactly, so on I-25
+-- every car went the same speed, nobody passed anybody (the user's drive, 2026-10-28). Each car gets a factor on the
+-- edges of at least FAST_MS (45 mph: motorways, trunks, fast arterials; town streets and their signals keep the
+-- limit), about normal around 1 with SPREAD, clipped to 1 +- SPREAD_MAX: 62-78 mph where the AI's target is 70 (a 65
+-- zone, navgraph.py FLOW_MPH). It is set once in the car's own Lua (its mapmgr scales every new map it is handed).
+M.FAST_MS = 20
+M.SPREAD = 0.06
+M.SPREAD_MAX = 0.12
+
+-- Pure: a car's pace factor from three uniform [0, 1) draws (their sum: about normal).
+function M.paceFactor(u1, u2, u3)
+  local z = (u1 + u2 + u3 - 1.5) * 2        -- (sd 1)
+  return math.max(1 - M.SPREAD_MAX, math.min(1 + M.SPREAD_MAX, 1 + z * M.SPREAD))
+end
+
+-- The vehicle Lua giving a car pace factor f: every edge of its map at least FAST_MS fast scaled from its own limit
+-- (kept as _bneLimit: a map scaled again, or handed again, is not scaled twice), now and on every new map (mapmgr.setMap
+-- wrapped once per car; graphpath shares an edge's table between its two directions: scaled once, from its in node).
+function M.paceLua(f)
+  return string.format([[do
+local f, fast = %.4f, %.2f
+local function scale(md)
+  if not (md and md.graph) or md._bnePace == f then return end
+  for a, links in pairs(md.graph) do
+    for _, e in pairs(links) do
+      if e.inNode == a and e.speedLimit then
+        e._bneLimit = e._bneLimit or e.speedLimit
+        if e._bneLimit >= fast then e.speedLimit = e._bneLimit * f end
+      end
+    end
+  end
+  md._bnePace = f
+end
+mapmgr._bnePace = scale
+if not mapmgr._bneSetMap then
+  mapmgr._bneSetMap = mapmgr.setMap
+  mapmgr.setMap = function(...) local r = mapmgr._bneSetMap(...) pcall(mapmgr._bnePace, mapmgr.mapData) return r end
+end
+pcall(scale, mapmgr.mapData)
+end]], f, M.FAST_MS)
+end
+
+local paced = {}        -- car id -> its pace factor (set in its Lua)
+
 -- Traffic cars the block left behind (or all, after a teleport), and stuck ones, are respawned on the graph.
 local stillSince = {}   -- car id -> os.clock() it stopped moving
 local seenAt = {}       -- car id -> { x, y, os.clock() it appeared there }
@@ -424,6 +468,10 @@ local function guard(b, all)
   for id in pairs(gt.getTrafficData() or {}) do
     if id ~= me then
       local o = getObjectByID(id)
+      if o and not paced[id] and o.queueLuaCommand then
+        paced[id] = M.paceFactor(math.random(), math.random(), math.random())
+        o:queueLuaCommand(M.paceLua(paced[id]))
+      end
       if o and o:getActive() then
         local p = o:getPosition()
         local u = o:getVelocity()
@@ -753,6 +801,7 @@ function M.reset()
   pendingSignals = nil
   stillSince = {}
   seenAt = {}
+  paced = {}
   cuts = {}
   M.restoreChoice()
   stats = { applies = 0, lastMs = 0, nodes = 0, edges = 0 }
