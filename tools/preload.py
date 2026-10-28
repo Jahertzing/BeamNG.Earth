@@ -23,6 +23,12 @@ first within each; what is on disk already, known missing or in the region's man
            USGS z16-z15 over the region, z14-z12 over --far-km
   mapdata  the z14 cells, every layer but the skyline's (CELL_LAYERS), for the pinned Overture release, with DRCOG's
            roofprints in its area as the server builds them (--drcog, default on as the settings page)
+  derive   after the downloads, what the server would otherwise work out on a first visit, on the local CPU (a few
+           threads at a low priority, --derive-workers / --derive-duty): the colour match's fields and the de-shadow
+           regions per z12 tile round the parts with map data, the trees (vegetation.py) and the road widths' walls
+           (roadwidth.py) per full z14 cell; each only where the server has it on (--colormatch, --deshadow, --trees,
+           --road-widths: the launcher's defaults). Their files carry their own versions, not the server's code: a
+           server update keeps them
 Every host runs at once, each within its policy (netfetch.POLICIES: rate, requests at once); a host stops for the day
 at its soft daily budget (the game needs the rest; --over-budget: on at half rate) and the next run resumes there.
 Finished keys go to <world>/regions/<region>.done (the manifest; --recheck ignores it), what was asked to
@@ -66,6 +72,7 @@ import mapcells  # noqa: E402
 import mapdata as mapdatamod  # noqa: E402
 import netfetch  # noqa: E402
 import overture  # noqa: E402
+import pacer  # noqa: E402
 import worldvol  # noqa: E402
 import pmtiles as pmtilesmod  # noqa: E402
 import regions as regmod  # noqa: E402
@@ -96,6 +103,16 @@ EST["sky"] = (150e3, 100e3, 1.0)        # a skyline cell's few layers (the tall 
 EST["edges"] = (1.2e6, 240e3, 2.0)      # a cell's edges: GeoJSON pages (~5x the npz); 236 KB a cell in Jeff's cache
 # hosts slower than the export estimate (the live Front Range run, 2026-10-28: seconds a request at 2 at once x 2)
 EST_HOST_SEC = {"apps.douglas.co.us": 3.6, "utility.arcgis.com": 6.0}      # (La Plata County: 3-6 s an export)
+# The derive lane (seconds of one thread and bytes on disk a key; a 1.5 km test round Frederick on Jeff's PC,
+# 2026-10-28: 22 keys in 3 min on 2 threads): a colour-match field (11-21 s for a region's seams with their tiles'
+# fetches, once each, and the field from its 3 x 3), a de-shadow region (0.5 s where the sun fit fails on the plains;
+# a few seconds where it fits: a guess), a cell's trees (vegetation.py's ~3.5 s, ~200 KB), its road-width walls and
+# their index (~440 KB)
+EST_CPU = {"cm": (20.0, 5e3), "ds": (5.0, 300e3), "veg": (3.5, 200e3), "rw": (0.5, 440e3)}
+DERIVE_NAMES = {"cm": "colour-match fields (z12)", "ds": "de-shadow regions (z12)", "veg": "trees (z14 cells)",
+                "rw": "road-width walls (z14 cells)"}
+DERIVE_WORKERS = max(1, min(4, (os.cpu_count() or 2) // 4))     # a quarter of the CPU's threads, at most 4
+DERIVE_NICE = 10                # the process below normal priority while it derives (budget.lower_priority)
 ROADS_SHARE = 0.3               # a roads-only cell's share of a full one's bytes and time
 RANGE_BPS = 12e6                # bytes/s of one range request from download.mapterhorn.com (2026-10-28: 8 MB in 0.7 s)
 # The z14 cells' layers: all but the skyline's tall ones (skyline.py builds those per z12 cell)
@@ -253,6 +270,102 @@ def plan_colormatch(region):
     t = region.tiles(z, region.far_m + 2 * regmod.tile_m(region.home[0], z),
                      where=region.where("mapdata", lambda v: bool(v)))
     return [((src, z, x, y), t[(x, y)]) for x, y in region.ordered(z, t) if imagerymod.in_bounds(src, z, x, y)]
+
+
+def plan_derive(region, cells, kinds):
+    """[((kind, key), priority)] of the derive lane: the z12 regions (12, x, y) of the colour match ("cm") and the
+    de-shadow ("ds") reaching into the parts with map data (where the pre-load fetched their USGS and Sentinel-2
+    tiles), then the trees ("veg") and road widths ("rw") of the full cells (plan_cells' CELL_LAYERS keys)."""
+    out = []
+    if {"cm", "ds"} & set(kinds):
+        t = region.tiles(12, where=region.where("mapdata", lambda v: bool(v)))
+        for x, y in region.ordered(12, t):
+            for k in ("cm", "ds"):
+                if k in kinds:
+                    out.append(((k, (12, x, y)), t[(x, y)]))
+    for c, prio, layers in cells:
+        if layers is not CELL_LAYERS:
+            continue
+        for k in ("veg", "rw"):
+            if k in kinds:
+                out.append(((k, c), prio))
+    return out
+
+
+def derive_makers(target, img, dem, md, kinds):
+    """{kind: build(key) -> True when computed now, False when on disk already} for the derive lane, the producers
+    rooted at the target folder (the world's) as the server's are at its cache; and {kind: on_disk(key)}."""
+    build, have = {}, {}
+    if "cm" in kinds:
+        import colormatch
+        cm = colormatch.ColorMatch(target, "s2")
+        cm.bind(img)
+        build["cm"] = lambda k: cm.build(k[1:])
+        have["cm"] = lambda k: cm._on_disk(k[1:]) is not None
+    if "ds" in kinds:
+        import deshadow
+        ds = deshadow.Deshadow(target, dem, "full")         # (its regions serve every mode)
+        ds.bind(img)
+        build["ds"] = lambda k: ds.build(k[1:])
+        have["ds"] = lambda k: cachemod.exists(ds._paths(k[1:])[0])
+    if "veg" in kinds and md is not None:
+        import vegetation
+        veg = vegetation.Vegetation(md, target)
+        veg.dem = dem
+
+        def veg_build(k):
+            if veg.ready(k):
+                return False
+            veg.cell((k.z, k.x, k.y))
+            if not veg.ready(k):        # (built without the DEM's answer: not kept, vegetation._load)
+                raise RuntimeError(f"trees of {k}: not kept (the DEM did not answer)")
+            return True
+        build["veg"] = veg_build
+        have["veg"] = veg.ready
+    if "rw" in kinds and md is not None:
+        import roadwidth
+        rw = roadwidth.RoadWidths(lambda key: md.cell(key, layers=("buildings",), kind="demand").layers.get("buildings"),
+                                  roadwidth.store_dir(target, md))
+        build["rw"] = rw.store
+        have["rw"] = lambda k: roadwidth.complete_store(os.path.join(rw.store_dir, str(k.z), str(k.x), f"{k.y}.npy"))
+    return build, have
+
+
+def derive_tok(kind, key):
+    return tok(kind, key[0], key[1], key[2]) if isinstance(key, tuple) else tok(kind, key.z, key.x, key.y)
+
+
+def derive_all(net, items, build, manifest, workers=DERIVE_WORKERS, duty=1.0, stop=None, nice=DERIVE_NICE):
+    """The derive lane: items [((kind, key), priority)] on `workers` threads, each paced to `duty` of the time
+    (pacer.py: memory bandwidth for the game), the process lowered by `nice` (below normal on Windows). Returns the
+    Run."""
+    import budget
+    try:
+        how = budget.lower_priority(nice)
+        if how:
+            print(f"  derive: {workers} thread{'s' if workers != 1 else ''}, process {how}", flush=True)
+    except OSError as e:
+        print(f"  derive: priority not lowered ({e})", flush=True)
+    run = Run(net, stop=stop)
+    paced = threading.local()
+
+    def one(item, prio):
+        kind, key = item
+        t = derive_tok(kind, key)
+        if t in manifest:
+            return False
+        if not getattr(paced, "on", False):
+            pacer.enable(duty)
+            paced.on = True
+        got = build[kind](key)
+        manifest.add(t)
+        return got
+    ln = run.lane("derive", "local CPU", workers, one)
+    for item, prio in items:
+        if derive_tok(*item) not in manifest:
+            ln.put(prio, item)
+    run.go()
+    return run
 
 
 def plan_skyline(region):
@@ -1062,7 +1175,34 @@ def estimate(region, net, img, dem, md, plan, manifest, only, release, coverage=
         late = [r["name"] for r in rows if r["days"] > 1]
         print(f"  ! {days} days: past a host's daily budget its lane stops until the next UTC day ({', '.join(late)});"
               " run it again each day (or --over-budget: on at half rate)")
-    return dict(rows=rows, down=down, wrote=wrote, hours=longest, days=days, requests=total_req, edge=edge)
+    derive = estimate_derive(plan.get("derive") or [], manifest, plan.get("derive_have") or {},
+                             plan.get("derive_workers", DERIVE_WORKERS))
+    return dict(rows=rows, down=down, wrote=wrote + derive["wrote"], hours=longest, days=days, requests=total_req,
+                edge=edge, derive=derive)
+
+
+def estimate_derive(items, manifest, have, workers):
+    """Print the derive lane's rows (keys, to do, MB on disk, CPU hours on `workers` threads); its totals."""
+    if not items:
+        return dict(wrote=0.0, hours=0.0)
+    counts = {}
+    for (kind, key), _ in items:
+        n = counts.setdefault(kind, [0, 0])
+        n[0] += 1
+        if derive_tok(kind, key) not in manifest and not (kind in have and have[kind](key)):
+            n[1] += 1
+    print(f"  then on this PC, after the downloads ({workers} thread{'s' if workers != 1 else ''}, below normal "
+          "priority):")
+    wrote = hours = 0.0
+    for kind, (n, todo) in counts.items():
+        sec, size = EST_CPU[kind]
+        h = todo * sec / workers / 3600
+        wrote += todo * size
+        hours += h
+        print(f"  {DERIVE_NAMES[kind]:40s} {n:7d} {todo:8d} {'':8s} {todo * size / 1e6:8.0f} {h:6.1f}")
+    print(f"  {'derive total':40s} {sum(v[0] for v in counts.values()):7d} {sum(v[1] for v in counts.values()):8d} "
+          f"{'':8s} {wrote / 1e6:8.0f} {hours:6.1f}")
+    return dict(wrote=wrote, hours=hours)
 
 
 def edge_parents(exports, coverage):
@@ -1186,6 +1326,19 @@ def main(argv=None):
     ap.add_argument("--skyline", choices=("on", "off"), default="on",
                     help="the skyline's tall buildings and towers per z12 cell round the region, as the server's "
                          "--skyline (default on)")
+    ap.add_argument("--derive", choices=("on", "off"), default="on",
+                    help="after the downloads, work out on this PC what the server would on a first visit: the colour "
+                         "match's fields and the de-shadow regions, the trees and the road widths (each as its flag)")
+    ap.add_argument("--deshadow", choices=("full", "off"), default="full",
+                    help="the de-shadow regions, as the server's --deshadow (the launcher's: full)")
+    ap.add_argument("--trees", choices=("on", "off"), default="on",
+                    help="the trees per cell, as the server's --trees (the launcher's: on)")
+    ap.add_argument("--road-widths", choices=("on", "off"), default="on",
+                    help="the road widths' walls per cell, as the server's --road-widths (default on)")
+    ap.add_argument("--derive-workers", type=int, default=DERIVE_WORKERS,
+                    help=f"the derive lane's threads (default {DERIVE_WORKERS}: a quarter of this CPU's, at most 4)")
+    ap.add_argument("--derive-duty", type=float, default=1.0,
+                    help="each derive thread busy at most this share of the time (pacer.py; e.g. 0.5 while playing)")
     ap.add_argument("--lidar-heights", choices=("on", "off"), default="off",
                     help="the 3DEP lidar building heights in the map cells, as the server's --lidar-heights")
     ap.add_argument("--allow-running", action="store_true",
@@ -1280,6 +1433,16 @@ def main(argv=None):
     }
     if "imagery" in only and a.colormatch == "on" and "usgs" not in skip:
         plan["xyz"].append((imagerymod.SOURCES["eox2023"], plan_colormatch(region)))
+    kinds = set()
+    if a.derive == "on":
+        if "imagery" in only and "usgs" not in skip:
+            kinds |= {k for k, on in (("cm", a.colormatch == "on"), ("ds", a.deshadow != "off")) if on}
+        if md is not None:
+            kinds |= {k for k, on in (("veg", a.trees == "on"), ("rw", a.road_widths == "on")) if on}
+    if kinds:
+        plan["derive"] = plan_derive(region, plan["cells"], kinds)
+        derive_build, plan["derive_have"] = derive_makers(target, img, dem, md, kinds)
+        plan["derive_workers"] = max(1, a.derive_workers)
     if plan["dem"] and a.dem_source == "pmtiles":
         todo = [(k, p) for k, p in plan["dem"] if tok("dem", *k) not in manifest and not dem.has(*k)]
         t0 = time.monotonic()
@@ -1314,6 +1477,11 @@ def main(argv=None):
                             only=sorted(only), first=meta.get("first") or started, started=started)
     try:
         run = run_all(net, img, dem, md, plan, manifest, only, a.over_budget, stop)
+        if plan.get("derive") and not stop.is_set():
+            print(f"derive: {len(plan['derive'])} keys on this PC", flush=True)
+            drun = derive_all(net, plan["derive"], derive_build, manifest, plan["derive_workers"], a.derive_duty,
+                              stop)
+            run.lanes.update(drun.lanes)
     finally:
         manifest.close()
         if md is not None:

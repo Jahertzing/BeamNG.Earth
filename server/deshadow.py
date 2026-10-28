@@ -937,12 +937,7 @@ class Deshadow:
                     self._failed[rk] = time.monotonic()
                     self._events.pop(rk).set()
                 continue
-            jp, npz = self._paths(rk)
-            if grids is not None:
-                _atomic_write(npz, lambda f: np.savez_compressed(f, grids=grids))
-                self.disk.wrote(npz)
-            _atomic_write(jp, lambda f: f.write(json.dumps(P).encode()))
-            self.disk.wrote(jp)
+            self._save(rk, P, grids)
             with self._lock:
                 self._params[rk] = P
                 if grids is not None:
@@ -964,6 +959,25 @@ class Deshadow:
                     fn(rk, bool(P.get("ok")))
                 except Exception:
                     log.exception("deshadow listener")
+
+    def _save(self, rk, P, grids):
+        """A computed region's files (its grids first: its params name them)."""
+        jp, npz = self._paths(rk)
+        if grids is not None:
+            _atomic_write(npz, lambda f: np.savez_compressed(f, grids=grids))
+            self.disk.wrote(npz)
+        _atomic_write(jp, lambda f: f.write(json.dumps(P).encode()))
+        self.disk.wrote(jp)
+
+    def build(self, rk):
+        """Compute and keep region rk now, in the calling thread, unless it is on disk (the world folder's or the
+        cache's; tools/preload.py's derive lane, its bound imagery and DEM the pre-load's). True when computed."""
+        with self._lock:
+            if self._load_params(rk) is not None:
+                return False
+        P, grids = self._compute(rk)
+        self._save(rk, P, grids)
+        return True
 
     def _compute(self, rk):
         """Fetch the region's z14 imagery and DEM, then compute_region()."""
