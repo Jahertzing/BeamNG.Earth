@@ -7,6 +7,12 @@ gantries, shields, mile markers and speed limits when it builds road tiles; noth
     python tools/build_highway_signs.py --region front-range
     python tools/build_highway_signs.py --bbox 39.3,-105.2,40.3,-104.6 --name my-area
     python tools/build_highway_signs.py --region front-range --check      (the plan's counts, no download)
+    python tools/build_highway_signs.py --region colorado-statewide --name colorado --strip-deg 0.5
+
+A big box is fetched in strips of latitude (--strip-deg; each strip's answer kept under build/hwysigns-cache, so a
+rerun after a busy server picks up where it stopped), merged by element id. The sign plan loads every file in
+server/hwysigns (the biggest first; a later file's sign where an earlier one has it is dropped), so a region's file
+may overlap the whole state's.
 
 OpenStreetMap data (c) OpenStreetMap contributors, ODbL 1.0.
 """
@@ -27,11 +33,13 @@ sys.path.insert(0, HERE)
 
 OUT_DIR = os.path.join(ROOT, "server", "hwysigns")
 ENDPOINTS = ("https://overpass-api.de/api/interpreter", "https://overpass.kumi.systems/api/interpreter",
+             "https://maps.mail.ru/osm/tools/overpass/api/interpreter",
              "https://overpass.private.coffee/api/interpreter")
+CACHE_DIR = os.path.join(ROOT, "build", "hwysigns-cache")
 KEEP = ("highway", "ref", "oneway", "maxspeed", "lanes", "destination", "destination:ref", "destination:street",
         "destination:symbol", "destination:to", "destination:ref:to", "junction:ref", "exit_to", "name", "toll",
         "noref")
-QUERY = """[out:json][timeout:900][maxsize:1073741824];
+QUERY = """[out:json][timeout:{timeout}][maxsize:{maxsize}];
 (
   way["highway"~"^(motorway|motorway_link|trunk|trunk_link)$"]({s},{w},{n},{e});
   node["highway"="motorway_junction"]({s},{w},{n},{e});
@@ -53,10 +61,11 @@ def _context():
         return ssl.create_default_context()
 
 
-def fetch(bbox, endpoints=ENDPOINTS):
+def fetch(bbox, endpoints=ENDPOINTS, timeout=900, maxsize=1 << 30):
     """Overpass' JSON answer for the bbox (south, west, north, east), trying each endpoint in turn."""
     s, w, n, e = bbox
-    body = urllib.parse.urlencode({"data": QUERY.format(s=s, w=w, n=n, e=e)}).encode()
+    body = urllib.parse.urlencode({"data": QUERY.format(s=s, w=w, n=n, e=e, timeout=timeout,
+                                                        maxsize=maxsize)}).encode()
     last = None
     for url in endpoints:
         for attempt in range(2):
@@ -64,7 +73,7 @@ def fetch(bbox, endpoints=ENDPOINTS):
                 req = urllib.request.Request(url, data=body, headers={
                     "User-Agent": "BeamNG.Earth highway signs (tools/build_highway_signs.py)"})
                 t0 = time.time()
-                with urllib.request.urlopen(req, timeout=960, context=_context()) as r:
+                with urllib.request.urlopen(req, timeout=timeout + 60, context=_context()) as r:
                     data = json.loads(r.read().decode("utf-8"))
                 print(f"  {url}: {len(data.get('elements', []))} elements in {time.time() - t0:.0f} s")
                 return data
@@ -73,6 +82,36 @@ def fetch(bbox, endpoints=ENDPOINTS):
                 print(f"  {url}: {type(ex).__name__}: {ex}")
                 time.sleep(10 * (attempt + 1))
     raise SystemExit(f"Overpass failed: {last}")
+
+
+def fetch_strips(bbox, name, strip_deg, endpoints=ENDPOINTS):
+    """fetch over the bbox in strips of latitude strip_deg high, each strip's answer cached; one answer of every
+    strip's elements (a way crossing strips comes whole from each: once), its timestamp the oldest strip's."""
+    s, w, n, e = bbox
+    k = max(1, int(-(-(n - s) // strip_deg)))
+    if k == 1:
+        return fetch(bbox, endpoints)
+    os.makedirs(CACHE_DIR, exist_ok=True)
+    seen, elements, stamps = set(), [], []
+    for i in range(k):
+        sb = (round(s + (n - s) * i / k, 5), w, round(s + (n - s) * (i + 1) / k, 5), e)
+        cache = os.path.join(CACHE_DIR, f"{name}-{k}-{i}.json.gz")
+        if os.path.exists(cache):
+            with gzip.open(cache, "rt", encoding="utf-8") as f:
+                data = json.load(f)
+            print(f"  strip {i + 1}/{k} {sb}: cached")
+        else:
+            print(f"  strip {i + 1}/{k} {sb}")
+            data = fetch(sb, endpoints, timeout=300, maxsize=512 << 20)
+            with gzip.open(cache + ".tmp", "wt", encoding="utf-8") as f:
+                json.dump(data, f)
+            os.replace(cache + ".tmp", cache)
+        stamps.append(data.get("osm3s", {}).get("timestamp_osm_base", ""))
+        for el in data.get("elements", []):
+            if (el["type"], el["id"]) not in seen:
+                seen.add((el["type"], el["id"]))
+                elements.append(el)
+    return {"osm3s": {"timestamp_osm_base": min((t for t in stamps if t), default="")}, "elements": elements}
 
 
 def compact(data, region, bbox):
@@ -137,6 +176,7 @@ def main():
     ap.add_argument("--name", help="the file's name (default: the region's)")
     ap.add_argument("--pad-km", type=float, default=5.0, help="km added round the region's box")
     ap.add_argument("--check", action="store_true", help="print the existing file's plan counts")
+    ap.add_argument("--strip-deg", type=float, default=0.6, help="degrees of latitude per Overpass request")
     ap.add_argument("--exits", metavar="REF", help="with --check: list the exits signed on this route (e.g. \"I 25\")")
     a = ap.parse_args()
     if a.region:
@@ -160,7 +200,7 @@ def main():
             list_exits(d, a.exits)
         return
     print(f"Overpass: motorways, trunks and exits in {bbox}")
-    d = compact(fetch(bbox), name, bbox)
+    d = compact(fetch_strips(bbox, name, a.strip_deg), name, bbox)
     write(path, d)
     print(f"{path}: {len(d['ways'])} ways, {len(d['junctions'])} junctions ({os.path.getsize(path) / 1e6:.1f} MB)")
     print(f"plan: {summary(d)}")
