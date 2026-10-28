@@ -219,6 +219,26 @@ class ClearTest(unittest.TestCase):
         self.assertEqual(sl.clear_of(rows, []), rows)
 
 
+class StaticParkTest(unittest.TestCase):
+    def test_a_share_of_the_spots_gets_a_still_car(self):
+        import geodesy
+        frame = geodesy.EnuFrame(39.37, -104.86)
+        curb = [[k * 6.0, 10.0, 1.0, 0.0] for k in range(200)]
+        lot = [[k * 2.6, 50.0, 1.0, 90.0, 1] for k in range(200)]
+        rows, left = sl.static_park(frame, curb + lot, town=False)
+        self.assertEqual(len(rows) + len(left), 400)
+        cars_curb = [r for r in rows if r[2] == 10.0]
+        self.assertTrue(0.3 < len(cars_curb) / 200 < 0.6, len(cars_curb))
+        self.assertTrue(all(r[0][4:] in sl.STATIC_MODELS for r in rows))
+        self.assertTrue(all(r[4] == 0.0 for r in cars_curb), "curb cars face the traffic's way")
+        self.assertEqual({r[4] for r in rows if r[2] == 50.0}, {90.0, 270.0}, "lot cars either way in")
+        taken = {(r[1], r[2]) for r in rows}
+        self.assertFalse([s for s in left if (s[0], s[1]) in taken], "a spot with a still car is not the stock cars'")
+        again, _ = sl.static_park(geodesy.EnuFrame(39.371, -104.861), [], town=False)
+        self.assertEqual(again, [])
+        self.assertEqual(sl.static_park(frame, curb + lot, town=False)[0], rows, "deterministic")
+
+
 class CatalogTest(unittest.TestCase):
     def test_every_group_shown_and_switched_by_the_setting(self):
         src = TREES.read_text(encoding="utf-8")

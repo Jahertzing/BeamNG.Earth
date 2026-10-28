@@ -164,8 +164,18 @@ def main():
     ap.add_argument("--name", default="place")
     ap.add_argument("--half", type=float, default=380.0, help="m from the place to the picture's edge")
     ap.add_argument("--views", default=None, help="also write a tools/benchmark.py set of the props' views here")
+    ap.add_argument("--drcog", default="on", choices=("on", "off"),
+                    help="the DRCOG buildings as the game's server has them (launcher: --drcog on)")
+    ap.add_argument("--lidar-heights", default="on", choices=("on", "off"))
+    ap.add_argument("--world", default="C:/beamng-earth/world" if os.name == "nt" else None,
+                    help="the pre-loaded world folder (read before the cache, as earthd does)")
     ap.add_argument("--cache-dir", default=os.path.expanduser("~/.cache/beamng-earth"))
     a = ap.parse_args()
+    os.environ["BNE_DRCOG"] = "1" if a.drcog == "on" else "0"     # (before mapdata: the game's buildings)
+    os.environ["BNE_LIDAR_HEIGHTS"] = "1" if a.lidar_heights == "on" else "0"
+    import cache
+    if a.world and os.path.isdir(a.world):
+        cache.set_world(a.world, a.cache_dir)
     import geodesy
     import mapdata
     import roads

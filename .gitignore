@@ -30,3 +30,5 @@ dist/
 native/earthfast/target/
 build/
 native/serverlist/target/
+# static parked cars built on the PC from the game's own simple_traffic (tools/build_static_cars.py): never committed
+mod/beamng_earth/levels/beamng_earth/art/shapes/beamngEarth/cars/

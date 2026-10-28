@@ -1371,6 +1371,9 @@ class Server:
             park = parkingmod.clear_of(park, props, drives)
             park = parkingmod.tile_lot_spots(anchor.frame, tx, ty, self.mapdata, elev, items, park)
             park = gasstationsmod.clear_park(park, fuel)
+            if streetlifemod.ENABLED and streetlifemod.STATIC_CARS:     # still cars on a share of the spots
+                cars, park = streetlifemod.static_park(anchor.frame, park, town=bool(town))
+                props.extend(cars)
             buildingsmod.brick_walks(walks, items, anchor.lat, anchor.lon)
         mesh = roadmeshmod.build(anchor.frame, chunks, elev, (x0, y0, 0.0),
                                  DETAIL_ROAD_LIFT if self.near_visual == "detail" else 0.0,

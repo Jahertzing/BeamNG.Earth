@@ -480,6 +480,41 @@ class DoorTest(unittest.TestCase):
         self.assertAlmostEqual(n[0, 1], 19.8, delta=0.3, msg="from the front wall")
         self.assertAlmostEqual(n[-1, 1], 10.1, delta=0.3, msg="to the road's edge")
 
+    def test_no_driveway_through_another_building(self):
+        for k in range(40):
+            spec = bld.plan(rect(k * 40, 20, 12, 9), {"class": "house"}, 0, 39.2, -76.9)
+            if spec.wall:
+                break
+        shed = bld.plan(rect(k * 40 - 2, 12.5, 16, 4), {"class": "garage"}, 0, 39.2, -76.9)
+        road = [(np.array([(-50.0, 6.0), (2000.0, 6.0)]), 4.0, "residential", True)]
+        drives = []
+        bld.doors([(spec, 0.0, 0.0), (shed, 0.0, 0.0)], road, 0.0, 0.0, drives)
+        self.assertEqual([d for d in drives if np.array(d["n"])[0, 1] > 19.0], [])
+
+    def test_driveway_on_a_front_cut_into_short_walls(self):
+        # a DRCOG-like roofprint: a 12 m front with a 1.5 m deep, 4 m wide recess in its middle (4 m walls only)
+        def ring(x):
+            return np.array([(x, 20), (x + 4, 20), (x + 4, 21.5), (x + 8, 21.5), (x + 8, 20), (x + 12, 20), (x + 12, 29),
+                             (x, 29)], np.float64)
+        road = [(np.array([(-50.0, 6.0), (2000.0, 6.0)]), 4.0, "residential", True)]
+        made = 0
+        for k in range(40):
+            spec = bld.plan(ring(k * 40), {"class": "house"}, 0, 39.2, -76.9)
+            if not spec.wall:
+                continue
+            drives = []
+            bld.doors([(spec, 0.0, 0.0)], road, 0.0, 0.0, drives)
+            if not spec.door:
+                continue
+            self.assertEqual(len(drives), 1)
+            n = np.array(drives[0]["n"])
+            self.assertAlmostEqual(n[-1, 1], 10.1, delta=0.3, msg="to the road's edge")
+            x = n[0, 0] - k * 40
+            self.assertTrue(1.5 < x < 3.0 or 9.0 < x < 10.5, x)    # at an end of the whole front
+            self.assertIsNone(spec.drive)                           # (no garage door cut in a 4 m wall)
+            made += 1
+        self.assertGreater(made, 0)
+
     def test_porches_on_the_front_of_some_houses(self):
         with_porch = 0
         for k in range(40):

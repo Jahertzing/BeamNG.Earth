@@ -73,6 +73,7 @@ M.SCHEMA = {
   parkedCars = { kind = 'enum', default = 'normal', values = { 'off', 'few', 'normal', 'many' }, label = 'Parked cars' },
   -- mailboxes, trash carts, bus stops, driveway cars and the other small things along the streets (server streetlife.py)
   streetLife = { kind = 'bool', default = true, label = 'Street life' },
+  staticCars = { kind = 'bool', default = true, label = 'Cars parked along the streets' },
   -- roads near the player (roads.lua; the server's --roads on)
   roads = { kind = 'bool', default = true, label = 'Roads' },
   -- the Denver region's DRCOG planimetrics (server drcog.py): launcher.py reads this file and starts the server with
@@ -111,7 +112,7 @@ M.SCHEMA = {
 }
 M.ORDER = { 'theDriveTime', 'theDriveAutodrive', 'rebaseDistance', 'viewDistanceMode', 'viewDistanceKm', 'hazeStrength',
   'colorGrade', 'skyMode', 'clouds', 'weatherMode', 'realGravity', 'groundCover', 'groundCoverDensity', 'groundCoverDistance',
-  'groundGrass', 'grassCards', 'rocks', 'roads', 'cityGlow', 'aiTraffic', 'parkedCars', 'streetLife', 'drcog', 'lidarHeights', 'dashboardSatellite', 'hudVisible', 'statusBar',
+  'groundGrass', 'grassCards', 'rocks', 'roads', 'cityGlow', 'aiTraffic', 'parkedCars', 'streetLife', 'staticCars', 'drcog', 'lidarHeights', 'dashboardSatellite', 'hudVisible', 'statusBar',
   'placeNamesOnline', 'creditsVisible', 'beammpOnLaunch',
   'creditsCorner', 'creditsSize', 'cacheCapGb', 'devOutlineKm', 'devMapKm' }
 
@@ -294,6 +295,7 @@ M.APPLY = {
   aiTraffic = function(v) require('beamngEarth/navgraph').setMode(v) end,     -- (from the next level start)
   parkedCars = function(v) require('beamngEarth/navgraph').setParked(v) end,  -- (from the next level start)
   streetLife = function(v) local t = require('beamngEarth/trees') t.setGroupEnabled(t.STREET_LIFE, v) end,
+  staticCars = function(v) local t = require('beamngEarth/trees') t.setGroupEnabled(t.STATIC_CARS, v) end,
   roads = function(v)
     local core = ext('beamngEarth_core')
     if core and core.setRoadsEnabled then core.setRoadsEnabled(v) else require('beamngEarth/roads').setEnabled(v) end

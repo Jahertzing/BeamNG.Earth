@@ -588,6 +588,45 @@ def clear_of(rows, props, r=CLEAR_M):
     return out
 
 
+# Static parked cars (the drive, 2026-10-28: the stock system animates only the player's parked amount, 16, over the
+# ~800 spots near the player: ~2 % of the curbs and lots had a car, downtown Castle Rock's kerbs stood empty): a share
+# of the tile's parking spots gets a still car (trees.lua 'car_' .. model groups, tools/build_static_cars.py's shapes:
+# front at local +x, tyres on z 0), the rest stays for the stock cars. The models built (their US shares renormalised).
+STATIC_CARS = os.environ.get("BNE_STATIC_CARS", "on").lower() not in ("off", "0", "false", "no")
+STATIC_MODELS = ("midsize", "fullsize", "pessima", "covet", "lansdale", "roamer", "pickup", "van", "sunburst2", "wendover")
+STATIC_SHARE = {(False, True): 0.30, (False, False): 0.45, (True, True): 0.40, (True, False): 0.45}   # (lot / drive, town)
+STATIC_FLIP = 0.5           # lot and driveway cars backed in (curb cars face the traffic's way)
+
+
+def static_park(frame, spots, town=True):
+    """(rows, spots left) of a road tile's parking spots [x, y, z, heading(, 1 = lot / driveway)] (anchor frame): a
+    hashed share (STATIC_SHARE) gets a still car, its model by the fleet's shares (CARS, STATIC_MODELS), its paint by
+    the row's rank; the spots left over are the stock parked cars'."""
+    if not spots:
+        return [], spots
+    P = np.array([(s[0], s[1]) for s in spots], np.float64)
+    la, lo, _ = frame.enu_to_geodetic(P[:, 0], P[:, 1], 0.0)
+    la, lo = np.ravel(la), np.ravel(lo)
+    total = sum(CARS[m][2] for m in STATIC_MODELS)
+    rows, left = [], []
+    for s, a, o in zip(spots, la, lo):
+        lot = len(s) > 4
+        k = _key((a, o))
+        if _h01(k, "static") >= STATIC_SHARE[(lot, bool(town))]:
+            left.append(s)
+            continue
+        r, acc, model = _h01(k, "model") * total, 0.0, STATIC_MODELS[0]
+        for m in STATIC_MODELS:
+            acc += CARS[m][2]
+            if r < acc:
+                model = m
+                break
+        yaw = float(s[3]) + (180.0 if lot and _h01(k, "flip") < STATIC_FLIP else 0.0)
+        rows.append(["car_" + model, round(float(s[0]), 2), round(float(s[1]), 2), round(float(s[2]), 2),
+                     round(yaw % 360.0, 1), 1.0, CARS[model][1], round(_h01(k, "paint"), 3)])
+    return rows, left
+
+
 BUS_STOP_CLEAR_M = 12.0     # m of curb kept free of parked cars each side of a bus stop's sign (a bus stop zone: 60-80 ft)
 
 

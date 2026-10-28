@@ -216,6 +216,48 @@ M.STREET_LIFE = { 'mailbox', 'mailcbu', 'cart_trash', 'cart_recycle', 'bussign',
   'planter' }
 for _, g in ipairs(M.STREET_LIFE) do M.GROUP_MAX_M[g] = 250 end
 M.GROUP_MAX_M.bussign, M.GROUP_MAX_M.busshelter = 400, 400
+-- static parked cars (server streetlife.static_park: a share of the curb, lot and driveway spots; the staticCars setting):
+-- the stock simple_traffic cars as props, one shape per model and paint (tools/build_static_cars.py, built on the PC
+-- from the game's own content into cars/, its cars.json listing them). A group per model ('car_' .. model), shown at
+-- scale 1 whatever the row's height (M.FIXED_SCALE: a model's colours share its size). No cars.json: no groups (the
+-- server's rows are dropped as an unknown group's).
+M.CARS_DIR = BNE .. 'cars/'
+M.STATIC_CARS = {}
+M.FIXED_SCALE = {}
+M.CAR_MAX_M = 300
+function M.installCars(cars)
+  if type(cars) ~= 'table' then return 0 end
+  local n = 0
+  for model, c in pairs(cars) do
+    if type(c) == 'table' and type(c.files) == 'table' and tonumber(c.height) then
+      local list = {}
+      for _, f in ipairs(c.files) do
+        list[#list + 1] = { M.CARS_DIR .. tostring(f):gsub('%.dae$', ''), tonumber(c.height) }
+      end
+      if #list > 0 then
+        local g = 'car_' .. model
+        if not M.CATALOG[g] then M.STATIC_CARS[#M.STATIC_CARS + 1] = g; n = n + 1 end
+        M.CATALOG[g] = list
+        M.FIXED_SCALE[g] = true
+        M.GROUP_MAX_M[g] = M.CAR_MAX_M
+      end
+    end
+  end
+  table.sort(M.STATIC_CARS)
+  -- (the level loads its materials files at its start; one built after that is loaded here)
+  local mats = M.CARS_DIR .. 'static_cars.materials.json'
+  if n > 0 and rawget(_G, 'loadJsonMaterialsFile') and (not FS or FS:fileExists(mats)) then
+    pcall(loadJsonMaterialsFile, mats)
+  end
+  return n
+end
+do
+  local read = rawget(_G, 'jsonReadFile')
+  if read and (not FS or FS:fileExists(M.CARS_DIR .. 'cars.json')) then
+    local ok, cars = pcall(read, M.CARS_DIR .. 'cars.json')
+    if ok then M.installCars(cars) end
+  end
+end
 -- billboards along the motorways (server guidesigns.billboards): West Coast USA's drag-strip billboard, 8 x 4 m on its
 -- pole, and one of its 23 ads on the same spot (bbad01 .. bbad23); seen from far, the ad never collides
 M.CATALOG.billboard = { { WCA .. 'objects/dragbillboard', 11.95 } }
@@ -372,6 +414,7 @@ function M.pick(group, h, rank)
     cands = { best }
   end
   local v = cands[math.floor(rank * 7919) % #cands + 1]
+  if M.FIXED_SCALE[group] then return v[1], 1 end
   return v[1], math.max(0.3, math.min(2.5, h / v[2]))
 end
 
