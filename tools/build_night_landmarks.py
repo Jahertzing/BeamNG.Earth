@@ -1,10 +1,12 @@
 """build_night_landmarks.py: the night's landmarks (nightglow.lua shows them after dusk), beside the building materials
 (mod/.../art/shapes/beamngEarth/):
 
-  bne_city_glow.dae    a city's sky glow: an open cylinder, radius 1 and 1 high (the mod scales it to the city), both
-                       faces, material bne_city_glow (additive, its light falling off upward: bne_city_glow_e.png). From
-                       outside the city a dome of light over it on the horizon; from inside, the sky glowing all round.
-  bne_city_glow_e.png  the glow's falloff: brightest at the ground (v = 0), an exponential fade to nothing at the top
+  bne_city_glow.dae    a city's sky glow: a dome, radius 1 and 1 high (the mod scales it to the city), both faces,
+                       material bne_city_glow (additive), u its distance from the axis (0 over the centre, 1 at the rim).
+                       Its light fades to nothing toward the rim (bne_city_glow_e.png), so it has no edge: from outside
+                       a soft brightening over the city, from inside the sky brighter overhead. (An open cylinder was
+                       first: its wall and rim showed as hard edges across the sky, 2026-10-28.)
+  bne_city_glow_e.png  the glow's falloff along u: full over the centre, a smooth fade to nothing at the rim
   bne_star.dae         the Castle Rock star (the town's star on top of the Rock, lit every winter since 1936, facing
                        I-25 to the west): STAR_BULBS bulbs round a five-pointed star STAR_H m high, in the y-z plane
                        (facing +x and -x), its foot at the origin, material bne_star_bulb
@@ -24,28 +26,37 @@ import dae  # noqa: E402
 
 OUT = os.path.join(HERE, "..", "mod", "beamng_earth", "levels", "beamng_earth", "art", "shapes", "beamngEarth")
 GLOW_SEGMENTS = 48
+GLOW_RINGS = 16
 STAR_H = 14.0           # m (photos: about the height of the flagpole beside it, ~3 storeys)
 STAR_BULBS = 100        # the town's count
 BULB_M = 0.45
 
 
 def city_glow():
-    ang = np.linspace(0.0, 2.0 * math.pi, GLOW_SEGMENTS + 1)
-    P, UV, T = [], [], []
-    for k, a in enumerate(ang):
-        for z in (0.0, 1.0):
-            P.append((math.cos(a), math.sin(a), z))
-            UV.append((k / GLOW_SEGMENTS, z))
+    """The dome: GLOW_RINGS rings of GLOW_SEGMENTS (a quarter circle in profile, so it meets the ground upright under
+    the city's edge where its light is gone), a vertex at the top."""
+    P, UV, T = [(0.0, 0.0, 1.0)], [(0.0, 0.5)], []
+    for i in range(1, GLOW_RINGS + 1):
+        r = i / GLOW_RINGS
+        z = math.sqrt(max(0.0, 1.0 - r * r))
+        for k in range(GLOW_SEGMENTS):
+            a = 2.0 * math.pi * k / GLOW_SEGMENTS
+            P.append((r * math.cos(a), r * math.sin(a), z))
+            UV.append((r, 0.5))
+    ring = lambda i, k: 1 + (i - 1) * GLOW_SEGMENTS + k % GLOW_SEGMENTS      # noqa: E731
     for k in range(GLOW_SEGMENTS):
-        i = 2 * k
-        a, b, c, d = i, i + 2, i + 3, i + 1          # (bottom k, bottom k+1, top k+1, top k)
-        T += [(a, b, c), (a, c, d), (a, c, b), (a, d, c)]     # both faces
+        a, b = ring(1, k), ring(1, k + 1)
+        T += [(0, a, b), (0, b, a)]                  # both faces
+    for i in range(1, GLOW_RINGS):
+        for k in range(GLOW_SEGMENTS):
+            a, b, c, d = ring(i, k), ring(i, k + 1), ring(i + 1, k + 1), ring(i + 1, k)
+            T += [(a, d, c), (a, c, b), (a, c, d), (a, b, c)]
     dae.write_grid_dae(os.path.join(OUT, "bne_city_glow.dae"), np.ravel(P), np.ravel(UV), np.ravel(T),
                        material="bne_city_glow")
-    v = np.linspace(0.0, 1.0, 256)                   # image row 0 = the top (v = 1)
-    fall = np.exp(-4.0 * v) * (1.0 - v) ** 2         # an exponential fade, nothing at the top
+    u = np.linspace(0.0, 1.0, 256)
+    fall = (1.0 - u * u) ** 3                        # (smooth: no step anywhere, nothing at the rim)
     col = np.array([1.0, 0.72, 0.42])                # sodium and warm LED light scattered in the air
-    img = (fall[::-1, None, None] * col[None, None, :]).repeat(4, axis=1)
+    img = (fall[None, :, None] * col[None, None, :]).repeat(4, axis=0)
     Image.fromarray(np.clip(img * 255 + 0.5, 0, 255).astype(np.uint8)).save(os.path.join(OUT, "bne_city_glow_e.png"))
 
 

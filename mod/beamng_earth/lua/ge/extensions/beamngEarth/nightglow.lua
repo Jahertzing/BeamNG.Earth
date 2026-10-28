@@ -2,9 +2,10 @@
 -- glow and the Castle Rock star. Both are render-only TSStatics of the mod's own shapes (tools/build_night_landmarks.py)
 -- placed from latitude / longitude in the anchor's frame; their materials (bne_city_glow, bne_star_bulb) are lit by
 -- nightlights.lua, so by day they draw nothing (the glow is additive black) or a dark frame of bulbs.
---   * The glow: an open cylinder of additive light falling off upward over every big place (Natural Earth's populated
---     places, the map's place names: maplayers.js) within GLOW_NEAR_M, its radius and height by the place's rank
---     (GLOW_R: Denver 1, Boulder 7). From outside a dome of light on the horizon; from inside, the sky glowing all round.
+--   * The glow: a dome of additive light over every big place (Natural Earth's populated places, the map's place names:
+--     maplayers.js) within GLOW_NEAR_M, its radius and height by the place's rank (GLOW_R: Denver 1, Boulder 7), its
+--     light fading to nothing at the rim: from outside a soft brightening over the city, from inside the sky brighter
+--     overhead. (An open cylinder first: its wall and rim drew as hard edges across the sky.)
 --   * The star: on top of the Rock in Castle Rock (STAR), facing I-25 to the west, lit in its season (nightlights.lua).
 local M = {}
 
@@ -77,8 +78,8 @@ local function make(key, shape, x, y, z, sx, sy, sz)
 end
 
 -- Every frame (core.lua; the work every CHECK_S): the glows and the star near the camera, in anchor's frame. The
--- glows only at night (night: nightlights.lua's state): by day their additive cylinders still take the fog pass's
--- in-scattered light (haze.lua's aerosol, the height fog), so each one drew as a pale ring kilometres wide.
+-- glows only at night (night: nightlights.lua's state): by day their additive shapes still take the fog pass's
+-- in-scattered light (haze.lua's aerosol, the height fog), so each one drew as a pale dome kilometres wide.
 function M.update(anchor, anchorId, night)
   local now = os.clockhp()
   if now - lastCheck < M.CHECK_S then return end
