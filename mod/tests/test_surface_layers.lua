@@ -93,7 +93,11 @@ do
   mShrub:registerObject('m_shrubs_near')
   gc.TEX_LINEAR = { m_long_grass_distant = { 0.1, 0.2, 0.05 }, m_shrubs_near = { 0.1, 0.1, 0.1 } }
   T.check(gc.ensure() == true, 'ensure makes the objects ' .. tostring(gc.status().error))
-  T.check(gc.setTint({ 140, 120, 80 }) == 1, 'tint: the grass material set')
+  T.check(gc.TINT == false and gc.setTint({ 140, 120, 80 }) == 0 and mLong.fields.baseColorFactor == '0.9 0.95 0.8 1',
+    'tint off (the default): no material touched')
+  gc.setTintEnabled(false)
+  T.check(mLong.fields.baseColorFactor == '0.9 0.95 0.8 1', 'tint off again: a stock material not rewritten')
+  gc.setTintEnabled(true)
   local bcf = tostring(mLong.fields.baseColorFactor)
   T.check(bcf ~= '0.9 0.95 0.8 1' and mShrub.fields.baseColorFactor == nil, 'tint: grass tinted, shrubs not (' .. bcf .. ')')
   T.check(gc.setTint({ 141, 120, 80 }) == 0, 'tint: a tiny change is not applied (a material reload each)')

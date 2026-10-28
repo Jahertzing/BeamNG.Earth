@@ -105,7 +105,10 @@ M.FADE_SHARE = 0.5
 -- (surface.grass_tint, the terrain message's grassTint; detail mode). TEX_LINEAR: each material's own texture's mean
 -- linear colour over its opaque texels (measured from the stock textures), TINT_STRENGTH how far toward the photo
 -- (1: the photo's colour; geometric), TINT_BRIGHT a brightness on top (lit blades vs the photo's ground).
-M.TINT = true
+-- Off by default (2026-10-28): each change is a Material flush + reload of a material the GroundCover cells draw with, and
+-- Jeff's first drive with the tint ended in an engine crash (a main-thread call through a freed object, 9 s after a
+-- rebase, during the terrain block changes that set the tint). Until the tint is made without a reload, off.
+M.TINT = false
 M.TINT_STRENGTH = 0.7
 M.TINT_BRIGHT = 1.0
 M.TINT_MIN_CHANGE = 0.03    -- a smaller change is not applied (each costs a material reload)
@@ -291,7 +294,7 @@ function M.tintFactor(orig, tex, rgb, strength, bright)
 end
 
 local function applyTint()
-  if not tintRgb then return 0 end
+  if not tintRgb or not M.TINT then return 0 end     -- (off: no material is touched at all)
   local n = 0
   for name, orig in pairs(tintMats) do
     local tex = M.TEX_LINEAR[name]
@@ -325,10 +328,11 @@ end
 -- Tint on / off (the settings page): off puts the stock colours back.
 function M.setTintEnabled(on)
   M.TINT = on and true or false
+  local was = tintApplied
   tintApplied = {}
   if not M.TINT then
     for name, orig in pairs(tintMats) do
-      local m = scenetree.findObject(name)
+      local m = was[name] and scenetree.findObject(name)     -- (only the ones tinted: no reload of a stock one)
       if m then
         m:setField('baseColorFactor', 0, string.format('%.4f %.4f %.4f %.4f', orig[1], orig[2], orig[3], orig[4]))
         pcall(function() m:flush() end)
