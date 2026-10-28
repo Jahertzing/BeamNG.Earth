@@ -386,6 +386,13 @@ class FakeNet:
         return type("H", (), {"day": {"requests": 0}})()
 
 
+class HostRateTest(unittest.TestCase):
+    def test_nothing_to_fetch(self):
+        # (every map cell cached: the cell lane's seconds per request is 0, the dry run divided by it)
+        self.assertEqual(preload.host_rate(FakeNet(), "h", 4, 0.0), 100.0)
+        self.assertEqual(preload.host_rate(FakeNet(), "h", 4, 1.0), 2.0)
+
+
 class FakeImagery:
     """_paths / _download like imagery.Imagery's export sources: has(src, x, y) -> data for that child?"""
 
