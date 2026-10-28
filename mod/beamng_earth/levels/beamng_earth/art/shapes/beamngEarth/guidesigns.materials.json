@@ -80,9 +80,12 @@
       {},
       {}
     ],
-    "translucent": false,
+    "translucent": true,
     "alphaTest": true,
-    "alphaRef": 110
+    "alphaRef": 4,
+    "translucentBlendOp": "LerpAlpha",
+    "translucentZWrite": false,
+    "castShadows": false
   },
   "bne_gsign_textk": {
     "name": "bne_gsign_textk",
@@ -105,9 +108,12 @@
       {},
       {}
     ],
-    "translucent": false,
+    "translucent": true,
     "alphaTest": true,
-    "alphaRef": 110
+    "alphaRef": 4,
+    "translucentBlendOp": "LerpAlpha",
+    "translucentZWrite": false,
+    "castShadows": false
   },
   "bne_gsign_steel": {
     "name": "bne_gsign_steel",
