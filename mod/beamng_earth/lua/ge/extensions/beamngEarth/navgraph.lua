@@ -104,6 +104,7 @@ local cutNames = {}     -- their names
 M.MERGE = true
 M.MERGE_S = 0.5           -- (it runs with the guard, every GUARD_S at most)
 local merge = require('beamngEarth/mergeassist')
+local pop = require('beamngEarth/population')   -- (above its first use: the respawn guard reads it too)
 local lastNodes = nil   -- the node table of the graph applied last (toNodes': positions, links, edges with ramp flags)
 local capped = {}       -- traffic car id -> the merge assist's speed cap on it
 local lastMerge = -math.huge
@@ -820,7 +821,6 @@ M.BUSY_MORE = 4         -- busy is at least this many more than normal
 -- teleporting them ahead. While it runs the guard below moves no car (the population does) and the game's own
 -- recycling is off.
 M.POPULATION = false
-local pop = require('beamngEarth/population')
 
 function M.setPopulation(v)
   M.POPULATION = v and true or false
