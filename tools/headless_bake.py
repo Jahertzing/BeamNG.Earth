@@ -110,18 +110,20 @@ LISTEN_RE = re.compile(r"earthd listening on 127\.0\.0\.1:(\d+)")
 MOD_VERSION = re.search(r"MOD_VERSION = '([^']+)'", (modsim.MOD_DIR / "core.lua").read_text()).group(1)
 # both modes: never the game's cores, no map tiles, and no AI road graph (navgraph: 1.2 s a block in the road processes,
 # a quarter of their CPU in the bake of 2026-10-28 13:18, and nothing keeps it: the game builds its own as it drives)
-QUIET = ["--load-boost", "off", "--map-tiles", "off", "--traffic", "off"]
+# ... one block process (the client never waits on a prefetch: 1.6 GB less a server), load_progress every 0.1 s (the
+# client moves on when the tiles round it are done; the game's 0.5 s made it learn that late)
+QUIET = ["--load-boost", "off", "--map-tiles", "off", "--traffic", "off", "--block-lanes", "1", "--progress-s", "0.1"]
 THROTTLE = ["--workers", "1", "--road-processes", "1"] + QUIET      # --mode game
 GAME_EXES = ("BeamNG.drive.x64.exe", "BeamNG.drive.x64")    # the game itself (not its launcher BeamNG.drive.exe)
 FAR_PER_JOB = (1, 3)        # --mode alone: far workers per server, least and most (geometry 20 ms a tile; textures
                             # render in the server process while de-shadowing is on: more workers buy nothing)
-ROAD_PER_JOB = (2, 4)       # ... road processes: 4 = roads.BUILD_PER_POSE, the tiles a pose dispatches at once
+ROAD_PER_JOB = (2, 6)       # ... road processes (the server's --roads-per-pose dispatches as many a pose)
 # Memory: every process of a server tree grows to about PROC_GB private over a bake (the caches of DEM, map cells and
 # imagery in each; a server of 3 far + 2 road workers, 9 processes, was 14 GB after an hour, 2026-10-28 evening: four of
 # them put the commit charge at 106 GB on a 64 GB machine, the pagefile at 42 GB, and the bake crawled), and
 # RESERVE_GB stays free for the OS and the page cache.
 PROC_GB = 1.6               # a process of a server tree, private, after an hour
-FIXED_PROCS = 4             # the server, two block lanes, the far-building worker
+FIXED_PROCS = 3             # the server, one block lane (--block-lanes 1), the far-building worker
 SERVER_FIXED_GB = FIXED_PROCS * PROC_GB
 WORKER_GB = PROC_GB         # a far or road worker
 RESERVE_GB = 8.0            # left free
@@ -239,8 +241,9 @@ def server_command(user_dir, port=0, cache_dir=None, win=IS_WIN, mode="game", wo
         cmd += THROTTLE
     else:
         far, road = (1, 1) if mode == "game" else alone_workers()     # (alone: the memory free now)
-        cmd += ["--workers", str(int(workers if workers is not None else far)),
-                "--road-processes", str(int(road_processes if road_processes is not None else road))] + QUIET
+        road = int(road_processes if road_processes is not None else road)
+        cmd += ["--workers", str(int(workers if workers is not None else far)), "--road-processes", str(road)] + QUIET
+        cmd += ["--roads-per-pose", str(max(4, road))]       # (a pose dispatches a tile per road process)
     if mode == "game":
         cmd += ["--nice", "0"] if win else ["--nice", "19", "--sched", "idle"]
     else:           # (Windows: the class is start_server's; --nice 0 keeps the server from changing it)
