@@ -68,7 +68,28 @@ T.check(o.trafficMode == 'disabled' and o.trafficParked == 'disabled', 'freeroam
 T.check(N.takeChoice(o).traffic, 'taken twice (level start runs twice): the first choice kept')
 N.restoreChoice()
 T.check(o.trafficMode == 'enabled' and o.trafficParked == 'enabled', 'the player\'s options back afterwards')
-T.check(not N.takeChoice({ trafficMode = 'fromSetting', trafficParked = 'disabled' }).traffic, 'fromSetting: off')
+T.check(N.MODE == 'normal' and N.takeChoice({ trafficMode = 'fromSetting', trafficParked = 'disabled' }).traffic,
+  'fromSetting (freeroam\'s default): the AI traffic setting, normal by default')
+T.check(N.choice.mode == 'normal' and not N.choice.parked, '... its mode kept for the amount; no parked cars')
+N.restoreChoice()
+N.setMode('off')
+T.check(not N.takeChoice({ trafficMode = 'fromSetting', trafficParked = 'disabled' }).traffic, 'fromSetting, setting off: off')
+N.restoreChoice()
+T.check(N.takeChoice({ trafficMode = 'enabled', trafficParked = 'disabled' }).traffic and not N.choice.mode,
+  'traffic picked at level start: on whatever the setting, the game\'s amount')
+N.restoreChoice()
+N.setMode('busy')
+T.check(not N.takeChoice({ trafficMode = 'disabled', trafficParked = 'disabled' }).traffic, 'disabled at level start: off')
+N.restoreChoice()
+T.check(N.setMode('nonsense') == 'busy', 'setMode: an unknown mode is ignored')
+N.setMode('normal')
+T.check(N.modeAmount('off', 10) == 0 and N.modeAmount('normal', 10) == -1 and N.modeAmount('normal', nil) == -1,
+  'modeAmount: off none, normal the game\'s own')
+T.check(N.modeAmount('light', 10) == 5 and N.modeAmount('light', 2) == 2 and N.modeAmount('light', 4) == 3,
+  'modeAmount: light about half, at least 3 (never more than normal)')
+T.check(N.modeAmount('busy', 10) == 15 and N.modeAmount('busy', 4) == 8 and N.modeAmount('busy', 30) == N.BUSY_MAX,
+  'modeAmount: busy one and a half, at least 4 more, at most BUSY_MAX')
+T.check(N.modeAmount('busy', nil) == -1, 'modeAmount: the game\'s amount unknown: the game\'s own')
 T.check(not N.takeChoice(nil).parked, 'no freeroam: off (the radial menu still works)')
 settings = { getValue = function(k) if k == 'trafficParkedVehicles' then return false end end }
 T.check(not N.takeChoice({ trafficMode = 'enabled', trafficParked = 'enabled' }).parked,
@@ -91,5 +112,27 @@ do
   T.check(N.aheadSpot(150, 0, 30, 0, box) == nil, 'aheadSpot: near the block edge ahead: no room, behind')
   local _, _, _, _, _, h2 = N.aheadSpot(0, 0, 0, -30, box)
   T.check(h2 and h2 <= 256 - N.GUARD_M - 20, 'aheadSpot: south, limited by the box too')
+end
+-- a rebase (core finishRebase): the graph in the new frame, its signals' stop points, directions and heads too
+do
+  local c, sn = math.cos(math.rad(10)), math.sin(math.rad(10))
+  local xf = { apply = function(_, x, y, z) return c * x - sn * y - 15000, sn * x + c * y + 20, z - 3 end,
+               rotate = function(_, x, y, z) return c * x - sn * y, sn * x + c * y, z end }
+  local g0 = { anchor = 7, serial = 3, nodes = { a = { 15000, -20, 5, 4 } }, edges = { { 'a', 'a' } }, rules = { mph = true },
+    signals = { { j = 'a', kind = 'signal', app = { { 'a', 15010, -20, 5, 1, 0, 1, 15012, -24, 5, 90 } } } } }
+  local g1 = N.moved(g0, xf, 8)
+  local n = g1.nodes.a
+  T.check(g1.anchor == 8 and g1.serial == 3 and g1.edges == g0.edges and g1.rules == g0.rules,
+    'moved: the new anchor, the same edges and rules')
+  T.check(math.abs(n[1] - (c * 15000 + sn * 20 - 15000)) < 1e-6 and math.abs(n[3] - 2) < 1e-9 and n[4] == 4,
+    'moved: a node through the transform, its radius kept')
+  T.check(g0.nodes.a[1] == 15000, 'moved: the old graph left as it was')
+  local a = g1.signals[1].app[1]
+  T.check(a[1] == 'a' and a[7] == 1 and math.abs(a[5] - c) < 1e-9 and math.abs(a[6] - sn) < 1e-9,
+    'moved: a signal\'s direction turned with the frame')
+  T.check(math.abs(a[11] - 80) < 1e-9 and math.abs(a[2] - (c * 15010 + sn * 20 - 15000)) < 1e-6,
+    'moved: its stop point moved, its head\'s (clockwise) heading turned')
+  T.check(g1.signals[1].kind == 'signal' and g1.signals[1].j == 'a', 'moved: the junction\'s fields kept')
+  T.check(not N.transform(xf, 8), 'transform: no graph yet: nothing')
 end
 T.done('test_navgraph')

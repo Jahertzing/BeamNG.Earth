@@ -37,6 +37,10 @@ NARROW_M = 5.5              # narrower two-way streets need slower encounters wi
 NARROW_MS = 30.0 / 3.6
 RING_MS = 30.0 / 3.6
 ENTRY_DRIVABILITY = 0.9     # stock AI yields to the ring's 1.0, even on a tangential entry
+# mph over the posted limit the AI drives on motorways and trunks (their ramps too) where limits are in mph: US
+# Interstate traffic flows about this much over (the stock AI's "legal" mode holds the edge's speed exactly, so at the
+# limit every car on I-25 drove it in lockstep and the player passed them all); the speed signs keep the posted limit
+FLOW_MPH = {"motorway": 5.0, "trunk": 3.0}
 
 
 def road_mph(feats, i, spec, mph=True, at=0.5):
@@ -109,7 +113,13 @@ def _speed_profile(xy, width, oneway, limit=math.inf):
 def driving_width(spec):
     """The width of a road's driving lanes: the drawn carriageway (spec.width) less its parking lanes and edge
     strips (roads.carriageway adds them), i.e. the class's driving width capped by the drawn one; a four-lane
-    urban arterial is all lanes."""
+    urban arterial is all lanes. Where OpenStreetMap gives the lanes (osmtags.py), the driving width the road tiles
+    paint them across (roads.lane_layout): the class rule put I-25's three to five lanes a way into 7.4 m (rural) or
+    11 m (urban), so the AI drove narrow lanes off the painted ones (Frederick to Denver, 2026-10-28)."""
+    if spec.lanes or roads.has_lane_tags(spec):
+        lay = roads.lane_layout(spec)
+        if lay is not None:
+            return float(lay["hi"] - lay["lo"])
     if spec.urban and not spec.oneway and spec.cls in roads.URBAN_ARTERIAL:
         return float(spec.width)
     w = roads.STYLE.get(spec.cls, roads.STYLE["unknown"])[0]
@@ -288,7 +298,8 @@ def build(frame, feats_list, elev, centre, urban_fn=None, window=WINDOW_M, decks
                     if nm not in nodes and nm not in pending:
                         pending[nm] = (float(q[0]), float(q[1]))
                         node_fid[nm] = fid
-                legal = road_mph(feats, i, spec, mph, at=(full[j] + full[j + 1]) / (2 * L)) * MPH
+                legal = (road_mph(feats, i, spec, mph, at=(full[j] + full[j + 1]) / (2 * L)) +
+                         (FLOW_MPH.get(spec.cls, 0.0) if mph else 0.0)) * MPH
                 target = min(legal, float(profile[j]), float(profile[j + 1]))
                 edges.append([a, b, 1 if direction else 0, lo, li, round(target, 2), driv, round(w / 2, 2)])
                 edge_fids.append(fid)
