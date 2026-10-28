@@ -1,27 +1,352 @@
 {
  "version": 1,
- "about": "Street life views (server/streetlife.py, parked cars): driveways, mailboxes, cluster boxes, carts, bus stops and downtown extras along the Front Range drive, from the street and from a low oblique",
+ "about": "Street life (server/streetlife.py): the nearest prop of each group at a few places on the Front Range drive, from the street (written by tools/streetlife_probe.py --views)",
  "defaults": {
   "date": "2026-10-20",
   "hour": 15.0,
   "weather": "clear",
   "views": [
-   {"name": "street", "agl": 1.7, "pitch": -4, "fov": 70},
-   {"name": "oblique", "agl": 28, "pitch": -40, "fov": 70}
+   {
+    "name": "oblique",
+    "agl": 28,
+    "pitch": -40,
+    "fov": 70
+   }
   ]
  },
  "places": [
-  {"id": "sl_frederick_old_town", "name": "Frederick, Old Town grid (houses, mailboxes, carts, cluster boxes)",
-   "lat": 40.0995, "lon": -104.9370, "heading": 0, "group": "streetlife", "tags": ["colorado"]},
-  {"id": "sl_frederick_subdivision", "name": "Frederick, rural lanes west of Old Town (curbside mailboxes)",
-   "lat": 40.1086, "lon": -104.9625, "heading": 90, "group": "streetlife", "tags": ["colorado"]},
-  {"id": "sl_thornton_128th", "name": "Thornton by 128th Ave (subdivision cluster boxes, driveways)",
-   "lat": 39.92848, "lon": -104.96248, "heading": 0, "group": "streetlife", "tags": ["colorado"]},
-  {"id": "sl_capitol_hill", "name": "Denver, Capitol Hill (bus stops, bike racks, USPS boxes, parked cars)",
-   "lat": 39.7330, "lon": -104.9790, "heading": 0, "group": "streetlife", "tags": ["colorado"]},
-  {"id": "sl_downtown_16th", "name": "Denver, downtown by 16th St (bus stops and shelters, planters, bike racks)",
-   "lat": 39.7475, "lon": -104.9945, "heading": 315, "group": "streetlife", "tags": ["colorado"]},
-  {"id": "sl_castle_rock", "name": "Castle Rock, downtown and the streets round it",
-   "lat": 39.3722, "lon": -104.8561, "heading": 0, "group": "streetlife", "tags": ["colorado"]}
+  {
+   "id": "sl_frederick_old_town",
+   "name": "frederick old town",
+   "lat": 40.0995,
+   "lon": -104.937,
+   "heading": 0,
+   "group": "streetlife",
+   "tags": [
+    "colorado"
+   ],
+   "views": [
+    {
+     "name": "oblique",
+     "agl": 28,
+     "pitch": -40,
+     "fov": 70
+    },
+    {
+     "name": "mailbox",
+     "lat": 40.0986588,
+     "lon": -104.9354375,
+     "heading": 325.5,
+     "agl": 1.7,
+     "pitch": -8,
+     "fov": 60,
+     "note": "frederick_old_town: mailbox 156 m from the place"
+    },
+    {
+     "name": "mailcbu",
+     "lat": 40.099558,
+     "lon": -104.937581,
+     "heading": 325.2,
+     "agl": 1.7,
+     "pitch": -8,
+     "fov": 60,
+     "note": "frederick_old_town: mailcbu 55 m from the place"
+    },
+    {
+     "name": "cart_trash",
+     "lat": 40.0995371,
+     "lon": -104.9376241,
+     "heading": 325.8,
+     "agl": 1.7,
+     "pitch": -8,
+     "fov": 60,
+     "note": "frederick_old_town: cart_recycle 58 m from the place"
+    }
+   ]
+  },
+  {
+   "id": "sl_frederick_subdivision",
+   "name": "frederick subdivision",
+   "lat": 40.1086,
+   "lon": -104.9625,
+   "heading": 0,
+   "group": "streetlife",
+   "tags": [
+    "colorado"
+   ],
+   "views": [
+    {
+     "name": "oblique",
+     "agl": 28,
+     "pitch": -40,
+     "fov": 70
+    },
+    {
+     "name": "mailbox",
+     "lat": 40.1090736,
+     "lon": -104.9603793,
+     "heading": 6.5,
+     "agl": 1.7,
+     "pitch": -8,
+     "fov": 60,
+     "note": "frederick_subdivision: mailbox 191 m from the place"
+    },
+    {
+     "name": "cart_trash",
+     "lat": 40.1088493,
+     "lon": -104.9599158,
+     "heading": 325.8,
+     "agl": 1.7,
+     "pitch": -8,
+     "fov": 60,
+     "note": "frederick_subdivision: cart_trash 219 m from the place"
+    }
+   ]
+  },
+  {
+   "id": "sl_thornton_128th",
+   "name": "thornton 128th",
+   "lat": 39.92848,
+   "lon": -104.96248,
+   "heading": 0,
+   "group": "streetlife",
+   "tags": [
+    "colorado"
+   ],
+   "views": [
+    {
+     "name": "oblique",
+     "agl": 28,
+     "pitch": -40,
+     "fov": 70
+    },
+    {
+     "name": "mailcbu",
+     "lat": 39.9279364,
+     "lon": -104.9610667,
+     "heading": 145.8,
+     "agl": 1.7,
+     "pitch": -8,
+     "fov": 60,
+     "note": "thornton_128th: mailcbu 141 m from the place"
+    },
+    {
+     "name": "cart_trash",
+     "lat": 39.9272928,
+     "lon": -104.962872,
+     "heading": 322.5,
+     "agl": 1.7,
+     "pitch": -8,
+     "fov": 60,
+     "note": "thornton_128th: cart_recycle 132 m from the place"
+    }
+   ]
+  },
+  {
+   "id": "sl_denver_capitol_hill",
+   "name": "denver capitol hill",
+   "lat": 39.733,
+   "lon": -104.979,
+   "heading": 0,
+   "group": "streetlife",
+   "tags": [
+    "colorado"
+   ],
+   "views": [
+    {
+     "name": "oblique",
+     "agl": 28,
+     "pitch": -40,
+     "fov": 70
+    },
+    {
+     "name": "mailbox",
+     "lat": 39.7337214,
+     "lon": -104.9766363,
+     "heading": 324.7,
+     "agl": 1.7,
+     "pitch": -8,
+     "fov": 60,
+     "note": "denver_capitol_hill: mailbox 216 m from the place"
+    },
+    {
+     "name": "cart_trash",
+     "lat": 39.7327362,
+     "lon": -104.9788645,
+     "heading": 325.5,
+     "agl": 1.7,
+     "pitch": -8,
+     "fov": 60,
+     "note": "denver_capitol_hill: cart_recycle 25 m from the place"
+    },
+    {
+     "name": "bussign",
+     "lat": 39.7352067,
+     "lon": -104.9789774,
+     "heading": 325.3,
+     "agl": 1.7,
+     "pitch": -8,
+     "fov": 60,
+     "note": "denver_capitol_hill: bussign 251 m from the place"
+    },
+    {
+     "name": "uspsbox",
+     "lat": 39.7312112,
+     "lon": -104.9785779,
+     "heading": 234.7,
+     "agl": 1.7,
+     "pitch": -8,
+     "fov": 60,
+     "note": "denver_capitol_hill: uspsbox 205 m from the place"
+    },
+    {
+     "name": "bikerack",
+     "lat": 39.7325516,
+     "lon": -104.9776146,
+     "heading": 324.8,
+     "agl": 1.7,
+     "pitch": -8,
+     "fov": 60,
+     "note": "denver_capitol_hill: bikerack 123 m from the place"
+    }
+   ]
+  },
+  {
+   "id": "sl_denver_downtown_16th",
+   "name": "denver downtown 16th",
+   "lat": 39.7475,
+   "lon": -104.9945,
+   "heading": 0,
+   "group": "streetlife",
+   "tags": [
+    "colorado"
+   ],
+   "views": [
+    {
+     "name": "oblique",
+     "agl": 28,
+     "pitch": -40,
+     "fov": 70
+    },
+    {
+     "name": "bussign",
+     "lat": 39.7470739,
+     "lon": -104.9946351,
+     "heading": 10.6,
+     "agl": 1.7,
+     "pitch": -8,
+     "fov": 60,
+     "note": "denver_downtown_16th: bussign 42 m from the place"
+    },
+    {
+     "name": "uspsbox",
+     "lat": 39.7468621,
+     "lon": -104.9954206,
+     "heading": 100.0,
+     "agl": 1.7,
+     "pitch": -8,
+     "fov": 60,
+     "note": "denver_downtown_16th: uspsbox 102 m from the place"
+    },
+    {
+     "name": "bikerack",
+     "lat": 39.7470332,
+     "lon": -104.9950078,
+     "heading": 190.0,
+     "agl": 1.7,
+     "pitch": -8,
+     "fov": 60,
+     "note": "denver_downtown_16th: bikerack 74 m from the place"
+    }
+   ]
+  },
+  {
+   "id": "sl_highlands_ranch",
+   "name": "highlands ranch",
+   "lat": 39.548,
+   "lon": -104.97,
+   "heading": 0,
+   "group": "streetlife",
+   "tags": [
+    "colorado"
+   ],
+   "views": [
+    {
+     "name": "oblique",
+     "agl": 28,
+     "pitch": -40,
+     "fov": 70
+    },
+    {
+     "name": "mailcbu",
+     "lat": 39.5481895,
+     "lon": -104.9710292,
+     "heading": 150.6,
+     "agl": 1.7,
+     "pitch": -8,
+     "fov": 60,
+     "note": "highlands_ranch: mailcbu 86 m from the place"
+    },
+    {
+     "name": "cart_trash",
+     "lat": 39.5486661,
+     "lon": -104.9715736,
+     "heading": 27.7,
+     "agl": 1.7,
+     "pitch": -8,
+     "fov": 60,
+     "note": "highlands_ranch: cart_trash 154 m from the place"
+    }
+   ]
+  },
+  {
+   "id": "sl_castle_rock_downtown",
+   "name": "castle rock downtown",
+   "lat": 39.3722,
+   "lon": -104.8561,
+   "heading": 0,
+   "group": "streetlife",
+   "tags": [
+    "colorado"
+   ],
+   "views": [
+    {
+     "name": "oblique",
+     "agl": 28,
+     "pitch": -40,
+     "fov": 70
+    },
+    {
+     "name": "mailbox",
+     "lat": 39.3720831,
+     "lon": -104.8531679,
+     "heading": 235.5,
+     "agl": 1.7,
+     "pitch": -8,
+     "fov": 60,
+     "note": "castle_rock_downtown: mailbox 247 m from the place"
+    },
+    {
+     "name": "mailcbu",
+     "lat": 39.3707711,
+     "lon": -104.8548315,
+     "heading": 50.7,
+     "agl": 1.7,
+     "pitch": -8,
+     "fov": 60,
+     "note": "castle_rock_downtown: mailcbu 192 m from the place"
+    },
+    {
+     "name": "cart_trash",
+     "lat": 39.3719813,
+     "lon": -104.8555993,
+     "heading": 233.6,
+     "agl": 1.7,
+     "pitch": -8,
+     "fov": 60,
+     "note": "castle_rock_downtown: cart_trash 47 m from the place"
+    }
+   ]
+  }
  ]
 }
