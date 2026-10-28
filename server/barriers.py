@@ -715,17 +715,33 @@ def _clip_out(raw, exact, mapped_ids=()):
     for kind, line, z, foot, h, face, real, fid, side in raw:
         line = np.asarray(line, np.float64)
         P = np.column_stack([line, z, foot])
-        for piece in roadsmod.clip_polyline(P, x0, y0, x1, y1):
-            if len(piece) < 2 or np.hypot(*(piece[-1, :2] - piece[0, :2])) < 0.5:
-                continue
-            r0 = bool(real[0]) and np.allclose(piece[0, :2], line[0])
-            r1 = bool(real[1]) and np.allclose(piece[-1, :2], line[-1])
-            piece = roadsmod.simplify(piece, SIMPLIFY_M, SIMPLIFY_Z_M)
-            out.append({"kind": kind, "line": piece[:, :2], "z": piece[:, 2], "foot": piece[:, 3], "h": float(h),
-                        "face": int(face), "ends": (r0, r1), "fid": fid, "side": int(side),
-                        "mapped": fid in mapped_ids})
+        ok = np.isfinite(P).all(axis=1)
+        if not ok.all():
+            # (a NaN or an infinite ground height: clip_polyline's interpolation made it a NaN vertex, the tile's
+            # tunnel mesh failed to pack; Castle Rock, 2026-10-28) the finite runs only
+            import logging
+            logging.getLogger("earthd.barriers").warning(
+                "%s barrier %s: %d of %d points with a non-finite %s left out", kind, fid, int((~ok).sum()), len(ok),
+                "/".join(n for n, c in (("x/y", line), ("z", z), ("foot", foot))
+                         if not np.isfinite(np.asarray(c, np.float64)).all()))
+        for i, j in (_runs(ok, fill=0, min_n=2) if not ok.all() else [(0, len(ok) - 1)]):
+            for piece in roadsmod.clip_polyline(P[i:j + 1], x0, y0, x1, y1):
+                _piece_out(out, piece, line[i:j + 1], (real[0] or i > 0, real[1] or j < len(ok) - 1), kind, h,
+                           face, fid, side, mapped_ids)
     out.sort(key=lambda b: (b["kind"], str(b["fid"]), float(b["line"][0, 0]), float(b["line"][0, 1])))
     return out
+
+
+def _piece_out(out, piece, line, real, kind, h, face, fid, side, mapped_ids):
+    """One clipped piece of a barrier's line (k, 4: x, y, z, foot) appended to out as its dict (_clip_out)."""
+    import roads as roadsmod
+    if len(piece) < 2 or np.hypot(*(piece[-1, :2] - piece[0, :2])) < 0.5:
+        return
+    r0 = bool(real[0]) and np.allclose(piece[0, :2], line[0])
+    r1 = bool(real[1]) and np.allclose(piece[-1, :2], line[-1])
+    piece = roadsmod.simplify(piece, SIMPLIFY_M, SIMPLIFY_Z_M)
+    out.append({"kind": kind, "line": piece[:, :2], "z": piece[:, 2], "foot": piece[:, 3], "h": float(h),
+                "face": int(face), "ends": (r0, r1), "fid": fid, "side": int(side), "mapped": fid in mapped_ids})
 
 
 # --- the mesh (roadmesh.tunnel: appended to its P, T, UV, M) ----------------------------------------------------------
@@ -855,6 +871,8 @@ def mesh_into(barriers, origin, P, T, UV, M, nv):
     o = np.asarray(origin, np.float64)
     for b in barriers:
         kind = b["kind"]
+        if not all(np.isfinite(np.asarray(b[k], np.float64)).all() for k in ("line", "z", "foot", "h")):
+            continue                                    # (_clip_out leaves them out: none from tile_barriers)
         if kind == "wbeam" and any(b["ends"]):
             xy, z, foot, s = _dense(b)
         else:

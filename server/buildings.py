@@ -15,6 +15,7 @@ footprints and a ground-height function; no game state.
 """
 import os
 import hashlib
+import logging
 import math
 
 import numpy as np
@@ -1002,8 +1003,8 @@ def _inside(ring, p):
     return fast._ef.point_inside(np.asarray(ring, np.float64), float(x), float(y))     # (Rust; even-odd)
 
 
-def _box(m, c, u, hx, hy, z0, z1, mat):
-    """An axis-u box (half sizes hx along u, hy across) from z0 to z1: four sides and a top."""
+def _box(m, c, u, hx, hy, z0, z1, mat, bottom=False):
+    """An axis-u box (half sizes hx along u, hy across) from z0 to z1: four sides and a top (and its underside)."""
     v = np.array([-u[1], u[0]])
     k = [c + u * sx * hx + v * sy * hy for sx, sy in ((-1, -1), (1, -1), (1, 1), (-1, 1))]
     uv = ((0.002, 0.995), (0.012, 0.995), (0.012, 0.999), (0.002, 0.999))
@@ -1011,6 +1012,8 @@ def _box(m, c, u, hx, hy, z0, z1, mat):
         a, b = k[i], k[(i + 1) % 4]
         m.quad((a[0], a[1], z0), (b[0], b[1], z0), (b[0], b[1], z1), (a[0], a[1], z1), *uv, mat)
     m.quad(*[(p[0], p[1], z1) for p in k], *uv, mat)
+    if bottom:
+        m.quad(*[(p[0], p[1], z0) for p in k[::-1]], *uv, mat)
 
 
 def _signs(m, spec, ring, z_top, mat_idx):
@@ -1168,7 +1171,9 @@ def _porch(m, spec, base, mat_idx):
     for t in (-w / 2 + 0.15, 0.0, w / 2 - 0.15):                                                   # posts
         _box(m, c + d * t + out * (D - 0.15), d, 0.08, 0.08, base + PORCH_DECK_M, top, white)
     roof = mat_idx[spec.roof_mat] if spec.roof_mat else white
-    _box(m, c + out * (D / 2 + 0.1), d, w / 2 + 0.15, D / 2 + 0.1, top, top + 0.18, roof)          # roof
+    # the roof, with its underside: without it the porch's ceiling was see-through from the street and only the roof's
+    # end face showed, a dark bar over a post (2026-10-28's shots)
+    _box(m, c + out * (D / 2 + 0.1), d, w / 2 + 0.15, D / 2 + 0.1, top, top + 0.18, roof, bottom=True)
 
 
 def door_ground(spec, edge, along, gmax):
@@ -1378,6 +1383,9 @@ def _concat(meshes):
 KIT_FILL = 0.85     # the facade kit's details only while the tile's meshes stay under this share of max_parts meshes
 
 
+_log = logging.getLogger("earthd.buildings")
+
+
 def build_parts(specs_and_ground, lite=False, max_verts=MAX_MESH_VERTS, with_lod=False, max_parts=None):
     """build() split into meshes of at most max_verts vertices each (whole buildings per mesh): a list, [] if empty.
     Each building is built once (build draws them one by one) and the meshes joined. with_lod: each mesh carries the
@@ -1394,9 +1402,20 @@ def build_parts(specs_and_ground, lite=False, max_verts=MAX_MESH_VERTS, with_lod
             parts.append(mesh + (_concat(cur_lite) if cur_lite else None,) if with_lod and not lite else mesh)
 
     for item in specs_and_ground:
-        one = build([item], lite)
-        if one is not None and budget is not None and not lite and total + len(one[0]) > budget:
-            one = build([item], lite, kit=False)        # (over the tile's budget: no kit)
+        try:
+            one = build([item], lite)
+            if one is not None and budget is not None and not lite and total + len(one[0]) > budget:
+                one = build([item], lite, kit=False)    # (over the tile's budget: no kit)
+        except Exception as e:                          # noqa: BLE001 (the facade kit's bug: never the tile's)
+            if lite:
+                raise
+            # a facade kit / walls' depth (facadekit.py) failure takes that building's kit off, not the road tile and
+            # its buildings with it (2026-10-28: an IndexError in facadekit._cut failed whole tiles, 5 times each)
+            spec = item[0]
+            c = np.asarray(spec.ring, np.float64)[:, :2].mean(0)
+            _log.warning("buildings: facade kit failed for a building (seed %r, centre %.1f, %.1f, %s): %s: %s; built "
+                         "without it", spec.seed, c[0], c[1], spec.cls or "-", type(e).__name__, e)
+            one = build([item], lite, kit=False)
         if one is None:
             continue
         total += len(one[0])

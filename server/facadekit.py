@@ -135,6 +135,10 @@ SMALL_W, SMALL_H, SMALL_SILL = 0.9, 1.2, 1.25   # ... this size, their sill this
 BLANK_SIDE_L = 9.0                  # m: side walls shorter than this ...
 BLANK_SHARE = 0.4                   # ... have no windows on this share of houses
 WINDOW_CLEAR_M = 0.05               # m a varied window's trims keep from the door's / garage door's frame, other windows
+# A floor too low for the standard sash (its 0.85 m sill + 1.75 m under the eave's 0.2 m: walls under ~2.8 m, e.g. a
+# 2.5 m ranch house's) had no windows at all (buildings.house_window_slots); with the variety on it gets low windows
+# in the same bays: the sill LOW_SILL over the floor, the head LOW_HEAD_GAP under the eave, LOW_MIN_H tall at least.
+LOW_SILL, LOW_HEAD_GAP, LOW_MIN_H = 0.75, 0.2, 1.0
 WAINSCOT_TOL = 0.1                  # m an opening may reach down behind a stone base band (a house's sill: 5 cm)
 DOOR_CLEAR_M = 0.05                 # m kept between an opening and a door / garage door frame
 # The plaster sheet's window openings (x0, y0, x1, y1 px of 1024, image top first) per band (buildings.BAND_TALL,
@@ -208,6 +212,57 @@ class Win:
                 self.zf - SILL_H, self.zf + self.h + HEAD_H)
 
 
+def low_windows(spec, L, z_eave, edge):
+    """[Win] of a house wall's floors too low for the standard sash (house_window_slots leaves them out): low windows
+    (kind "low", no native quad: s_std None) in the same bays, skipping the middle bay of an odd ground floor (the
+    door's) and the garage door's place, as house_window_slots does."""
+    nb = int(L // B.HOUSE_BAY_M)
+    if nb < 1 or L < 2.0:
+        return []
+    gs = garage_span(spec, edge, L) if edge is not None else None
+    base = z_eave - spec.floors * spec.floor_h
+    door_wall = bool(spec.door) and spec.door[0] == edge
+    out = []
+    for f in range(spec.floors):
+        if base + f * spec.floor_h + B.WIN_SILL + B.WIN_H <= z_eave - 0.2:
+            continue                                    # (the standard sash fits there: a slot)
+        zf = base + f * spec.floor_h + LOW_SILL
+        h = min(B.WIN_H, min(base + (f + 1) * spec.floor_h, z_eave) - LOW_HEAD_GAP - zf)
+        if h < LOW_MIN_H:
+            continue
+        for k in range(nb):
+            if f == 0 and nb % 2 == 1 and k == nb // 2 and door_wall:
+                continue                                # (the front door's place: on its own wall only)
+            s = L * (k + 0.5) / nb
+            if f == 0 and gs is not None and s + B.WIN_W / 2 > gs[0] - 0.3 and s - B.WIN_W / 2 < gs[1] + 0.3:
+                continue
+            w = Win(s, zf, "low", 1, B.WIN_W, h)
+            w.s_std = w.zf_std = None
+            out.append(w)
+    return out
+
+
+def middle_windows(spec, L, z_eave, edge):
+    """[Win] for the ground floor's middle bay of an odd number of bays on a wall that is not the front door's:
+    house_window_slots (and the native walls) leave that bay out on every wall, "where a front door may stand", so a
+    one-storey house's walls of 3.4-6.8 m (one bay) had no window at all (2026-10-28: a Frederick ranch house's whole
+    street side blank). A standard sash there, no native quad (s_std None: recess() cuts it into the wall's quad)."""
+    nb = int(L // B.HOUSE_BAY_M)
+    if nb < 1 or L < 2.0 or nb % 2 == 0 or (spec.door and spec.door[0] == edge):
+        return []
+    base = z_eave - spec.floors * spec.floor_h
+    zf = base + B.WIN_SILL
+    if zf + B.WIN_H > z_eave - 0.2:
+        return []                                       # (a low floor: low_windows' bays)
+    s = L * (nb // 2 + 0.5) / nb
+    gs = garage_span(spec, edge, L) if edge is not None else None
+    if gs is not None and s + B.WIN_W / 2 > gs[0] - 0.3 and s - B.WIN_W / 2 < gs[1] + 0.3:
+        return []
+    w = Win(s, zf)
+    w.s_std = w.zf_std = None
+    return [w]
+
+
 def has_shutters(spec):
     return B._hash01(spec.seed, "shutters") < SHUTTER_SHARE and spec.roof != "flat"
 
@@ -230,13 +285,16 @@ def house_windows(spec, ring, edge, z_eave):
     a, d, out, L = wl
     wins = [Win(float(np.dot(c - a, d)), zf) for c, zf in B.house_window_slots(spec, a, d, out, L, z_eave, edge)]
     shut = has_shutters(spec)
-    vary = HOUSE_VARIETY and RECESS and spec.wall and spec.windows is not False and wins
+    vary = HOUSE_VARIETY and RECESS and spec.wall and spec.windows is not False
     if not vary:
         if shut:                                        # (as the trims always did: each side within the wall)
             for w in wins:
                 h0, h1 = w.s - w.w / 2 - TRIM_W, w.s + w.w / 2 + TRIM_W
                 w.shut = (h0 - w.uw / 2 > 0.15 and h0 < L - 0.15, h1 > 0.15 and h1 + w.uw / 2 < L - 0.15)
         return wins
+    wins += low_windows(spec, L, z_eave, edge) + middle_windows(spec, L, z_eave, edge)
+    if not wins:
+        return []
     base = z_eave - spec.floors * spec.floor_h
     role = None
     fe = front_edge(spec)
@@ -257,18 +315,20 @@ def house_windows(spec, ring, edge, z_eave):
             fixed.append((gs[0] - FRAME_W, gs[1] + FRAME_W, -1e9, base + GARAGE_H + 0.18))
     pic = None
     if role == "front" and spec.door and spec.door[0] == edge and B._hash01(spec.seed, "picture") < PICTURE_SHARE:
-        ground = [k for k, w in enumerate(wins) if w.zf < base + spec.floor_h]
+        ground = [k for k, w in enumerate(wins) if w.zf < base + spec.floor_h and w.kind == "std"]
         if ground:
             pic = min(ground, key=lambda k: abs(wins[k].s - spec.door[1]))
     # a standard sash whose trims stood on the door's frame (a narrow house's door at a fifth of its wall, a window in
     # the bay beside it): left out, the wall plain there (it was drawn over the frame)
     wins = [w for w in wins if not _hit(w.box(), fixed)]
     if pic is not None:
-        ground = [k for k, w in enumerate(wins) if w.zf < base + spec.floor_h]
+        ground = [k for k, w in enumerate(wins) if w.zf < base + spec.floor_h and w.kind == "std"]
         pic = min(ground, key=lambda k: abs(wins[k].s - spec.door[1])) if ground else None
     pairs = B._hash01(spec.seed, "pairs") < PAIR_SHARE
     for k, w in enumerate(wins):
         cand = None
+        if w.kind != "std":                             # (a low window stays one)
+            continue
         if k == pic:
             cand = Win(w.s, w.zf, "triple", PICTURE_UNITS, PICTURE_UNIT_W, None, MULLION_W)
         elif role in ("front", "back") and pairs and B._hash01(spec.seed, "pair", edge, k) < PAIR_WINDOW_SHARE:
@@ -645,6 +705,12 @@ def _cut(F, hq, hs0, hs1, hz0, hz1, D, glass=None, glass_out=0.0, reveals=None, 
     if units is not None:
         units = tuple(np.asarray(x)[o] for x in units)
     nh = len(hq)
+    if not nh:                                          # no opening: the quads less `drop` (a house whose windows are
+        cut = np.zeros(F.q, bool)                       # all on blank walls: its native sashes left out, the walls
+        if drop is not None and len(drop):              # whole; 2026-10-28 the row split below raised on it, IndexError,
+            cut[np.asarray(drop, np.int64)] = True      # and the road tile failed with all its buildings)
+        k = np.flatnonzero(~cut)
+        return F.Q.reshape(-1, 12)[k].ravel().tolist(), F.U.reshape(-1, 8)[k].ravel().tolist(), F.M[k].tolist()
     first = np.ones(nh, bool)
     first[1:] = (hq[1:] != hq[:-1]) | (np.abs(hz0[1:] - hz0[:-1]) > 1e-6)
     prev1 = np.r_[0.0, hs1[:-1]]
@@ -777,7 +843,8 @@ def _house_openings(spec, ring, z_eave, F, base, glass, hq, hs0, hs1, hz0, hz1):
         if e is None:
             continue
         sc = (hs0[j] + hs1[j]) / 2 + off
-        w = next((w for w in W[e] if abs(w.s_std - sc) < 1e-4 and abs(w.zf_std - hz0[j]) < 1e-4), None)
+        w = next((w for w in W[e] if w.s_std is not None and abs(w.s_std - sc) < 1e-4
+                  and abs(w.zf_std - hz0[j]) < 1e-4), None)
         if w is None:
             drop.append(int(glass[j]))                  # (a blank wall: no window there)
             continue
@@ -790,10 +857,27 @@ def _house_openings(spec, ring, z_eave, F, base, glass, hq, hs0, hs1, hz0, hz1):
         ok = _clear(spec, ring, F, base, hq_, H[:, 2], H[:, 3], H[:, 4])
         sok = _clear(spec, ring, F, base, hq_, S[:, 2], S[:, 3], S[:, 4])
         rows = [H[i] if ok[i] else S[i] for i in range(len(H)) if ok[i] or sok[i]]
+    extra = []                                          # low windows: no native quad, cut into their wall's quad
+    for e, ws in W.items():
+        lows = [w for w in ws if w.s_std is None]
+        if not lows:
+            continue
+        on, se = _on_wall(ring, e, F.a, F.d)
+        qs = np.flatnonzero(on & F.rect & (F.M == 0))
+        for w in lows:
+            q = next((q for q in qs if se[q] - 1e-6 <= w.s - w.w / 2 and se[q] + F.L[q] + 1e-6 >= w.s + w.w / 2
+                      and F.za[q] < w.zf and F.zb[q] > w.zf + w.h), None)
+            if q is not None:
+                o = float(se[q])
+                extra.append((-1, q, w.s - w.w / 2 - o, w.s + w.w / 2 - o, w.zf, w.zf + w.h, w.units, w.uw, w.mw))
+    if extra:
+        X = np.array(extra, np.float64)
+        okx = _clear(spec, ring, F, base, X[:, 1].astype(np.int64), X[:, 2], X[:, 3], X[:, 4])
+        rows += [X[i] for i in range(len(X)) if okx[i]]
     if not rows and not drop:
         return None
     R = np.array(rows, np.float64).reshape(-1, 9)
-    drop += [int(glass[int(j)]) for j in R[:, 0]]
+    drop += [int(glass[int(j)]) for j in R[:, 0] if j >= 0]
 
     def reveals(qi, z0, z1):                            # the white trim
         return [np.broadcast_to(_TEXEL, (len(qi), 4, 2))] * 4
