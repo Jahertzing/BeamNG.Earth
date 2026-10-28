@@ -5129,8 +5129,10 @@ def build_tile(frame, tx, ty, cells, elev, urban_fn=None, walks=None, bridges=No
             park.extend(parking.aisle_spots(roads, aisles, (x0, y0, x1, y1)))
     if signs is not None:                           # highway guide signs, gantries, delineators (guidesigns.py)
         import guidesigns
+        names = {fid: f.attrs["name"][i] for fid, (f, i, sp) in seen.items() if f.attrs.get("name") is not None}
         signs.append(guidesigns.tile(frame, roads, (x0, y0, x1, y1), ground=ground, urban=urban_fn, mph=mph,
-                                     barriers=barriers, left_hand=left_hand))
+                                     barriers=barriers, left_hand=left_hand, names=names,
+                                     avoid=[(r[1], r[2]) for r in props or () if len(r) > 2]))
     return chunks
 
 
