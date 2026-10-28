@@ -277,6 +277,16 @@ def build(frame, feats_list, elev, centre, urban_fn=None, window=WINDOW_M, decks
             if direction == 0 and spec.oneway and spec.dir:     # a divided road's carriageway (roads.dual_carriageways)
                 direction = int(spec.dir)
             lo, li = _lanes(w, direction != 0, spec.lanes)
+            # Its decks are drawn from the bridge's spec (roads.BridgeProfiles), which takes no measured width: where
+            # that is narrower, the AI's lanes on the deck are the deck's. The ground's 19.2 m (DRCOG's, measured
+            # across a split) put the AI's lane 2.2 m off a culvert's 8.5 m deck: 5th Street at Colorado Blvd,
+            # Frederick, The Drive's start (2026-10-28).
+            decks_here, deck_lanes = [], None
+            if rspecs[i] is not None and bspecs[i] is not None:
+                decks_here = [(a_, b_) for a_, b_, k_ in roads.level_ranges(feats, i) if k_ == "bridge"]
+                dw = driving_width(bspecs[i])
+                if decks_here and dw < w - 0.01:
+                    deck_lanes = _lanes(dw, direction != 0, bspecs[i].lanes) + (dw,)
             profile = _speed_profile(xy, w, direction != 0)
             # this road's approaches at its two ends (the graph node next to the junction, whether traffic comes in)
             for end in (0, -1):
@@ -301,7 +311,10 @@ def build(frame, feats_list, elev, centre, urban_fn=None, window=WINDOW_M, decks
                 legal = (road_mph(feats, i, spec, mph, at=(full[j] + full[j + 1]) / (2 * L)) +
                          (FLOW_MPH.get(spec.cls, 0.0) if mph else 0.0)) * MPH
                 target = min(legal, float(profile[j]), float(profile[j + 1]))
-                edges.append([a, b, 1 if direction else 0, lo, li, round(target, 2), driv, round(w / 2, 2)])
+                elo, eli, ew = lo, li, w
+                if deck_lanes and any(t0 <= (full[j] + full[j + 1]) / (2 * L) <= t1 for t0, t1 in decks_here):
+                    elo, eli, ew = deck_lanes
+                edges.append([a, b, 1 if direction else 0, elo, eli, round(target, 2), driv, round(ew / 2, 2)])
                 edge_fids.append(fid)
     import islands
     ring = islands.ring_directions(ring_cands, left_hand)
