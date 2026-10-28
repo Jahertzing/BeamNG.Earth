@@ -1,5 +1,6 @@
 """The DRCOG planimetrics source (server/drcog.py): roofprints merged with Overture's buildings, road widths between
 the edges of pavement, the map data's cells with it on."""
+import math
 import os
 import sys
 import unittest
@@ -122,6 +123,76 @@ class WidthTest(unittest.TestCase):
             self.assertEqual(walk, 3.0)
             self.assertEqual(get("y", np.array([ll(20, 60), ll(180, 60)])), (14.0, 3.0))
             self.assertEqual(get("z", np.array([(-76.6, 39.2), (-76.5, 39.2)])), (14.0, 3.0))   # outside the region
+
+    def test_widths_are_decided_once_per_road(self):
+        d = drcog.Drcog("unused", None)
+        coords, off = self.edges(4.0)
+        calls = []
+        with mock.patch.object(d, "edges", return_value={"coords": coords, "off": off}):
+            get = d.widths(lambda fid, l: calls.append(fid) or (14.0, 3.0))
+            road = np.array([ll(20, 0), ll(180, 0)])
+            first = get("x", road)
+            self.assertEqual(get("x", road), first)
+        self.assertEqual(calls, ["x"])
+
+    def test_a_failed_cell_is_not_asked_by_every_road(self):
+        d = drcog.Drcog("unused", None)
+        coords, off = self.edges(4.0)
+        asked = []
+
+        def edges(key, kind="demand"):
+            asked.append(key)
+            if len(asked) == 1:
+                raise IOError("offline")
+            return {"coords": coords, "off": off}
+        clock = [1000.0]
+        with mock.patch.object(d, "edges", side_effect=edges), \
+                mock.patch.object(drcog.time, "monotonic", side_effect=lambda: clock[0]):
+            get = d.widths(lambda fid, l: (14.0, 3.0))
+            roads = [np.array([ll(20 + i, 0), ll(180 - i, 0)]) for i in range(5)]
+            self.assertEqual([get(i, r) for i, r in enumerate(roads)], [(14.0, 3.0)] * 5)
+            self.assertEqual(len(asked), 1)             # (the others: the fallback, without a request)
+            clock[0] += drcog.EDGES_RETRY_S + 1
+            w = get(0, roads[0])                        # not decided for good: the edges once they come
+            self.assertAlmostEqual(w[0], 8.0, places=3)
+            self.assertEqual(len(asked), 2)
+
+    def test_the_index_gives_the_same_widths(self):
+        # a downtown-like grid of edge lines (blocks of 80 m, roads 8-20 m wide) and roads in every direction
+        rng = np.random.default_rng(7)
+        lines = []
+        for k in range(12):
+            for half in (rng.uniform(4, 10), -rng.uniform(4, 10)):
+                y = k * 80 + half
+                xs = np.linspace(-50, 1000, 40)
+                lines.append(np.array([ll(x, y + rng.normal(0, 0.3)) for x in xs]))
+                lines.append(np.array([ll(y + rng.normal(0, 0.3), x) for x in xs]))
+        for _ in range(200):                 # stray short pieces (driveways, islands)
+            x, y, a = rng.uniform(0, 950), rng.uniform(0, 950), rng.uniform(0, math.pi)
+            lines.append(np.array([ll(x, y), ll(x + 15 * math.cos(a), y + 15 * math.sin(a))]))
+        coords = np.concatenate(lines)
+        off = np.r_[0, np.cumsum([len(x) for x in lines])]
+        index = drcog.EdgeIndex(coords, off)
+        found = 0
+        for _ in range(300):
+            x, y, a = rng.uniform(0, 950), rng.uniform(0, 950), rng.choice([0, math.pi / 2, rng.uniform(0, math.pi)])
+            n = int(rng.integers(2, 6))
+            road = np.array([ll(x + t * math.cos(a), y + t * math.sin(a)) for t in np.linspace(0, rng.uniform(10, 300), n)])
+            want = drcog.measure_width(road, coords, off)
+            self.assertEqual(drcog.measure_width(road, coords, off, index), want)
+            found += want is not None
+        self.assertGreater(found, 30)
+
+    def test_index_near(self):
+        coords = np.array([ll(0, 0), ll(500, 0), ll(0, 100), ll(0, 110)])      # one long segment, one short
+        index = drcog.EdgeIndex(coords, np.array([0, 2, 4]))
+        x, y = ll(250, 0)
+        self.assertEqual(index.near(x - 1e-5, y - 1e-5, x + 1e-5, y + 1e-5).tolist(), [0])
+        x, y = ll(0, 105)
+        self.assertEqual(index.near(x - 1e-5, y - 1e-5, x + 1e-5, y + 1e-5).tolist(), [1])
+        x, y = ll(300, 300)
+        self.assertEqual(index.near(x, y, x, y).tolist(), [])
+        self.assertEqual(len(drcog.EdgeIndex(np.zeros((0, 2)), np.array([0])).near(0, 0, 1, 1)), 0)
 
 
 @needs_duckdb
