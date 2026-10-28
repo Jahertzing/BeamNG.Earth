@@ -106,7 +106,7 @@ M.FADE_SHARE = 0.5
 -- linear colour over its opaque texels (measured from the stock textures), TINT_STRENGTH how far toward the photo
 -- (1: the photo's colour; geometric), TINT_BRIGHT a brightness on top (lit blades vs the photo's ground).
 M.TINT = true
-M.TINT_STRENGTH = 0.8
+M.TINT_STRENGTH = 0.7
 M.TINT_BRIGHT = 1.0
 M.TINT_MIN_CHANGE = 0.03    -- a smaller change is not applied (each costs a material reload)
 M.TINT_RANGE = { 0.2, 8.0 } -- the factor's bounds per channel (the green grass has almost no blue: tan needs ~10x)
