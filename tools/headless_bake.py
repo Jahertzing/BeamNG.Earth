@@ -31,7 +31,11 @@ launcher.watch_parent (BNGEARTH_PARENT) ends it if this process is killed.
 
 --jobs N: the legs (a route one way, or back with --both-ways) shared out over N copies of this tool, each with a
 server of its own and the workers divided, all under one run in the manifest (the parent's, from the children's
-summary.json files), the children's lines prefixed with their leg.
+summary.json files), the children's lines prefixed with their leg. --split M cuts every leg into M stretches
+(overlapping by SPLIT_OVERLAP_M, so the cut is built from both sides), legs of their own: the run of 2026-10-28 13:18
+(--jobs 2, the game closed) used 1.7 cores a server, 0.65 of them the server process itself (far textures, base
+photos and every tile's dispatch pass through its one interpreter), its 11 workers 4-14% busy each, and the machine
+13%: the way to use it is more servers, not more workers (about SERVER_GB of RAM each; --jobs is capped to the RAM).
 
 The client (the mod's rules from server/tests/modsim.py, line-by-line ports of follow.lua and rebase.lua): hello; per
 route a teleport to its start (the anchor pinned as routepins.lua does: the planned anchor within PIN_SHARE of the
@@ -107,6 +111,10 @@ ALONE_ROAD_PER_CPU = 6      # ... and a road-tile process per this many
 ALONE_MAX = (8, 4)          # at most (far workers, road processes) for one server
 MODES = ("auto", "game", "alone")
 CPU_SAMPLE_S = 2.0          # --profile: the server tree's CPU sampled this often
+SPLIT_OVERLAP_M = 1000.0    # --split: each stretch reaches this far into its neighbours
+SPLIT_STEP_M = 50.0         # ... its line sampled this often along the route
+SERVER_GB = 6.0             # a server with its workers, about (16.5 GB for two with the OS, 2026-10-28): caps --jobs
+LEG_PART_RE = re.compile(r"^(.*)_(\d+)of(\d+)$")
 WORKER_CPU_RE = re.compile(r"worker (\d+) cpu: (.*)")        # blockworker's debug line
 JOB_RE = re.compile(r"(\w+) (\d+) jobs ([\d.]+) s")
 JOB_ROLE = {"build": "block", "terrain_patch": "block", "base_photo": "block", "navgraph": "block",
@@ -800,23 +808,57 @@ def route_names(text, lines):
     return out
 
 
-def legs_of(names, both_ways):
-    """The legs [(route, back)]: each route one way, and back again too with both_ways."""
-    return [(n, back) for n in names for back in ((False, True) if both_ways else (False,))]
+def legs_of(names, both_ways, split=1):
+    """The legs [(route, back, part)]: each route one way, and back again too with both_ways; part None, or with
+    split > 1 (i, split) for each of its split stretches (stretch)."""
+    parts = [None] if split <= 1 else [(i, split) for i in range(split)]
+    return [(n, back, part) for n in names for back in ((False, True) if both_ways else (False,)) for part in parts]
 
 
-def leg_label(route, back):
-    return f"{route}{'_back' if back else ''}"
+def leg_label(route, back, part=None):
+    return f"{route}{'_back' if back else ''}{f'_{part[0] + 1}of{part[1]}' if part else ''}"
 
 
 def parse_legs(text):
-    """[(route, back)] of --legs "i25,downtown_back"."""
+    """[(route, back, part)] of --legs "i25,downtown_back,i25_2of4"."""
     out = []
     for item in text.split(","):
         item = item.strip()
-        if item:
-            out.append((item[:-5], True) if item.endswith("_back") else (item, False))
+        if not item:
+            continue
+        part = None
+        m = LEG_PART_RE.match(item)
+        if m:
+            item, part = m.group(1), (int(m.group(2)) - 1, int(m.group(3)))
+        out.append((item[:-5], True, part) if item.endswith("_back") else (item, False, part))
     return out
+
+
+def stretch(route, i, n, overlap=SPLIT_OVERLAP_M, step=SPLIT_STEP_M):
+    """Stretch i of n of a ghost_drive Route (equal lengths), reaching overlap m into its neighbours: a Route of its
+    points every step m (the whole route for n <= 1)."""
+    if n <= 1:
+        return route
+    s0 = max(0.0, route.length * i / n - overlap)
+    s1 = min(route.length, route.length * (i + 1) / n + overlap)
+    k = max(1, int(math.ceil((s1 - s0) / step)))
+    return gd.Route([route.point(s0 + (s1 - s0) * j / k) for j in range(k + 1)])
+
+
+def jobs_for(wanted, n_legs, ram_gb=None):
+    """The servers to run at once: wanted, at most one per leg and SERVER_GB each within the machine's RAM (psutil;
+    unknown: wanted). Returns (jobs, note or None)."""
+    jobs = max(1, min(int(wanted), max(1, n_legs)))
+    if ram_gb is None:
+        try:
+            import psutil
+            ram_gb = psutil.virtual_memory().total / 2 ** 30
+        except ImportError:
+            return jobs, None
+    cap = max(1, int(ram_gb * 0.8 / SERVER_GB))
+    if jobs > cap:
+        return cap, f"--jobs {jobs} needs about {jobs * SERVER_GB:.0f} GB; {ram_gb:.0f} GB here: {cap} jobs"
+    return jobs, None
 
 
 def share_out(legs, jobs):
@@ -878,13 +920,15 @@ def drive_legs(a, legs, lines, routes_file, anchors, pin_m, distance, out, mode,
         size = int(h.get("blockSize") or 1024)
         say(f"session {h.get('sessionId')}, block {size}, near visual {h.get('nearVisual')}", flush=True)
         next_id = 1
-        for n, back in legs:
+        for n, back, part in legs:
             if n not in lines:
                 print(f"{prefix}{n}: not in {routes_file}", file=sys.stderr)
                 ok = False
                 continue
             route = gd.load_route(routes_file, n, back)
-            leg = leg_label(n, back)
+            if part:
+                route = stretch(route, *part)
+            leg = leg_label(n, back, part)
             lo = os.path.join(out, leg)
             os.makedirs(lo, exist_ok=True)
             say(f"{leg}: {route.length / 1000:.1f} km at {a.speed:g} m/s", flush=True)
@@ -892,7 +936,8 @@ def drive_legs(a, legs, lines, routes_file, anchors, pin_m, distance, out, mode,
             summary = d.run()
             next_id = d.next_id
             rb.write_json(os.path.join(lo, "summary.json"), summary)
-            rec = {"route": n, "back": back, "driver": "headless", "rc": 0, "out": lo, "summary": summary}
+            rec = {"route": n, "back": back, "part": list(part) if part else None, "driver": "headless", "rc": 0,
+                   "out": lo, "summary": summary}
             records.append(rec)
             if on_leg is not None:
                 on_leg(rec)
@@ -956,16 +1001,16 @@ def run_children(a, groups, out, mode):
                 p.kill()
     ok, records = True, []
     for legs, p in zip(groups, procs):
-        for n, back in legs:
-            lo = os.path.join(out, leg_label(n, back))
+        for n, back, part in legs:
+            lo = os.path.join(out, leg_label(n, back, part))
             summary = rb.read_json(os.path.join(lo, "summary.json"))
-            records.append({"route": n, "back": back, "driver": "headless", "rc": p.returncode, "out": lo,
-                            "summary": summary})
+            records.append({"route": n, "back": back, "part": list(part) if part else None, "driver": "headless",
+                            "rc": p.returncode, "out": lo, "summary": summary})
             ok = ok and p.returncode == 0 and bool(summary and summary.get("complete"))
             if summary:
-                print(leg_report(leg_label(n, back), summary), flush=True)
+                print(leg_report(leg_label(n, back, part), summary), flush=True)
             else:
-                print(f"{leg_label(n, back)}: no summary (job exit {p.returncode})", file=sys.stderr)
+                print(f"{leg_label(n, back, part)}: no summary (job exit {p.returncode})", file=sys.stderr)
     return ok, records
 
 
@@ -980,7 +1025,11 @@ def main(argv=None):
     ap.add_argument("--workers", type=int, default=None, help="far-tile workers of the server (default: the mode's)")
     ap.add_argument("--road-processes", type=int, default=None, help="road-tile processes (default: the mode's)")
     ap.add_argument("--jobs", type=int, default=1,
-                    help="the legs shared out over this many servers at once, the workers divided (default 1)")
+                    help="the legs shared out over this many servers at once, the workers divided (default 1; at "
+                         "most one per leg, and SERVER_GB of RAM each)")
+    ap.add_argument("--split", type=int, default=1,
+                    help="every leg cut into this many stretches (legs of their own, overlapping SPLIT_OVERLAP_M), so "
+                         "more servers can run at once (default 1)")
     ap.add_argument("--roads-q", type=int, default=ROADS_Q)
     ap.add_argument("--backlog-q", type=int, default=BACKLOG_Q)
     ap.add_argument("--edge-m", type=float, default=EDGE_M)
@@ -1003,6 +1052,8 @@ def main(argv=None):
         ap.error(f"port {GAME_PORT} is the game's server: this tool drives a server of its own")
     if a.jobs < 1:
         ap.error("--jobs: at least 1")
+    if a.split < 1:
+        ap.error("--split: at least 1")
     a.world_dir = a.world_dir or rb.default_world_dir()
     a.user_dir = a.user_dir or rb.default_user_dir()
     import revisit
@@ -1014,7 +1065,7 @@ def main(argv=None):
         print(f"no plan in {bd}: route_bake.py plan first", file=sys.stderr)
         return 2
     names = route_names(a.routes, lines)
-    legs = parse_legs(a.legs) if a.legs else legs_of(names, a.both_ways)
+    legs = parse_legs(a.legs) if a.legs else legs_of(names, a.both_ways, a.split)
     distance = a.rebase_m or rb.rebase_distance(a.user_dir)
     if data.get("rebaseDistance") and abs(float(data["rebaseDistance"]) - distance) > 1:
         print(f"warning: the plan is for rebases every {float(data['rebaseDistance']) / 1000:g} km, the mod's setting "
@@ -1035,7 +1086,9 @@ def main(argv=None):
     man_path = os.path.join(bd, rb.MANIFEST)
     man = rb.read_json(man_path, {})
     prior = next((r.get("code") for r in reversed(man.get("runs") or []) if r.get("code")), None)
-    jobs = min(a.jobs, len(legs)) if not a.connect else 1
+    jobs, note = jobs_for(a.jobs, len(legs)) if not a.connect else (1, None)
+    if note:
+        print(note, flush=True)
     print(f"headless bake: {', '.join(leg_label(*lg) for lg in legs)} at {a.speed:g} m/s, mode {mode}"
           f"{' (auto)' if a.mode == 'auto' else ''}{f', {jobs} jobs' if jobs > 1 else ''}; "
           f"code {code}, BNE env {bne_env() or 'none'}; bake {bd}")
