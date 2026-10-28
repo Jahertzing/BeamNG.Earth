@@ -4691,7 +4691,7 @@ def build_tile(frame, tx, ty, cells, elev, urban_fn=None, walks=None, bridges=No
                lines=None, wires=None, town=None, park=None, left_hand=False, structures=(), mph=True, tunnels=None,
                buried=0.0, lamp_region=None,
                walls=None, deck_context=None, ground=None, terrain_paint=True, cover_out=None, walk_cuts=(),
-               signals=None):
+               signals=None, signs=None):
     """The chunks of one tile. cells: the mapgeom.Features of the "roads" layer of every cell touching
     the tile; elev(lat, lon) -> metres (the DEM); urban_fn: as road_specs. Features in several cells are
     taken once (by id). The carriageways, then each road's sidewalks / gutters / markings (extras), cut
@@ -4701,7 +4701,8 @@ def build_tile(frame, tx, ty, cells, elev, urban_fn=None, walks=None, bridges=No
     bridges: a BridgeProfiles (deck heights of whole chains, shared by every tile); None: from the
     chains among these cells. ground(x, y) -> z: the terrain block's drawn ground in the frame, the sidewalks' heights
     (drape_walks); None: elev's. walk_cuts: [(centreline (k, 2), half width)] where no sidewalk runs (a gas station's
-    made-up driveway: gasstations.tile_sites cuts). Pure given its inputs (sorted by feature id)."""
+    made-up driveway: gasstations.tile_sites cuts). signs: a list that gets the tile's highway signs
+    (guidesigns.tile's dict). Pure given its inputs (sorted by feature id)."""
     x0, y0, x1, y1 = tile_bbox(tx, ty)
     box = (x0 - OVERLAP, y0 - OVERLAP, x1 + OVERLAP, y1 + OVERLAP)
     near = (x0 - NEAR_M, y0 - NEAR_M, x1 + NEAR_M, y1 + NEAR_M)
@@ -4933,6 +4934,10 @@ def build_tile(frame, tx, ty, cells, elev, urban_fn=None, walks=None, bridges=No
                   if sp.kind == "paved" and _rule_value(f.rules.get("subclass"), i) == "parking_aisle"}
         if aisles:
             park.extend(parking.aisle_spots(roads, aisles, (x0, y0, x1, y1)))
+    if signs is not None:                           # highway guide signs, gantries, delineators (guidesigns.py)
+        import guidesigns
+        signs.append(guidesigns.tile(frame, roads, (x0, y0, x1, y1), ground=ground, urban=urban_fn, mph=mph,
+                                     left_hand=left_hand))
     return chunks
 
 
@@ -5080,7 +5085,8 @@ def shape_files(aid, tx, ty):
            "walk": f"walks_{aid}_{tx}_{ty}.cdae", "walkcol": f"walkcol_{aid}_{tx}_{ty}.cdae",
            "bldcol": f"bldcol_{aid}_{tx}_{ty}.cdae", "wire": f"wire_{aid}_{tx}_{ty}.cdae",
            "bld": f"bld_{aid}_{tx}_{ty}.cdae", "tunnel": f"tunnel_{aid}_{tx}_{ty}.cdae",
-           "rail": f"rail_{aid}_{tx}_{ty}.cdae"}
+           "rail": f"rail_{aid}_{tx}_{ty}.cdae", "sign": f"sign_{aid}_{tx}_{ty}.cdae",
+           "signcol": f"signcol_{aid}_{tx}_{ty}.cdae"}
     for k in range(2, BLD_PARTS_MAX + 1):
         out[f"bld{k}"] = f"bld_{aid}_{tx}_{ty}_{k}.cdae"
     return out
@@ -5151,12 +5157,14 @@ def sound_boxes(chunks):
 
 def write_tile(out_dir, vfs_dir, aid, tx, ty, chunks, walks=None, road_mesh=None, deck_mesh=None, bld=None,
                props=None, wires=None, park=None, tunnel_mesh=None, fuel=None,
-               rail_mesh=None, garage_sound=(), wells=()):
+               rail_mesh=None, garage_sound=(), wells=(), signs=None):
     """Write a tile's chunks (atomically), its sidewalk mesh (walks: build_tile's runs, if any:
     `walks_<a>_<tx>_<ty>.cdae`, announced in the tile as "walk": {shape, pos}) and its road mesh
     (road_mesh: roadmesh.build's result: `road_<a>_<tx>_<ty>.cdae`, "road": {shape, pos}; the mod then
     shows it instead of a DecalRoad per chunk) and its bridge decks (deck_mesh: roadmesh.deck's result:
-    `deck_<a>_<tx>_<ty>.cdae`, "deck": {shape, pos}, colliding); returns (vfs path, number of chunks)."""
+    `deck_<a>_<tx>_<ty>.cdae`, "deck": {shape, pos}, colliding) and its highway signs (signs: guidesigns.tile's dict:
+    "sign" render-only, "signcol" their posts' collision, billboards among the props); returns (vfs path, number of
+    chunks)."""
     import roadmesh
     import sidewalks
     name = f"roads_{aid}_{tx}_{ty}.json"
@@ -5237,6 +5245,24 @@ def write_tile(out_dir, vfs_dir, aid, tx, ty, chunks, walks=None, road_mesh=None
             shape = f"wire_{aid}_{tx}_{ty}.cdae"
             cdae.write(os.path.join(out_dir, shape), wm[0], wm[1], uvs=wm[2], material="bne_wire", object_name="wires")
             data["wire"] = {"shape": f"{vfs_dir}/{shape}", "pos": [x0, y0, 0.0]}
+    if signs:                       # guidesigns.tile: the signs (render-only), their posts' lean collision mesh
+        import cdae
+        import guidesigns
+        x0, y0, _, _ = tile_bbox(tx, ty)
+        if signs.get("mesh") is not None:
+            P, T, UV, C, M = signs["mesh"]
+            shape = f"sign_{aid}_{tx}_{ty}.cdae"
+            cdae.write(os.path.join(out_dir, shape), P, T, uvs=UV, colors=C, material=list(guidesigns.MATS),
+                       tri_materials=M, object_name="signs")
+            data["sign"] = {"shape": f"{vfs_dir}/{shape}", "pos": [x0, y0, 0.0]}
+        if signs.get("col") is not None:
+            P, T, aabbs = signs["col"]
+            shape = f"signcol_{aid}_{tx}_{ty}.cdae"
+            cdae.write(os.path.join(out_dir, shape), P, T, collision_only=True)
+            data["signcol"] = {"shape": f"{vfs_dir}/{shape}", "pos": [x0, y0, 0.0]}
+            data.setdefault("colliders", {})["signcol"] = aabbs
+        if signs.get("props"):
+            props = list(props or []) + list(signs["props"])
     if props:                       # furniture.place's rows: Forest items (trees.lua), groups by index
         groups = sorted({r[0] for r in props})
         data["props"] = {"groups": groups, "items": [[groups.index(r[0])] + r[1:] for r in props]}

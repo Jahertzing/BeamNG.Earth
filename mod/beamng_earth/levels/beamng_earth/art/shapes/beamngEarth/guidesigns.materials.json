@@ -1,0 +1,210 @@
+{
+  "bne_gsign_panel": {
+    "name": "bne_gsign_panel",
+    "mapTo": "bne_gsign_panel",
+    "class": "Material",
+    "version": 1.5,
+    "Stages": [
+      {
+        "baseColorFactor": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "vertColor": true,
+        "roughnessFactor": 0.55,
+        "metallicFactor": 0,
+        "emissiveFactor": [
+          0,
+          0,
+          0
+        ]
+      },
+      {},
+      {},
+      {}
+    ],
+    "translucent": false
+  },
+  "bne_gsign_white": {
+    "name": "bne_gsign_white",
+    "mapTo": "bne_gsign_white",
+    "class": "Material",
+    "version": 1.5,
+    "Stages": [
+      {
+        "baseColorFactor": [
+          0.92,
+          0.92,
+          0.92,
+          1
+        ],
+        "roughnessFactor": 0.5,
+        "metallicFactor": 0,
+        "emissiveFactor": [
+          0,
+          0,
+          0
+        ]
+      },
+      {},
+      {},
+      {}
+    ],
+    "translucent": false
+  },
+  "bne_gsign_text": {
+    "name": "bne_gsign_text",
+    "mapTo": "bne_gsign_text",
+    "class": "Material",
+    "version": 1.5,
+    "Stages": [
+      {
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/bne_signfont.png",
+        "baseColorFactor": [
+          0.95,
+          0.95,
+          0.95,
+          1
+        ],
+        "roughnessFactor": 0.45,
+        "metallicFactor": 0,
+        "emissiveFactor": [
+          0,
+          0,
+          0
+        ]
+      },
+      {},
+      {},
+      {}
+    ],
+    "translucent": false,
+    "alphaTest": true,
+    "alphaRef": 110
+  },
+  "bne_gsign_textk": {
+    "name": "bne_gsign_textk",
+    "mapTo": "bne_gsign_textk",
+    "class": "Material",
+    "version": 1.5,
+    "Stages": [
+      {
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/bne_signfont.png",
+        "baseColorFactor": [
+          0.03,
+          0.03,
+          0.03,
+          1
+        ],
+        "roughnessFactor": 0.6,
+        "metallicFactor": 0
+      },
+      {},
+      {},
+      {}
+    ],
+    "translucent": false,
+    "alphaTest": true,
+    "alphaRef": 110
+  },
+  "bne_gsign_steel": {
+    "name": "bne_gsign_steel",
+    "mapTo": "bne_gsign_steel",
+    "class": "Material",
+    "version": 1.5,
+    "Stages": [
+      {
+        "baseColorFactor": [
+          0.62,
+          0.63,
+          0.63,
+          1
+        ],
+        "roughnessFactor": 0.45,
+        "metallicFactor": 0.85
+      },
+      {},
+      {},
+      {}
+    ],
+    "translucent": false
+  },
+  "bne_gsign_reflect": {
+    "name": "bne_gsign_reflect",
+    "mapTo": "bne_gsign_reflect",
+    "class": "Material",
+    "version": 1.5,
+    "Stages": [
+      {
+        "baseColorFactor": [
+          0.9,
+          0.9,
+          0.9,
+          1
+        ],
+        "roughnessFactor": 0.2,
+        "metallicFactor": 0.3,
+        "emissiveFactor": [
+          0,
+          0,
+          0
+        ]
+      },
+      {},
+      {},
+      {}
+    ],
+    "translucent": false
+  },
+  "bne_gsign_amber": {
+    "name": "bne_gsign_amber",
+    "mapTo": "bne_gsign_amber",
+    "class": "Material",
+    "version": 1.5,
+    "Stages": [
+      {
+        "baseColorFactor": [
+          0.95,
+          0.65,
+          0.05,
+          1
+        ],
+        "roughnessFactor": 0.2,
+        "metallicFactor": 0.3,
+        "emissiveFactor": [
+          0,
+          0,
+          0
+        ]
+      },
+      {},
+      {},
+      {}
+    ],
+    "translucent": false
+  },
+  "bne_gsign_paint": {
+    "name": "bne_gsign_paint",
+    "mapTo": "bne_gsign_paint",
+    "class": "Material",
+    "version": 1.5,
+    "Stages": [
+      {
+        "baseColorFactor": [
+          0.85,
+          0.85,
+          0.82,
+          1
+        ],
+        "roughnessFactor": 0.8,
+        "metallicFactor": 0
+      },
+      {},
+      {},
+      {}
+    ],
+    "translucent": false
+  }
+}

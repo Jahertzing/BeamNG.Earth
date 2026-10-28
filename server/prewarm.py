@@ -33,11 +33,12 @@ def materials():
     """The sorted material names the server's shapes may use."""
     import airportgrade
     import buildings
+    import guidesigns
     import junctions
     import roadmesh
     import roads
     import sidewalks
-    out = set(buildings.MATERIALS) | set(sidewalks.MATERIALS) | set(EXTRA)
+    out = set(buildings.MATERIALS) | set(sidewalks.MATERIALS) | set(EXTRA) | set(guidesigns.MATS)
     for mod in (roads, roadmesh, junctions, airportgrade):
         for name, v in vars(mod).items():
             if name.isupper():

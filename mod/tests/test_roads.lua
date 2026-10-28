@@ -140,6 +140,21 @@ roads.onDrop({ anchorId = 2, key = '6_6' })
 roads.update(gov, 2)
 T.check(#statics() == 0, 'walkcol dropped with its tile')
 
+-- highway signs (server guidesigns.py): the drawn signs only render, their posts' lean mesh collides; both go with
+-- the tile
+files['/t/sg.json'] = '{ chunks = { }, sign = { shape = "/t/sign_2_7_7.cdae", pos = { 0, 0, 0 } }, ' ..
+  'signcol = { shape = "/t/signcol_2_7_7.cdae", pos = { 0, 0, 0 } } }'
+roads.onTile({ anchorId = 2, key = '7_7', path = '/t/sg.json', n = 0 }, 2)
+roads.update(gov, 2)
+roads.update(gov, 2)
+kinds = {}
+for _, o in ipairs(statics()) do kinds[o.fields.shapeName] = o.fields.collisionType end
+T.check(kinds['/t/sign_2_7_7.cdae'] == 'None' and kinds['/t/signcol_2_7_7.cdae'] == 'Collision Mesh',
+  'signs render only, their posts collide')
+roads.onDrop({ anchorId = 2, key = '7_7' })
+roads.update(gov, 2)
+T.check(#statics() == 0, 'signs dropped with their tile')
+
 -- pooled shape files (server/matslots.py): the slot paths replace the tile's own files; a slot is reported gone once
 -- its tile is dropped and its object deleted (one the tile cannot use: at once)
 gov.allow, gov.tries = nil, 0
