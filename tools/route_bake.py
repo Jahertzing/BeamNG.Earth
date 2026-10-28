@@ -16,8 +16,10 @@ How (revisit.py, blockcache.py, the mod's routepins.lua):
           pins teleports and rebases near one to it) and to <world>/bake/anchors.json (what is built in one of them is
           kept in <world>/bake, never cut back or cleared; --world-dir). PIN is under half the anchor spacing, so a drive either way along
           a route, or one that set off from a town on it, lands on the same anchors.
-  drive   for each route: tools/autodrive_perf.py over its legs (teleport to the start, the car's own AI on the GPS
-          route, the frame times sampled), the server keeping everything it builds. The first drive after a code
+  drive   for each route: tools/ghost_drive.py along its planned road line (routes.json: the car set along it step by
+          step, on once the place around it has loaded; no AI to crash), or with --driver ai tools/autodrive_perf.py over
+          its legs (teleport to the start, the car's own AI on the GPS route, the frame times sampled); the server
+          keeping everything it builds. The first drive after a code
           change builds; the next one is the benchmark (its summary: fps, 1% lows, hitches). Needs the game with the
           MCP server on and the companion server running (launcher.py).
   clean   a code change makes every baked item unreachable (revisit's key holds the code); after a complete drive
@@ -53,6 +55,7 @@ SNAP_DEG = 0.01             # geodesy.lua SNAP_DEG / SNAP_MAX_LAT
 SNAP_MAX_LAT = 85.0
 STEP_M = 50.0               # the route walked in steps of this
 MANIFEST = "manifest.json"
+ARRIVED_M = 60.0            # autodrive_perf.py ARRIVED_M: a leg ended this near its goal arrived
 
 
 # --- the anchors (no network) ---------------------------------------------------------------------------------------
@@ -308,19 +311,23 @@ def cmd_drive(a):
     man.setdefault("runs", []).append(run)
     write_json(os.path.join(bd, MANIFEST), man)
     ok = True
-    for n in names:
+    if a.driver == "ghost":
+        ok = _ghost_drive(a, bd, names, run, man)
+    for n in names if a.driver == "ai" else ():
         pts = ROUTES[n]["points"]
         legs = list(zip(pts, pts[1:]))
         if a.both_ways:
             back = list(reversed(pts))
             legs += list(zip(back, back[1:]))
+        arrived = True
         for i, ((na, la0, lo0), (nb, la1, lo1)) in enumerate(legs):
             out = os.path.join(a.out, f"{n}_{i}_{na}-{nb}".replace(" ", "_"))
             km = horizontal((la0, lo0), (la1, lo1)) / 1000
             cmd = [sys.executable, os.path.join(HERE, "autodrive_perf.py"), "--to", f"{la1},{lo1}", "--out", out,
                    "--minutes", f"{max(20.0, km * 1.6):.0f}"]
-            if i == 0:          # (the next legs from where the car arrived)
-                cmd += ["--from", f"{la0},{lo0}"]
+            if i == 0 or not arrived:   # (the next legs from where the car arrived; a leg that did not arrive left
+                cmd += ["--from", f"{la0},{lo0}"]   # the car elsewhere: the PC bake's downtown_1 stood at the wreck
+                                                    # of downtown_0 in Frederick for its 70 minutes, 2026-10-28)
             if a.ai_mph:
                 cmd += ["--ai-mph", str(a.ai_mph)]
             if a.keep_going:
@@ -333,6 +340,8 @@ def cmd_drive(a):
                                                                         "miles", "remaining_m", "hitch_causes",
                                                                         "events") if k in summary}})
             write_json(os.path.join(bd, MANIFEST), man)
+            rem = summary.get("remaining_m")
+            arrived = r.returncode == 0 and rem is not None and rem <= ARRIVED_M
             if r.returncode != 0:
                 ok = False
                 if not a.keep_going:
@@ -344,6 +353,33 @@ def cmd_drive(a):
     write_json(os.path.join(bd, MANIFEST), man)
     cmd_status(a)
     return 0 if ok else 1
+
+
+def _ghost_drive(a, bd, names, run, man):
+    """The bake's drive without the AI (tools/ghost_drive.py): each route's planned road line (routes.json) whole, the
+    car set along it and moving on once the place has loaded. True when every drive reached its end."""
+    ok = True
+    routes = os.path.join(bd, "routes.json")
+    for n in names:
+        for back in ((False, True) if a.both_ways else (False,)):
+            out = os.path.join(a.out, f"{n}{'_back' if back else ''}_ghost")
+            cmd = [sys.executable, os.path.join(HERE, "ghost_drive.py"), "--routes-file", routes, "--route", n,
+                   "--out", out, "--speed", str(a.ghost_speed)]
+            if back:
+                cmd.append("--reverse")
+            print(f"{n}{' back' if back else ''} (ghost): {' '.join(cmd[1:])}", flush=True)
+            r = _drive_leg(cmd)
+            summary = read_json(os.path.join(out, "summary.json"), {})
+            run["legs"].append({"route": n, "back": back, "driver": "ghost", "rc": r.returncode, "out": out,
+                                "summary": {k: summary.get(k) for k in ("seconds", "km", "route_km", "complete", "fps",
+                                                                        "frame_ms", "frames_over", "hitch_causes",
+                                                                        "waits", "fps_limit") if k in summary}})
+            write_json(os.path.join(bd, MANIFEST), man)
+            if r.returncode != 0:
+                ok = False
+                if not a.keep_going:
+                    return False
+    return ok
 
 
 def _drive_leg(cmd):
@@ -400,7 +436,11 @@ def main(argv=None):
     ap.add_argument("--rebase-m", type=float, default=None, help="plan: the rebase distance (default: the mod's)")
     ap.add_argument("--points", default=None, help="plan: the routes' points from this JSON instead of OSRM")
     ap.add_argument("--out", default=os.path.join(ROOT, "build", "route_bake"), help="drive: the runs' folder")
-    ap.add_argument("--ai-mph", type=float, default=0.0, help="drive: the AI's speed (default: the legal speed)")
+    ap.add_argument("--driver", choices=("ghost", "ai"), default="ghost",
+                    help="drive: ghost (default) sets the car along the route and waits for each place to load "
+                    "(tools/ghost_drive.py); ai: the car's own AI drives it (tools/autodrive_perf.py)")
+    ap.add_argument("--ghost-speed", type=float, default=27.0, help="drive --driver ghost: m/s along the road")
+    ap.add_argument("--ai-mph", type=float, default=0.0, help="drive --driver ai: the AI's speed (default: the legal speed)")
     ap.add_argument("--both-ways", action="store_true", help="drive: back again too (bakes the other direction)")
     ap.add_argument("--keep-going", action="store_true", help="drive: on after a crash, a stop or a failed leg")
     ap.add_argument("--dry-run", action="store_true", help="clean: say what would go")
