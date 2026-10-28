@@ -292,6 +292,8 @@ const settingsSchema = [
       { id: "groundCover", type: "bool", default: true, name: "Grass and shrubs", desc: "3D grass where the land cover is grassland or forest floor, and scrub with sparse grass on shrubland, near the car (the game's own Hirochi Raceway and West Coast USA plants). Needs ground surfaces from the world server (on by default)." },
       { id: "groundCoverDensity", type: "select", default: "normal", name: "Grass density", desc: "How dense the grass and shrubs are. Without the optional grass patch (tools/gcpatch, Linux) the game regrows the grass in one slower frame each time the ground under the car moves (every ~130-190 m); higher density makes that frame longer.",
         options: [ { label: "Low", value: "low" }, { label: "Normal", value: "normal" }, { label: "High", value: "high" } ] },
+      { id: "groundCoverDistance", type: "select", default: "normal", name: "Grass distance", desc: "How far from the car the grass and shrubs reach. Near: short grass to 50 m, long grass to 70 m (the old setting). Normal: about what the game's own maps use (long grass to 120 m, shrubs to 150 m). Far: long grass to 200 m, shrubs to 250 m. Farther grass has more blades, so like density it makes the slower regrow frame each time the ground under the car moves longer.",
+        options: [ { label: "Near", value: "near" }, { label: "Normal", value: "normal" }, { label: "Far", value: "far" } ] },
       { id: "roads", type: "bool", default: true, name: "Roads", desc: "Real roads from OpenStreetMap / Overture within about 600 m of the car: paved roads as asphalt, gravel and dirt roads and tracks as worn dirt tracks, and the same surfaces under the tyres. Bridges, tunnels, markings and junction shapes come later." },
     ],
   },

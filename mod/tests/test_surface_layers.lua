@@ -124,6 +124,18 @@ do
   T.check(math.abs(n2 - n1 / 2) <= 1, 'density low: half the elements (' .. tostring(n1) .. ' -> ' .. tostring(n2) .. ')')
   T.check(gc.setDensity('nonsense') == false and gc.status().density == 0.5, 'unknown density refused')
   gc.setDensity('normal')
+  -- grass distance: the objects made again with the reach's radius and more elements to fill it
+  local long = gc.PREFIX .. 'long_grass_distant'
+  T.check(gc.status().reach == 'normal' and scenetree.findObject(long).fields.radius == '120', 'normal reach: long grass to 120 m')
+  local nNormal = tonumber(scenetree.findObject(long).fields.maxElements)
+  T.check(gc.setReach('far') == true and gc.status().reach == 'far', 'reach far')
+  local oFar = scenetree.findObject(long)
+  T.check(oFar.fields.radius == '200' and oFar.fields.dissolveRadius == '150', 'far reach: long grass to 200 m')
+  T.check(tonumber(oFar.fields.maxElements) > nNormal, 'far reach: more elements (' .. nNormal .. ' -> ' .. oFar.fields.maxElements .. ')')
+  T.check(gc.setReach('near') == true and scenetree.findObject(long).fields.radius == '70'
+    and scenetree.findObject(long).fields.dissolveRadius == '45', 'near reach: the old 70 m long grass')
+  T.check(gc.setReach('nonsense') == false and gc.status().reach == 'near', 'unknown reach refused')
+  gc.setReach('normal')
   gc.setEnabled(false)
   T.check(gc.status().objects == 0, 'off: objects gone')
   fl = flushes
@@ -167,6 +179,22 @@ do
     names[n] = true
   end
   T.check(unique, 'one object name per definition (a stock one on two layers gets its own name)')
+  -- reachFor: 'near' is the old tuning (the shares' element factor 1), farther reaches more elements
+  for _, d in ipairs(gc.DEFS) do
+    local n = d.name or d.src
+    local fNear, kNear = gc.reachFor(d, 'near')
+    local fNorm, kNorm = gc.reachFor(d, 'normal')
+    local fFar, kFar = gc.reachFor(d, 'far')
+    T.check(kNear == 1 and kNorm >= 1 and kFar > kNorm, n .. ': element factor grows with the reach')
+    T.check(fFar.radius > fNorm.radius and fNorm.radius >= fNear.radius, n .. ': radius grows with the reach')
+    T.check(fFar.dissolveRadius == nil or fFar.dissolveRadius < fFar.radius, n .. ': dissolve inside the radius')
+  end
+  local d0 = { reach = { near = { 50, 30 }, normal = { 100, 60 } }, fields = { gridSize = 4 } }
+  local f0, k0 = gc.reachFor(d0, 'far')
+  T.check(f0.radius == 100 and f0.gridSize == 4 and math.abs(k0 - 2 ^ gc.REACH_EXP) < 1e-9,
+    'a reach a definition lacks is its normal one; its fields kept')
+  local _, k1 = gc.reachFor({ share = 1 }, 'far')
+  T.check(k1 == 1, 'no reach: stock radius, factor 1')
 end
 
 T.done('test_surface_layers')
