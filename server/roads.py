@@ -1890,11 +1890,12 @@ def deck_profile(lines, ground_fn, crossings=(), clear=None, grade=None, lift=No
                            clear_of=clear_of)
     n_road = len(crossings)
     if levels is None or len(lines) < 2:
-        return zs
+        return _join_nodes(lines, zs, pins)
     over = _deck_crossings(lines)
     stacks = _deck_stacks(lines, levels, widths) if widths is not None else []
     if not over and not stacks:
-        return _merge_overlaps(lines, zs, widths, levels, pins=pins) if widths is not None else zs
+        return _join_nodes(lines, _merge_overlaps(lines, zs, widths, levels, pins=pins) if widths is not None else zs,
+                           pins)
     arcs = [np.r_[0.0, np.cumsum(np.hypot(*np.diff(ln[:, :2], axis=0).T))] for ln in lines]
     for _ in range(4):
         extra = []
@@ -1913,7 +1914,46 @@ def deck_profile(lines, ground_fn, crossings=(), clear=None, grade=None, lift=No
             zs = new
             break
         zs = new
-    return _merge_overlaps(lines, zs, widths, levels, pins=pins) if widths is not None else zs
+    return _join_nodes(lines, _merge_overlaps(lines, zs, widths, levels, pins=pins) if widths is not None else zs, pins)
+
+
+JOIN_FADE_M = 25.0      # m (at most half a part) over which a part's end is brought to its joint's height (_join_nodes)
+
+
+def _join_nodes(lines, zs, pins=None):
+    """zs with every joint of decks (an end shared by two or more parts, not an abutment) at one height: the highest
+    of the parts' ends there, each part's change fading over JOIN_FADE_M (a smoothstep). Each part is made on its own
+    floor (the ground under it rounded over its peaks, deck_profile_once), so four parts meeting at one point (a ramp
+    and East 70th Avenue at I-25, 2026-10-28) stood 0.8 m apart there: a step across the lanes. Pure."""
+    if len(lines) < 2:
+        return zs
+    nodes, edges, _ = _chain_graph(lines)
+    deg = np.zeros(len(nodes), int)
+    for a, b, _s in edges:
+        deg[a] += 1
+        deg[b] += 1
+    deg = _pin(nodes, deg, pins)
+    ends = {}
+    for k, (a, b, _s) in enumerate(edges):
+        if not np.isfinite(zs[k]).all():
+            continue
+        for node, e in ((a, 0), (b, -1)):
+            if deg[node] > 1:
+                ends.setdefault(node, []).append(float(zs[k][e]))
+    target = {n: max(v) for n, v in ends.items() if len(v) > 1 and max(v) - min(v) > 0.01}
+    if not target:
+        return zs
+    out = []
+    for k, (a, b, s) in enumerate(edges):
+        z = np.array(zs[k], np.float64)
+        if np.isfinite(z).all() and s[-1] > 0:
+            reach = min(JOIN_FADE_M, s[-1] / 2.0)
+            for node, d, e in ((a, s, 0), (b, s[-1] - s, -1)):
+                if node in target:
+                    u = np.clip(d / reach, 0.0, 1.0)
+                    z += (target[node] - zs[k][e]) * (1.0 - u * u * (3.0 - 2.0 * u))
+        out.append(z)
+    return out
 
 
 STACK_STEP_M = 16.0     # m between the points where an upper deck must clear the one under it (_deck_stacks)

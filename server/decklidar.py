@@ -5,12 +5,13 @@ viaduct meets a ramp near its far abutment that cannot hold (I-70 east of I-25 c
 last 20 m at 15 %), and every level is stacked a full DECK_ROAD_CLEAR (8.35 m) over the one below where life has
 ~7 m.
 
-3DEP's lidar saw the decks: its height above ground (lidarheights.Lidar, the Planetary Computer's 3dep-lidar-hag, 2 m
-pixels, the mosaic the buildings already read per map cell, so a pre-loaded place has it) over the DEM's ground (3DEP's
-bare earth: bridges taken out, the ground under them interpolated) is the deck's surface. Along each deck part, every
-DECK_STEP point: the median of three samples across its middle half (a centre line a few metres off the real deck),
-then spikes off a running median dropped (trucks, sign gantries, light poles), and points under a deck of a higher
-level dropped (the lidar sees the top one), or crossing another of the same level (which is on top unknown).
+3DEP's lidar saw the decks: its surface model (Dsm, the Planetary Computer's 3dep-lidar-dsm, the highest return in
+each 2 m pixel, per map cell as lidarheights keeps the buildings' heights) is the deck's surface where nothing stands
+over it. (Its height above ground, which the buildings read, will not do: its ground filter took I-70's long viaduct
+for ground and read 0 m over it.) Along each deck part, every DECK_STEP point: the median of three samples across its
+middle half (a centre line a few metres off the real deck), then spikes off a running median dropped (trucks, sign
+gantries, light poles), and points under a deck of a higher level dropped (the lidar sees the top one), or crossing
+another of the same level (which is on top unknown).
 
 roads.deck_profile takes what is left as each part's profile (gaps filled, its abutments kept at the graded ground)
 and as floor and cap within OBS_TOL_M, and asks the measured parts only LIDAR_ROAD_CLEAR over what they cross: the
@@ -39,7 +40,6 @@ GAP_FILL_M = 80.0       # m: a gap between measured stations this short is fille
 OBS_TOL_M = 0.3         # m the deck may leave the measurement for its curves and grades
 END_BLEND_M = 30.0      # m from an abutment over which the measurement gives way to the graded ground's height
 LIDAR_HEADROOM_M = 4.6  # m under a measured deck's girders (CDOT's 16.5 ft standard is 5.03 m; older ones 14.5 ft)
-HAG_MAX_OK = 120.0      # m: a height over this is the mosaic's saturated top, not a deck
 
 
 DSM_COLLECTION = "3dep-lidar-dsm"
@@ -156,15 +156,41 @@ def lidar_road_clear():
 
 
 class Surface:
-    """surface(la, lo) -> the lidar's surface height (ground(la, lo) + its height above ground), NaN where 3DEP has no
-    pixel (outside its flights, a mosaic tile it did not cover, a saturated pixel). lidar: lidarheights.Lidar; ground:
-    the raw DEM (not graded). A mosaic that cannot be read raises (the caller leaves the lidar out and does not keep
-    what it made: revisit.fault)."""
+    """surface(la, lo) -> the lidar's surface height (Dsm), NaN where 3DEP has no pixel (outside its flights, a mosaic
+    tile it did not cover). Each map cell's mosaic is put on the DEM's datum: less DATUM_PCT-th percentile of DSM -
+    ground(la, lo) (the raw DEM) over a DATUM_N x DATUM_N grid of it (open ground; buildings and trees stand over it).
+    A mosaic that cannot be read raises (the caller leaves the lidar out and does not keep what it made:
+    revisit.fault)."""
 
-    def __init__(self, lidar, ground, kind="demand"):
-        self.lidar, self.ground, self.kind = lidar, ground, kind
+    def __init__(self, dsm, ground, kind="demand"):
+        self.dsm, self.ground, self.kind = dsm, ground, kind
+        self.offsets = {}
 
-    def hag(self, la, lo):
+    def _offset(self, key, z):
+        got = self.offsets.get(key)
+        if got is None:
+            n = z.shape[0]
+            idx = (np.arange(DATUM_N) + 0.5) * n / DATUM_N
+            r, c = np.meshgrid(idx.astype(np.int64), idx.astype(np.int64), indexing="ij")
+            dz = z[r, c].ravel()
+            m = 1 << int(round(math.log2(n / 256)))
+            fx = key.x * m + (c.ravel() + 0.5) / 256.0
+            fy = key.y * m + (r.ravel() + 0.5) / 256.0
+            zz = key.z + int(round(math.log2(m)))
+            lo = fx / (1 << zz) * 360.0 - 180.0
+            la = np.degrees(np.arctan(np.sinh(np.pi * (1 - 2 * fy / (1 << zz)))))
+            ok = np.isfinite(dz)
+            got = 0.0
+            if ok.sum() >= DATUM_N:
+                g = np.asarray(self.ground(la[ok], lo[ok]), np.float64)
+                d = dz[ok] - g
+                got = float(np.percentile(d[np.isfinite(d)], DATUM_PCT)) if np.isfinite(d).any() else 0.0
+            if abs(got) > DATUM_MAX_M:
+                got = 0.0
+            self.offsets[key] = got
+        return got
+
+    def __call__(self, la, lo):
         import lidarheights
         import mapcells
         la = np.asarray(la, np.float64).ravel()
@@ -180,22 +206,20 @@ class Surface:
             key = mapcells.CellKey(z, x, y)
             if not lidarheights.covers(key.bounds()):
                 continue
-            m = self.lidar.mosaic(key, self.kind)
-            hag, cov = m["hag"], m["covered"]
+            m = self.dsm.mosaic(key, self.kind)
+            dsm, cov = m["z"], m["covered"]
             sel = (cx == x) & (cy == y)
-            px = np.clip(((fx[sel] - x * n) * 256.0).astype(np.int64), 0, hag.shape[1] - 1)
-            py = np.clip(((fy[sel] - y * n) * 256.0).astype(np.int64), 0, hag.shape[0] - 1)
-            v = hag[py, px].astype(np.float64) * lidarheights.HAG_STEP_M
-            ok = cov[py // 256, px // 256] & (hag[py, px] < 255) & (v < HAG_MAX_OK)
-            out[sel] = np.where(ok, v, np.nan)
+            px = np.clip(((fx[sel] - x * n) * 256.0).astype(np.int64), 0, dsm.shape[1] - 1)
+            py = np.clip(((fy[sel] - y * n) * 256.0).astype(np.int64), 0, dsm.shape[0] - 1)
+            v = dsm[py, px].astype(np.float64)
+            ok = cov[py // 256, px // 256] & np.isfinite(v)
+            out[sel] = np.where(ok, v - self._offset(key, dsm), np.nan)
         return out
 
-    def __call__(self, la, lo):
-        h = self.hag(la, lo)
-        if not np.isfinite(h).any():
-            return h
-        g = np.asarray(self.ground(np.asarray(la, np.float64).ravel(), np.asarray(lo, np.float64).ravel()), np.float64)
-        return g + h
+
+DATUM_N = 48            # a cell's datum grid (DATUM_N^2 points)
+DATUM_PCT = 10.0        # the percentile of DSM - DEM taken for the ground's
+DATUM_MAX_M = 5.0       # m: a larger offset is the data's fault, not the datum's (none taken)
 
 
 def _run_median(v, n):
@@ -325,10 +349,7 @@ def surface_for(md, dem):
     if not ON or md is None or dem is None:
         return None
     import grading
-    import lidarheights
-    lid = md.lidar() if hasattr(md, "lidar") else None
-    if lid is None:         # (the building heights' switch off: the decks read the same mosaics on their own)
-        lid = md.__dict__.get("_deck_lidar")
-        if lid is None:
-            lid = md.__dict__.setdefault("_deck_lidar", lidarheights.Lidar(md.raw_dir, md.fetcher))
-    return Surface(lid, lambda la, lo: dem.sample(la, lo, grading.PROFILE_ZOOM))
+    dsm = md.__dict__.get("_deck_dsm")
+    if dsm is None:
+        dsm = md.__dict__.setdefault("_deck_dsm", Dsm(md.raw_dir, md.fetcher))
+    return Surface(dsm, lambda la, lo: dem.sample(la, lo, grading.PROFILE_ZOOM))

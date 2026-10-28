@@ -8,7 +8,6 @@ import numpy as np
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import decklidar
-import lidarheights
 import mapcells
 import roads
 
@@ -62,21 +61,33 @@ class ObservationsTest(TestCase):
 
 
 class SurfaceTest(TestCase):
-    def test_reads_the_mosaic(self):
+    def test_reads_the_mosaic_on_the_dems_datum(self):
         key = mapcells.cell_of(39.78, -104.99)
-        hag = np.full((1024, 1024), 40, np.uint8)       # 40 steps: 20 m
-        hag[:, :10] = 255                               # saturated
+        z = np.full((1024, 1024), 1503.0, np.float32)    # the ground, 3 m over the DEM's datum ...
+        z[500:520, :] = 1545.0                          # ... a deck
+        z[:, :10] = np.nan                              # no pixel
         covered = np.ones((4, 4), bool)
         covered[3, 3] = False
-        lid = SimpleNamespace(mosaic=lambda k, kind="demand": {"hag": hag, "covered": covered})
-        sf = decklidar.Surface(lid, lambda la, lo: np.full(len(la), 1500.0))
-        lat0, lon0, lat1, lon1 = key.bounds()[1], key.bounds()[0], key.bounds()[3], key.bounds()[2]
-        la = np.array([(lat0 + lat1) / 2, lat1 - 1e-6, lat0 + 1e-6])
-        lo = np.array([(lon0 + lon1) / 2, lon0 + 1e-7, lon1 - 1e-6])
-        z = sf(la, lo)
-        self.assertAlmostEqual(z[0], 1500.0 + 40 * lidarheights.HAG_STEP_M)
-        self.assertTrue(np.isnan(z[1]))                 # saturated column
-        self.assertTrue(np.isnan(z[2]))                 # uncovered tile (south-east)
+        dsm = SimpleNamespace(mosaic=lambda k, kind="demand": {"z": z, "covered": covered})
+        sf = decklidar.Surface(dsm, lambda la, lo: np.full(len(la), 1500.0))
+        lon0, lat0, lon1, lat1 = key.bounds()
+        fy = key.y * 4 + 510 / 256.0
+        la_deck = float(np.degrees(np.arctan(np.sinh(np.pi * (1 - 2 * fy / (1 << 16))))))
+        la = np.array([(lat0 + lat1) / 2 + 3e-3, la_deck, lat1 - 1e-6, lat0 + 1e-6])
+        lo = np.array([(lon0 + lon1) / 2, (lon0 + lon1) / 2, lon0 + 1e-7, lon1 - 1e-6])
+        got = sf(la, lo)
+        self.assertAlmostEqual(got[0], 1500.0, places=3)
+        self.assertAlmostEqual(got[1], 1542.0, places=3)
+        self.assertTrue(np.isnan(got[2]))               # no pixel
+        self.assertTrue(np.isnan(got[3]))               # uncovered tile (south-east)
+
+    def test_npy_tile(self):
+        a = np.zeros((2, 256, 256), np.float32)
+        a[0] = 1600.0
+        a[1, :, 128:] = 255
+        t = decklidar.npy_tile(a)
+        self.assertTrue(np.isnan(t[:, :128]).all())
+        self.assertTrue((t[:, 128:] == 1600.0).all())
 
 
 class DeckProfileTest(TestCase):
