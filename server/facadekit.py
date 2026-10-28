@@ -108,6 +108,19 @@ VENEER_UV_M = (1.8, 0.9)            # m of wall per repeat of the stone texture 
 VENEER_TINTS = (0, 1, 3, 4)         # buildings.WALL_TINTS[STONE]: limestone, honey, grey, warm grey
 VENEER_CLEAR_M = 0.05               # m kept from a door's, garage door's or window's trims
 VENEER_PIER_M = 1.4                 # m: a garage door's stone pier at most this wide
+# House window variety (house_windows(), 2026-10-28: every window of Frederick's suburbs was the same 1.05 x 1.75 m
+# sash): per house, hashed; the glass always the sash's own UV rect (buildings.WIN_UV: the night map's lit cell).
+HOUSE_VARIETY = True                # False: every house window the standard sash, as before
+PAIR_SHARE = 0.4                    # houses with paired sashes (two units, a mullion between) on front and back walls ...
+PAIR_WINDOW_SHARE = 0.6             # ... in this share of those walls' windows
+MULLION_W = 0.1                     # m between a multiple window's units
+PICTURE_SHARE = 0.4                 # houses with a picture window (three units) on the front's ground floor by the door
+PICTURE_UNITS, PICTURE_UNIT_W = 3, 0.8
+SMALL_SHARE = 0.5                   # side walls' windows that are small (bathrooms, bedrooms) ...
+SMALL_W, SMALL_H, SMALL_SILL = 0.9, 1.2, 1.25   # ... this size, their sill this high over the floor
+BLANK_SIDE_L = 9.0                  # m: side walls shorter than this ...
+BLANK_SHARE = 0.4                   # ... have no windows on this share of houses
+WINDOW_CLEAR_M = 0.05               # m a varied window's trims keep from the door's / garage door's frame, other windows
 WAINSCOT_TOL = 0.1                  # m an opening may reach down behind a stone base band (a house's sill: 5 cm)
 DOOR_CLEAR_M = 0.05                 # m kept between an opening and a door / garage door frame
 # The plaster sheet's window openings (x0, y0, x1, y1 px of 1024, image top first) per band (buildings.BAND_TALL,
@@ -161,13 +174,125 @@ def _wall(ring, i):
     return a, d, np.array([d[1], -d[0]]), L
 
 
+class Win:
+    """A house window (house_windows): s its centre along the wall, zf its sill, w x h its opening, units sash units
+    uw wide with mw mullions between, kind ("std", "pair", "triple", "small"), shut its shutters drawn (left, right),
+    s_std / zf_std the standard slot it stands in (buildings.house_window_slots: the native window quad's)."""
+    __slots__ = ("s", "zf", "w", "h", "units", "uw", "mw", "kind", "shut", "s_std", "zf_std")
+
+    def __init__(self, s, zf, kind="std", units=1, uw=None, h=None, mw=0.0):
+        self.s, self.zf, self.kind, self.units, self.mw = s, zf, kind, units, mw
+        self.uw = uw or B.WIN_W
+        self.w = units * self.uw + (units - 1) * mw
+        self.h = h or B.WIN_H
+        self.shut = (False, False)
+        self.s_std, self.zf_std = s, zf
+
+    def box(self, extra=0.0):
+        """(s0, s1, z0, z1) of the window with its trims (sill, head, jambs), extra more each side."""
+        return (self.s - self.w / 2 - TRIM_W - extra, self.s + self.w / 2 + TRIM_W + extra,
+                self.zf - SILL_H, self.zf + self.h + HEAD_H)
+
+
+def has_shutters(spec):
+    return B._hash01(spec.seed, "shutters") < SHUTTER_SHARE and spec.roof != "flat"
+
+
+def _hit(b, boxes):
+    return any(b[0] < c[1] and b[1] > c[0] and b[2] < c[3] and b[3] > c[2] for c in boxes)
+
+
+def house_windows(spec, ring, edge, z_eave):
+    """A house wall's windows [Win] (its drawn ring's edge): its standard sash slots (buildings.house_window_slots),
+    and with HOUSE_VARIETY (and RECESS: the windows are cut and glazed by recess()) a house's own mix, hashed: paired
+    sashes on the front and back walls (PAIR_SHARE of houses), a triple picture window on the front's ground floor
+    beside the door (PICTURE_SHARE), small high windows on the side walls (SMALL_SHARE of their windows) and no
+    windows at all on a share of narrow side walls (BLANK_SHARE: tract houses' blank sides). A variant that would touch
+    the door's or garage door's frame, another window's trims or the wall's end stays the standard sash. Shutters on
+    a share of houses (SHUTTER_SHARE), each side where it fits."""
+    wl = _wall(ring, edge)
+    if wl is None:
+        return []
+    a, d, out, L = wl
+    wins = [Win(float(np.dot(c - a, d)), zf) for c, zf in B.house_window_slots(spec, a, d, out, L, z_eave, edge)]
+    shut = has_shutters(spec)
+    vary = HOUSE_VARIETY and RECESS and spec.wall and spec.windows is not False and wins
+    if not vary:
+        if shut:                                        # (as the trims always did: each side within the wall)
+            for w in wins:
+                h0, h1 = w.s - w.w / 2 - TRIM_W, w.s + w.w / 2 + TRIM_W
+                w.shut = (h0 - w.uw / 2 > 0.15 and h0 < L - 0.15, h1 > 0.15 and h1 + w.uw / 2 < L - 0.15)
+        return wins
+    base = z_eave - spec.floors * spec.floor_h
+    role = None
+    fe = front_edge(spec)
+    fw = _wall(ring, fe) if fe is not None else None
+    if fw is not None:
+        cs = abs(float(np.dot(fw[1], d)))
+        role = "front" if edge == fe else ("back" if cs > 0.7 else ("side" if cs < 0.3 else None))
+    if role == "side" and L < BLANK_SIDE_L and B._hash01(spec.seed, "blank", edge) < BLANK_SHARE:
+        return []
+    fixed = []                                          # the door's and garage door's frames
+    if spec.door and spec.door[0] == edge:
+        h = DOOR_W / 2 + FRAME_W * 1.5
+        fixed.append((spec.door[1] - h, spec.door[1] + h, -1e9, base + B.STOOP_H + B.PORCH_DECK_M + DOOR_H + 0.2))
+    dr = getattr(spec, "drive", None)
+    if dr and dr[0] == edge:
+        gs = garage_span(spec, edge, L)
+        if gs is not None:
+            fixed.append((gs[0] - FRAME_W, gs[1] + FRAME_W, -1e9, base + GARAGE_H + 0.18))
+    pic = None
+    if role == "front" and spec.door and spec.door[0] == edge and B._hash01(spec.seed, "picture") < PICTURE_SHARE:
+        ground = [k for k, w in enumerate(wins) if w.zf < base + spec.floor_h]
+        if ground:
+            pic = min(ground, key=lambda k: abs(wins[k].s - spec.door[1]))
+    # a standard sash whose trims stood on the door's frame (a narrow house's door at a fifth of its wall, a window in
+    # the bay beside it): left out, the wall plain there (it was drawn over the frame)
+    wins = [w for w in wins if not _hit(w.box(), fixed)]
+    if pic is not None:
+        ground = [k for k, w in enumerate(wins) if w.zf < base + spec.floor_h]
+        pic = min(ground, key=lambda k: abs(wins[k].s - spec.door[1])) if ground else None
+    pairs = B._hash01(spec.seed, "pairs") < PAIR_SHARE
+    for k, w in enumerate(wins):
+        cand = None
+        if k == pic:
+            cand = Win(w.s, w.zf, "triple", PICTURE_UNITS, PICTURE_UNIT_W, None, MULLION_W)
+        elif role in ("front", "back") and pairs and B._hash01(spec.seed, "pair", edge, k) < PAIR_WINDOW_SHARE:
+            cand = Win(w.s, w.zf, "pair", 2, B.WIN_W, None, MULLION_W)
+        elif role == "side" and B._hash01(spec.seed, "small", edge, k) < SMALL_SHARE:
+            cand = Win(w.s, w.zf - B.WIN_SILL + SMALL_SILL, "small", 1, SMALL_W, SMALL_H)
+        if cand is None:
+            continue
+        b = cand.box(WINDOW_CLEAR_M)
+        if b[0] < 0.15 or b[1] > L - 0.15 or _hit(b, fixed) \
+                or _hit(b, [o.box() for j, o in enumerate(wins) if j != k]):
+            continue
+        cand.s_std, cand.zf_std = w.s_std, w.zf_std
+        wins[k] = cand
+    if shut:                                            # shutters where they touch nothing
+        taken = list(fixed) + [w.box() for w in wins]
+        for w in wins:
+            if w.kind not in ("std", "pair"):
+                continue
+            h0, h1 = w.s - w.w / 2 - TRIM_W, w.s + w.w / 2 + TRIM_W
+            sw = w.uw / 2
+            sides = []
+            for e0, e1 in ((h0 - sw, h0), (h1, h1 + sw)):
+                b = (e0, e1, w.zf, w.zf + w.h)
+                ok = e0 > 0.15 and e1 < L - 0.15 and not _hit(b, [t for t in taken if t != w.box()])
+                if ok:
+                    taken.append(b)
+                sides.append(ok)
+            w.shut = tuple(sides)
+    return wins
+
+
 def windows(m, spec, ring, z_eave, mat_idx):
-    """Trims (sill, head, two jambs) round each laid-over sash window of a house (buildings.house_window_slots), and a
-    pair of shutters on a share of houses (SHUTTER_SHARE, its tint hashed)."""
+    """Trims (sill, head, two jambs) round each of a house's windows (house_windows: the sashes, a multiple window's
+    whole opening), and a pair of shutters on a share of houses (SHUTTER_SHARE, its tint hashed), where they fit."""
     trim = mat_idx[TRIM]
-    shutters = B._hash01(spec.seed, "shutters") < SHUTTER_SHARE and spec.roof != "flat"
     sh = None
-    if shutters:
+    if has_shutters(spec):
         r, g, b = SHUTTER_TINTS[int(B._hash01(spec.seed, "shtint") * len(SHUTTER_TINTS))]
         sh = (mat_idx[TRIM][0], (int(r * 255), int(g * 255), int(b * 255), 255))
     for i in range(len(ring)):
@@ -175,17 +300,18 @@ def windows(m, spec, ring, z_eave, mat_idx):
         if w is None:
             continue
         a, d, out, L = w
-        for c, zf in B.house_window_slots(spec, a, d, out, L, z_eave, i):
-            s = float(np.dot(c - a, d))
-            h0, h1 = s - B.WIN_W / 2, s + B.WIN_W / 2
+        for wn in house_windows(spec, ring, i, z_eave):
+            h0, h1 = wn.s - wn.w / 2, wn.s + wn.w / 2
+            zf, zt = wn.zf, wn.zf + wn.h
             _ledge(m, a, d, out, h0 - TRIM_W, h1 + TRIM_W, zf - SILL_H, zf, SILL_OUT, trim)                  # sill
-            _ledge(m, a, d, out, h0 - TRIM_W, h1 + TRIM_W, zf + B.WIN_H, zf + B.WIN_H + HEAD_H, HEAD_OUT, trim)  # head
+            _ledge(m, a, d, out, h0 - TRIM_W, h1 + TRIM_W, zt, zt + HEAD_H, HEAD_OUT, trim)                  # head
             for e0, e1 in ((h0 - TRIM_W, h0), (h1, h1 + TRIM_W)):                                              # jambs
-                _front(m, a + d * e0 + out * JAMB_OUT, a + d * e1 + out * JAMB_OUT, zf, zf + B.WIN_H, trim)
+                _front(m, a + d * e0 + out * JAMB_OUT, a + d * e1 + out * JAMB_OUT, zf, zt, trim)
             if sh is not None:
-                for e0, e1 in ((h0 - TRIM_W - B.WIN_W / 2, h0 - TRIM_W), (h1 + TRIM_W, h1 + TRIM_W + B.WIN_W / 2)):
-                    if e0 > 0.15 and e1 < L - 0.15:
-                        _front(m, a + d * e0 + out * SHUTTER_OUT, a + d * e1 + out * SHUTTER_OUT, zf, zf + B.WIN_H, sh)
+                for ok, (e0, e1) in zip(wn.shut, ((h0 - TRIM_W - wn.uw / 2, h0 - TRIM_W),
+                                                  (h1 + TRIM_W, h1 + TRIM_W + wn.uw / 2))):
+                    if ok:
+                        _front(m, a + d * e0 + out * SHUTTER_OUT, a + d * e1 + out * SHUTTER_OUT, zf, zt, sh)
 
 
 def door_frame(m, spec, ring, gmax, mat_idx):
@@ -441,22 +567,68 @@ def _clear(spec, ring, F, base, hq, hs0, hs1, hz0):
     return keep
 
 
-def _cut(F, hq, hs0, hs1, hz0, hz1, D, glass=None, glass_out=0.0, reveals=None, reveal_slot=None):
+def _pieces(F, hq, hs0, hs1, hz0, hz1):
+    """The wall pieces round any openings (quad hq, s0..s1, z0..z1 on it) of whatever heights: per quad, bands between
+    every opening's top and bottom, in each the gaps between the openings across it, a piece carried up while the next
+    band has the same gap. (quad, s0, s1, z0, z1) arrays, or None if two openings overlap."""
+    out = []
+    for q in np.unique(hq):
+        k = np.flatnonzero(hq == q)
+        L = float(F.L[q])
+        zs = sorted(set([float(F.za[q]), float(F.zb[q])] + hz0[k].tolist() + hz1[k].tolist()))
+        open_ = {}                                      # (s0, s1) -> its z0, carried up
+        for zi, zj in zip(zs, zs[1:]):
+            if zj - zi < 1e-9:
+                continue
+            c = k[(hz0[k] <= zi + 1e-9) & (hz1[k] >= zj - 1e-9)]
+            gaps, cur = [], 0.0
+            for a0, a1 in sorted(zip(hs0[c].tolist(), hs1[c].tolist())):
+                if a0 < cur - 1e-6:
+                    return None
+                if a0 > cur + 1e-9:
+                    gaps.append((round(cur, 9), round(a0, 9), cur, a0))
+                cur = max(cur, a1)
+            if L > cur + 1e-9:
+                gaps.append((round(cur, 9), round(L, 9), cur, L))
+            keys = {(g[0], g[1]): g for g in gaps}
+            for key in list(open_):
+                if key not in keys:                     # (that gap ends under this band)
+                    g0, z0 = open_.pop(key)
+                    out.append((q, g0[2], g0[3], z0, zi))
+            for key, g in keys.items():
+                if key not in open_:
+                    open_[key] = (g, zi)
+        for g0, z0 in open_.values():
+            out.append((q, g0[2], g0[3], z0, zs[-1]))
+    if not out:
+        return np.zeros(0, np.int64), *(np.zeros(0),) * 4
+    A = np.array(out, np.float64)
+    return A[:, 0].astype(np.int64), A[:, 1], A[:, 2], A[:, 3], A[:, 4]
+
+
+def _cut(F, hq, hs0, hs1, hz0, hz1, D, glass=None, glass_out=0.0, reveals=None, reveal_slot=None, units=None,
+         drop=None):
     """The quads with the openings (quad hq, s0..s1, z0..z1 on it) cut out: per quad, rows of openings (one z range
     each) and the strips between them, in a row the gaps between its openings; the glass D behind the face (glass:
     quads moved back from glass_out in front of it, else each opening's own piece of its quad); reveals (a function
     (hq, z0, z1) -> 4 UV arrays: left jamb, right jamb, sill, head) from the face back to the glass, in reveal_slot.
-    (P, UV, mid) lists, the untouched quads first in their order; None if openings would overlap."""
+    units (a house's windows, house_windows): per opening (count, unit width, mullion width): its glass the sash
+    (buildings.WIN_UV, slot 2) per unit, a white mullion post (front and sides) between units. drop: more quads to
+    leave out (the native windows these replace). (P, UV, mid) lists, the untouched quads first in their order; None
+    if openings would overlap."""
     o = np.lexsort((hs0, hz0, hq))
     hq, hs0, hs1, hz0, hz1 = hq[o], hs0[o], hs1[o], hz0[o], hz1[o]
     if glass is not None:
         glass = glass[o]
+    if units is not None:
+        units = tuple(np.asarray(x)[o] for x in units)
     nh = len(hq)
     first = np.ones(nh, bool)
     first[1:] = (hq[1:] != hq[:-1]) | (np.abs(hz0[1:] - hz0[:-1]) > 1e-6)
     prev1 = np.r_[0.0, hs1[:-1]]
-    if (~first & ((hs0 < prev1 - 1e-6) | (np.abs(hz1 - np.r_[0.0, hz1[:-1]]) > 1e-6))).any():
+    if (~first & (hs0 < prev1 - 1e-6)).any():
         return None
+    general = (~first & (np.abs(hz1 - np.r_[0.0, hz1[:-1]]) > 1e-6)).any()
     last = np.r_[first[1:], True]
     gq = np.r_[hq, hq[last]]
     gs0 = np.r_[np.where(first, 0.0, prev1), hs1[last]]
@@ -466,8 +638,7 @@ def _cut(F, hq, hs0, hs1, hz0, hz1, D, glass=None, glass_out=0.0, reveals=None, 
     rfirst = np.ones(len(rq), bool)
     rfirst[1:] = rq[1:] != rq[:-1]
     rprev1 = np.r_[0.0, rz1[:-1]]
-    if (~rfirst & (rz0 < rprev1 - 1e-6)).any():
-        return None
+    general = general or (~rfirst & (rz0 < rprev1 - 1e-6)).any()
     rlast = np.r_[rfirst[1:], True]
     sq = np.r_[rq, rq[rlast]]
     sz0 = np.r_[np.where(rfirst, F.za[rq], rprev1), rz1[rlast]]
@@ -475,13 +646,47 @@ def _cut(F, hq, hs0, hs1, hz0, hz1, D, glass=None, glass_out=0.0, reveals=None, 
     pq = np.r_[gq, sq]
     ps0, ps1 = np.r_[gs0, np.zeros(len(sq))], np.r_[gs1, F.L[sq]]
     pz0, pz1 = np.r_[gz0, sz0], np.r_[gz1, sz1]
+    if general:                                         # rows of different heights in a quad (a house's small window)
+        got = _pieces(F, hq, hs0, hs1, hz0, hz1)
+        if got is None:
+            return None
+        pq, ps0, ps1, pz0, pz1 = got
     big = (ps1 - ps0 > 1e-6) & (pz1 - pz0 > 1e-6)
     pq, ps0, ps1, pz0, pz1 = pq[big], ps0[big], ps1[big], pz0[big], pz1[big]
     zero = np.zeros(len(pq))
     p_, t_ = F.quads(pq, ((ps0, pz0, zero), (ps1, pz0, zero), (ps1, pz1, zero), (ps0, pz1, zero)))
     out_P, out_UV, out_M = [p_], [t_], [F.M[pq]]
     zh, Dh = np.zeros(nh), np.full(nh, -D)
-    if glass is not None:                               # a laid-over quad (a house's window), moved back
+    if units is not None:                               # sash units and mullion posts
+        nu, uw, mw = units
+        nu = nu.astype(np.int64)
+        rep_ = np.repeat(np.arange(nh), nu)
+        j = np.arange(len(rep_)) - np.repeat(np.cumsum(nu) - nu, nu)
+        gs0 = hs0[rep_] + j * (uw[rep_] + mw[rep_])
+        gs1 = gs0 + uw[rep_]
+        u0, u1, v0, v1 = B.WIN_UV
+        k = len(rep_)
+        gD = np.full(k, -D)
+        p_, t_ = F.quads(hq[rep_], ((gs0, hz0[rep_], gD), (gs1, hz0[rep_], gD), (gs1, hz1[rep_], gD),
+                                    (gs0, hz1[rep_], gD)), _patch(k, u0, u1, v0, v1))
+        out_P.append(p_)
+        out_UV.append(t_)
+        out_M.append(np.full(k, 2))
+        mm = j > 0                                      # a mullion before every unit but the first
+        if mm.any():
+            r, m1 = rep_[mm], gs0[mm]
+            m0 = m1 - mw[r]
+            q_, z0_, z1_ = hq[r], hz0[r], hz1[r]
+            km = int(mm.sum())
+            z_, dm = np.zeros(km), np.full(km, -D)
+            for corners in (((m0, z0_, z_), (m1, z0_, z_), (m1, z1_, z_), (m0, z1_, z_)),          # its front
+                            ((m0, z1_, z_), (m0, z1_, dm), (m0, z0_, dm), (m0, z0_, z_)),          # (facing -d)
+                            ((m1, z0_, z_), (m1, z0_, dm), (m1, z1_, dm), (m1, z1_, z_))):         # (facing +d)
+                p_, t_ = F.quads(q_, corners, np.broadcast_to(_TEXEL, (km, 4, 2)))
+                out_P.append(p_)
+                out_UV.append(t_)
+                out_M.append(np.full(km, 2))
+    elif glass is not None:                             # a laid-over quad (a house's window), moved back
         g = F.Q[glass].copy()
         g[:, :, :2] -= (F.n[hq] * (glass_out + D))[:, None, :]
         out_P.append(g.reshape(-1, 12))
@@ -508,6 +713,8 @@ def _cut(F, hq, hs0, hs1, hz0, hz1, D, glass=None, glass_out=0.0, reveals=None, 
     cut[hq] = True
     if glass is not None:
         cut[glass] = True
+    if drop is not None and len(drop):
+        cut[np.asarray(drop, np.int64)] = True
     k = np.flatnonzero(~cut)
     Pn = np.concatenate([F.Q.reshape(-1, 12)[k]] + out_P)
     UVn = np.concatenate([F.U.reshape(-1, 8)[k]] + out_UV)
@@ -528,6 +735,48 @@ def _laid_over(F, slot):
     ok = F.rect[o] & (F.M[o] == 0) & (np.abs((c * F.n[o]).sum(1) - B.WIN_OUT_M) < 1e-3) & (hs0 > 1e-6) \
         & (hs1 > hs0 + 0.1) & (hs1 < F.L[o] - 1e-6) & (hz0 > F.za[o] + 1e-6) & (hz1 < F.zb[o] - 1e-6)
     return w[ok], o[ok], hs0[ok], hs1[ok], hz0[ok], hz1[ok]
+
+
+def _house_openings(spec, ring, z_eave, F, base, glass, hq, hs0, hs1, hz0, hz1):
+    """recess() for a house with HOUSE_VARIETY: each native sash quad (glass, on wall quad hq, s0..s1, z0..z1) replaced
+    by its house_windows() window, cut and glazed unit by unit (a blank wall's left out, the wall whole there); one
+    that would touch the door, the garage door or the stone band is the standard sash, and if that would too, the
+    native quad stays laid on the wall as before. (P, UV, mid) or None."""
+    W = {i: house_windows(spec, ring, i, z_eave) for i in range(len(ring))}
+    hole, std, drop = [], [], []
+    for j in range(len(glass)):
+        q = hq[j]
+        e = off = None
+        for i in range(len(ring)):
+            on, se = _on_wall(ring, i, F.a[q:q + 1], F.d[q:q + 1])
+            if on[0]:
+                e, off = i, float(se[0])
+                break
+        if e is None:
+            continue
+        sc = (hs0[j] + hs1[j]) / 2 + off
+        w = next((w for w in W[e] if abs(w.s_std - sc) < 1e-4 and abs(w.zf_std - hz0[j]) < 1e-4), None)
+        if w is None:
+            drop.append(int(glass[j]))                  # (a blank wall: no window there)
+            continue
+        hole.append((j, q, w.s - w.w / 2 - off, w.s + w.w / 2 - off, w.zf, w.zf + w.h, w.units, w.uw, w.mw))
+        std.append((j, q, hs0[j], hs1[j], hz0[j], hz1[j], 1, B.WIN_W, 0.0))
+    rows = []
+    if hole:
+        H, S = np.array(hole, np.float64), np.array(std, np.float64)
+        hq_ = H[:, 1].astype(np.int64)
+        ok = _clear(spec, ring, F, base, hq_, H[:, 2], H[:, 3], H[:, 4])
+        sok = _clear(spec, ring, F, base, hq_, S[:, 2], S[:, 3], S[:, 4])
+        rows = [H[i] if ok[i] else S[i] for i in range(len(H)) if ok[i] or sok[i]]
+    if not rows and not drop:
+        return None
+    R = np.array(rows, np.float64).reshape(-1, 9)
+    drop += [int(glass[int(j)]) for j in R[:, 0]]
+
+    def reveals(qi, z0, z1):                            # the white trim
+        return [np.broadcast_to(_TEXEL, (len(qi), 4, 2))] * 4
+    return _cut(F, R[:, 1].astype(np.int64), R[:, 2], R[:, 3], R[:, 4], R[:, 5], RECESS_HOUSE_M, None, 0.0, reveals, 2,
+                (R[:, 6].astype(np.int64), R[:, 7], R[:, 8]), drop)
 
 
 def recess(spec, ring, z_eave, P, UV, mid):
@@ -555,6 +804,9 @@ def recess(spec, ring, z_eave, P, UV, mid):
         # houses: each window (slot 2) WIN_OUT_M in front of its wall's quad
         glass, hq, hs0, hs1, hz0, hz1 = _laid_over(F, 2)
         D = RECESS_HOUSE_M
+        if HOUSE_VARIETY:
+            out = _house_openings(spec, ring, z_eave, F, base, glass, hq, hs0, hs1, hz0, hz1)
+            return (P, UV, mid) if out is None else out
     else:
         # plaster sheet buildings: the sheet's windows in each of its quads (not a door's or plinth's plain strip)
         bk, bpt = sb
@@ -974,14 +1226,16 @@ def veneer(m, spec, ring, gmin, z_eave, mat_idx):
     mat = mat_idx[f"{B.STONE}|{tints[int(B._hash01(spec.seed, 'veneer tint') * len(tints))]}"]
     c = VENEER_CLEAR_M
     top = base + VENEER_H[0] + (VENEER_H[1] - VENEER_H[0]) * B._hash01(spec.seed, "veneer h")
-    shut = B._hash01(spec.seed, "shutters") < SHUTTER_SHARE and spec.roof != "flat"
+    shut = has_shutters(spec)
+    vary = HOUSE_VARIETY and RECESS
     wins = []                                           # the front's ground-floor windows: their trims' / shutters' span
-    for cpt, zf in B.house_window_slots(spec, a, d, n, L, z_eave, f):
-        if zf < base + spec.floor_h:
-            s = float(np.dot(cpt - a, d))
-            h = B.WIN_W / 2 + TRIM_W + (B.WIN_W / 2 if shut else 0.0)
-            wins.append((s - h - c, s + h + c))
-            top = min(top, zf - SILL_H - 0.02)
+    for wn in house_windows(spec, ring, f, z_eave):
+        if wn.zf < base + spec.floor_h:
+            sl = sr = wn.uw / 2 if shut else 0.0        # (as before: the shutters' room either side)
+            if vary:
+                sl, sr = (wn.uw / 2 if wn.shut[0] else 0.0), (wn.uw / 2 if wn.shut[1] else 0.0)
+            wins.append((wn.s - wn.w / 2 - TRIM_W - sl - c, wn.s + wn.w / 2 + TRIM_W + sr + c))
+            top = min(top, wn.zf - SILL_H - 0.02)
     holes = []                                          # (s0, s1) the band leaves out
     if spec.door and spec.door[0] == f:
         h = DOOR_W / 2 + FRAME_W * 1.5 + c

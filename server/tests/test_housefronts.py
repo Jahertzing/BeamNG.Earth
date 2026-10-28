@@ -132,10 +132,12 @@ class HouseFrontTest(unittest.TestCase):
             base = spec.height - spec.floors * spec.floor_h
             shut = bld._hash01(spec.seed, "shutters") < fk.SHUTTER_SHARE
             boxes = []                                              # (s0, s1, z0, z1) the stone must not touch
-            for c, zf in bld.house_window_slots(spec, a, d, out, L, spec.height, f):
-                s = float((c - a) @ d)
-                h = bld.WIN_W / 2 + fk.TRIM_W + (bld.WIN_W / 2 if shut else 0.0)
-                boxes.append((s - h, s + h, zf - fk.SILL_H, zf + bld.WIN_H + fk.HEAD_H))
+            for w in fk.house_windows(spec, ring, f, spec.height):    # (the windows there: facadekit.HOUSE_VARIETY's)
+                b0, b1, c0, c1 = w.box()
+                sl = sr = w.uw / 2 if shut else 0.0
+                if fk.HOUSE_VARIETY:
+                    sl, sr = (w.uw / 2 if w.shut[0] else 0.0), (w.uw / 2 if w.shut[1] else 0.0)
+                boxes.append((b0 - sl, b1 + sr, c0, c1))
             if spec.door and spec.door[0] == f:
                 h = fk.DOOR_W / 2 + fk.FRAME_W * 1.5
                 boxes.append((spec.door[1] - h, spec.door[1] + h, -9.0, base + 3.0))
