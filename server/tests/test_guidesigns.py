@@ -225,6 +225,19 @@ class Tile(unittest.TestCase):
             self.assertGreater(text[:, 0].min(), 8.0, "right of the continuing carriageway's edge")
             self.assertGreater(text[:, 1].min(), 30.0, "where the ramp has left, not at the junction")
 
+    def test_gantry_legs_off_other_roads(self):
+        m = gs.match(self.roads, np.array([0.0, 0.0]), np.array([0.0, 1.0]))
+        panels = gs._guide_panels({"k": "adv_1", "sh": [["I", "25", "NORTH"]], "dst": ["Denver"]}, m, True)
+        line = self.roads[0][2] + np.array([12.0, 0.0, 0.0])          # a road where the right leg stood (11 m)
+        cd = gs.Clear(self.roads + [("c", roads.Spec(6.0, "paved", False, "secondary", False, 2.0, 0), line, LON0)])
+        col = gs.Boxes()
+        self.assertIsNotNone(gs.overhead(gs.Mesh(), col, m, panels, clear=cd))
+        legs = [(b[0] + b[3]) / 2 for b in col.aabbs]
+        self.assertTrue(all(not 8.4 < x < 15.6 for x in legs), legs)      # moved past it
+        wide = gs.Clear(self.roads + [("w", roads.Spec(40.0, "paved", False, "secondary", False, 2.0, 0), line,
+                                       LON0)])
+        self.assertIsNone(gs.overhead(gs.Mesh(), gs.Boxes(), m, panels, clear=wide))  # nowhere: no gantry
+
     def test_text_faces_viewer(self):
         out = gs.tile(self.frame, self.roads, (-128.0, -128.0, 128.0, 128.0), items=self.items)
         P, T, _, _, M = out["mesh"]

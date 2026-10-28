@@ -732,7 +732,7 @@ def match(roads, xy, bvec, max_d=25.0):
     return best
 
 
-def build(mesh, col, roads, it, xy, ground=None, left_hand=False):
+def build(mesh, col, roads, it, xy, ground=None, left_hand=False, clear=None):
     """One route item into the tile's sign mesh, beside the road it stands by; its xy, or None (no road)."""
     b = np.array([math.sin(math.radians(it["brg"])), math.cos(math.radians(it["brg"]))])
     m = match(roads, xy, b)
@@ -742,19 +742,21 @@ def build(mesh, col, roads, it, xy, ground=None, left_hand=False):
     fast = m["spec"].cls in gs.HIGHWAY_MAIN
     if k == "rmile":
         face, size = gs.mile_face(it["n"])
-        gs._side_sign(mesh, col, m, face, size, ground, left_hand, off=1.8 if fast else 1.2, bottom=1.2,
+        gs._side_sign(mesh, col, m, face, size, ground, left_hand, clear=clear, off=1.8 if fast else 1.2,
+                      bottom=1.2,
                       collide=False)
     elif k in ("rshield", "jct"):
         face, size = route_shield_face([tuple(s) for s in it["sh"]], jct=k == "jct")
         if not size[0]:
             return None
-        gs._side_sign(mesh, col, m, face, size, ground, left_hand, off=POST_OFF(fast), bottom=1.8)
+        gs._side_sign(mesh, col, m, face, size, ground, left_hand, clear=clear, off=POST_OFF(fast), bottom=1.8)
     elif k == "pass":
         face, size = pass_face(it["name"], it.get("ft"), it.get("divide"))
-        gs._side_sign(mesh, col, m, face, size, ground, left_hand, off=POST_OFF(fast) + 0.5, bottom=1.6)
+        gs._side_sign(mesh, col, m, face, size, ground, left_hand, clear=clear, off=POST_OFF(fast) + 0.5,
+                      bottom=1.6)
     elif k == "city":
         face, size = city_face(it["name"], it["label"], it.get("ft"), big=fast)
-        gs._side_sign(mesh, col, m, face, size, ground, left_hand, off=POST_OFF(fast), bottom=1.8)
+        gs._side_sign(mesh, col, m, face, size, ground, left_hand, clear=clear, off=POST_OFF(fast), bottom=1.8)
     return xy
 
 

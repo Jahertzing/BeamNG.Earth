@@ -216,6 +216,32 @@ class Tile(unittest.TestCase):
         self.assertGreater(text[:, 2].min(), 1.7)
         self.assertIsNotNone(out["col"])                                # its posts
 
+    def _mile13(self, roads, ground=None):
+        (it, (x, y)), = [m for m in self._one("rmile") if m[0]["r"] == ["CO", "93"] and m[0]["n"] == 13]
+        box = (-128.0, y - 64.0, 128.0, y + 64.0)
+        out = gs.tile(self.frame, roads, box, items=[(it, (x, y))], ground=ground)
+        if out["mesh"] is None:
+            return None
+        P, T, _, _, M = out["mesh"]
+        return P + np.array([box[0], box[1], 0.0])
+
+    def test_kept_off_other_roads(self):
+        line = self.line + np.array([10.0, 0.0, 0.0])        # a frontage road beside: 6-14 m east
+        front = ("fr", roads.Spec(8.0, "paved", False, "secondary", False, 2.0, 0), line, LON93)
+        P = self._mile13(self.roads + [front])
+        self.assertTrue(P is None or not ((P[:, 0] > 5.0) & (P[:, 0] < 14.6)).any())    # none on it
+        line = self.line + np.array([14.0, 0.0, 0.0])        # 10-18 m east: the marker fits short of it
+        front = ("fr", roads.Spec(8.0, "paved", False, "secondary", False, 2.0, 0), line, LON93)
+        P = self._mile13(self.roads + [front])
+        east = P[P[:, 0] > 0]
+        self.assertTrue(len(east))
+        self.assertLess(east[:, 0].max(), 10.0 - gs.CLEAR_M + 1e-6)
+
+    def test_none_under_a_bridge(self):
+        high = [("r93", self.roads[0][1], self.line + np.array([0.0, 0.0, 8.0]), LON93)]
+        self.assertIsNone(self._mile13(high, ground=lambda x, y: np.zeros(len(x))))
+        self.assertIsNotNone(self._mile13(self.roads, ground=lambda x, y: np.zeros(len(x))))
+
     def test_metric_country_no_route_shields(self):
         (it, (x, y)), = [m for m in self._one("rmile") if m[0]["r"] == ["CO", "93"] and m[0]["n"] == 13]
         box = (-128.0, y - 64.0, 128.0, y + 64.0)
