@@ -17,11 +17,15 @@ DEFAULT_FILE = os.path.join(HERE, "regions.json")
 EARTH_R = 6371008.8
 EARTH_CIRC = 40075016.686
 # The tiers when a regions file names none: town (every layer, the finest imagery too), road (the corridors between
-# them), fill (the rest of the area); a lower priority is fetched first
+# them), fill (the rest of the area); a lower priority is fetched first. A tier's settings (TIER_DEFAULTS where it
+# leaves one out): dem, the finest DEM zoom (None: dem.FINE_ZOOM, the block's); exports, the export sources' zooms
+# (17: the base photo; 18: the regional sources' finer one; [] none); usgs, USGS's zooms over it; mapdata, the z14
+# cells: true (every layer), "roads" (roads and connectors), false
+TIER_DEFAULTS = {"priority": 9, "dem": None, "exports": [17], "usgs": [16, 15], "mapdata": True}
 DEFAULT_TIERS = {
-    "town": {"priority": 1, "z18": True},
-    "road": {"priority": 2, "z18": False},
-    "fill": {"priority": 3, "z18": False},
+    "town": {"priority": 1, "exports": [17, 18]},
+    "road": {"priority": 2},
+    "fill": {"priority": 3},
 }
 
 
@@ -178,7 +182,18 @@ class Region:
         return sum(p.area_km2() for p in self.parts)
 
     def priority(self, tier):
-        return int(self.tiers[tier].get("priority", 9))
+        return int(self.opt(tier, "priority"))
+
+    def opt(self, tier, name):
+        """A tier's setting (TIER_DEFAULTS where the tier leaves it out; "z18": true is exports [17, 18])."""
+        t = self.tiers.get(tier) or {}
+        if name == "exports" and "exports" not in t and "z18" in t:
+            return [17, 18] if t["z18"] else [17]
+        return t.get(name, TIER_DEFAULTS[name])
+
+    def where(self, name, test):
+        """A parts filter for tiles(): the parts whose tier's setting `name` passes test."""
+        return lambda p: test(self.opt(p.tier, name))
 
     def tiles(self, z, pad_m=0.0, where=None):
         """{(x, y): priority} of the zoom-z tiles that reach into a part (its edge within half a tile's diagonal, plus
@@ -243,7 +258,9 @@ def _parts(data, name, spec, tier, seen):
     if "union" in spec:
         out = []
         for i, sub in enumerate(spec["union"]):
-            out += _parts(data, f"{name}[{i}]" if not isinstance(sub, str) else sub, sub, t, seen)
+            sub_name = sub if isinstance(sub, str) else sub.get("title", f"{name}[{i}]") if isinstance(sub, dict) \
+                else f"{name}[{i}]"
+            out += _parts(data, sub_name, sub, t, seen)
         return out
     if "circle" in spec:
         return [circle(name, *spec["circle"], spec.get("radius_km", 5.0), t or "town")]

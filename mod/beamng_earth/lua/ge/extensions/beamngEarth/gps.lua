@@ -11,6 +11,10 @@ local M = {}
 
 M.CHECK_S = 1.0
 M.ARRIVE_M = 40         -- this close (horizontally): arrived
+-- Waypoints on the way (The Drive, thedrive.lua: Frederick to Castle Rock through Denver Union Station): the route is
+-- planned through them in order; one this close is passed and left out of the re-routes from then on.
+M.VIA_PASS_M = 150
+M.VIA_MAX = 8
 M.FINAL_M = 60          -- a graph node this close to the destination: the arrows end at the destination itself
 M.ON_GRAPH_M = 25       -- a route point this close to a graph node is reachable on the local graph
 M.LOOKAHEAD_M = 1500    -- how far along the route the arrows may reach
@@ -43,7 +47,7 @@ M.AUTO_AGGRESSION = 0.3
 -- damaged this much ends the autodrive.
 M.AUTO_DAMAGE = 20000
 
-local dest = nil        -- { lat, lon, name }
+local dest = nil        -- { lat, lon, name, vias = {{ lat, lon, name }...} (not passed yet), viasPassed, avoid }
 local route = nil       -- { points = {{lat, lon}...}, dist, dur, version } | false (no route: steering) | nil (none yet)
 local routeVersion = 0
 local routeError = nil
@@ -206,15 +210,27 @@ local function requestRoute(player)
   local veh = playerVeh()
   local d = veh and veh.getDirectionVector and veh:getDirectionVector()
   local b = d and M.compass(d.x, d.y)
-  if c.requestRoute(nextId, player.lat, player.lon, dest.lat, dest.lon, b) then
+  local via = nil
+  if #dest.vias > 0 then
+    via = {}
+    for i, w in ipairs(dest.vias) do via[i] = { w.lat, w.lon } end
+  end
+  if c.requestRoute(nextId, player.lat, player.lon, dest.lat, dest.lon, b, via, dest.avoid) then
     pendingId, lastRequest = nextId, os.clock()
   end
 end
 
-function M.setDestination(lat, lon, name)
+-- vias (optional): {{ lat, lon, name }...} the route passes through on the way, in order (bad ones left out);
+-- avoid (optional): a road class the route keeps off ('toll': The Drive's straight down I-25; server routing.EXCLUDE).
+function M.setDestination(lat, lon, name, vias, avoid)
   lat, lon = tonumber(lat), tonumber(lon)
   if not lat or not lon then return false end
-  dest = { lat = lat, lon = lon, name = name }
+  local vs = {}
+  for _, w in ipairs(type(vias) == 'table' and vias or {}) do
+    local wl, wo = tonumber(w.lat or w[1]), tonumber(w.lon or w[2])
+    if wl and wo and #vs < M.VIA_MAX then vs[#vs + 1] = { lat = wl, lon = wo, name = w.name } end
+  end
+  dest = { lat = lat, lon = lon, name = name, vias = vs, viasPassed = 0, avoid = type(avoid) == 'string' and avoid or nil }
   route, routeError, pendingId, enu, progress, info, progressS = nil, nil, nil, nil, 1, nil, nil
   routedTo, lastCheck, lastRequest = nil, -math.huge, -math.huge     -- plan and route at the next update
   downloadProgress = nil         -- the previous destination's bar, not this one's (its own push is coming)
@@ -243,7 +259,10 @@ M.metric = metric
 
 function M.status()
   if not dest then return nil end
+  local via = dest.vias[1]
   return { lat = dest.lat, lon = dest.lon, name = dest.name, dist = info and info.dist, bearing = info and info.bearing,
+           via = via and { lat = via.lat, lon = via.lon, name = via.name }, viasLeft = #dest.vias,
+           viasPassed = dest.viasPassed, avoid = dest.avoid,
            metric = metric(),
            remaining = info and info.remaining, eta = info and info.eta, routeVersion = route and route.version or 0,
            progress = progress, planning = pendingId ~= nil, routeError = routeError, pendingId = pendingId,
@@ -681,6 +700,16 @@ function M.update(anchor, player)
   local now = os.clock()
   if now - lastCheck < M.CHECK_S then return end
   lastCheck = now
+  -- the next waypoint passed: the re-routes from here leave it out
+  local w = dest.vias[1]
+  if w then
+    local wx, wy = anchor:geodeticToEnu(w.lat, w.lon, 0)
+    if (wx - player.x) ^ 2 + (wy - player.y) ^ 2 < M.VIA_PASS_M ^ 2 then
+      table.remove(dest.vias, 1)
+      dest.viasPassed = dest.viasPassed + 1
+      if log then log('I', 'beamngEarth', 'gps: passed ' .. tostring(w.name or 'a waypoint')) end
+    end
+  end
   -- the planned route: asked once (and on re-routes), taken when it arrives
   if pendingId then
     local c = core()
@@ -706,7 +735,9 @@ function M.update(anchor, player)
   local dx, dy = tx - player.x, ty - player.y
   local dist = math.sqrt(dx * dx + dy * dy)
   info = { dist = dist, bearing = M.bearing(player.x, player.y, tx, ty), remaining = dist }
-  if dist < M.ARRIVE_M then
+  if dist < M.ARRIVE_M and #dest.vias == 0 then
+    M.arrivals = (M.arrivals or 0) + 1
+    M.lastArrival = { name = dest.name, lat = dest.lat, lon = dest.lon }
     if ui_message then pcall(ui_message, 'Arrived: ' .. (dest.name or 'destination'), 5, 'beamngEarthGps') end
     M.clear()
     return

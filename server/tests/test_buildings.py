@@ -133,6 +133,43 @@ class PlanTest(unittest.TestCase):
         self.assertAlmostEqual(s.height, 18.0)
         self.assertEqual(s.floors, 6)
 
+    @staticmethod
+    def _ridge(spec):
+        """The drawn roof's top over the walls' foot (ground 0)."""
+        m = bld.Mesh()
+        bld._roof(m, spec, bld.drawn_ring(spec), spec.height, bld._Looks(spec.seed))
+        return float(np.asarray(m.arrays()[0]).reshape(-1, 3)[:, 2].max())
+
+    def test_mapped_height_is_the_ridge_of_an_l_shaped_house(self):
+        # Frederick, 2026-10-28 (Jeff: houses a storey too tall): an L (71 % of its box) was drawn flat, its 8 m
+        # DRCOG height (the roof's top) all walls: three storeys. Now a skeleton roof whose ridge is the 8 m
+        L = np.array([(0, 0), (14, 0), (14, 6), (6, 6), (6, 12), (0, 12)], np.float64)
+        for shape in ("hipped", "gabled"):
+            s = bld.plan(L, {"class": "house", "height": 8.0, "roof_shape": shape}, 0, 40.09, -104.93)
+            self.assertEqual(s.roof, shape)
+            self.assertIsNotNone(bld.roof_skeleton(s))
+            self.assertAlmostEqual(self._ridge(s), 8.0, delta=0.05)
+            self.assertLess(s.height, 7.0)        # (the wings' 3 m half width under the ridge)
+            self.assertEqual(s.floors, 2)
+
+    def test_mapped_height_is_the_ridge_of_a_box_roof(self):
+        s = bld.plan(rect(0, 0, 12, 9), {"class": "house", "height": 8.0, "roof_shape": "gabled"}, 0, 40.09, -104.93)
+        self.assertIsNone(bld.roof_skeleton(s))
+        self.assertAlmostEqual(s.height, 8.0 - 4.5 * math.tan(math.radians(bld.roof_pitch(s))), places=6)
+        self.assertAlmostEqual(self._ridge(s), 8.0, delta=0.05)
+
+    def test_pitched_house_drawn_flat_stands_at_its_roofs_mean_height(self):
+        # an outline the skeleton gives up on (a 0.2 m jog) and too far from its box for the box roof: flat, but at
+        # the mapped roof's mean height, not its ridge
+        L = np.array([(0, 0), (14, 0), (14, 6), (6.2, 6), (6.2, 6.2), (6, 6.2), (6, 12), (0, 12)], np.float64)
+        s = bld.plan(L, {"class": "house", "height": 8.0, "roof_shape": "hipped"}, 0, 40.09, -104.93)
+        self.assertEqual(s.roof, "flat")
+        self.assertLess(s.height, 7.0)
+        self.assertGreater(s.height, 5.0)
+        # a flat roof mapped as flat keeps its height
+        f = bld.plan(L, {"class": "house", "height": 8.0, "roof_shape": "flat"}, 0, 40.09, -104.93)
+        self.assertAlmostEqual(f.height, 8.0)
+
     def test_row_house_three_storeys_or_two_flat(self):
         s = bld.plan(rect(0, 0, 5, 18), {"class": ""}, neighbours=2)
         self.assertIn(s.floors, (2, 3))

@@ -176,6 +176,11 @@ POLICIES = {
     "tiles.mapterhorn.com": HostPolicy(rate=50.0, burst=200.0, max_conc=32, daily_budget=80000,
                                        allow_prefetch=True, offline_ok=True, revalidate_after=180 * DAY,
                                        miss_ttl=90 * DAY, **TILE_HOST),
+    # Mapterhorn's PMTiles archives (its data-access page offers them for extracts by range: tools/preload.py reads runs
+    # of ~60 tiles, up to 8 MB, a request; ~12 MB/s a request, 2026-10-28): a few at once, a modest daily count
+    "download.mapterhorn.com": HostPolicy(rate=4.0, burst=8.0, max_conc=4, daily_budget=20000, allow_prefetch=True,
+                                          offline_ok=True, miss_ttl=90 * DAY, binary=True, timeout=120.0,
+                                          max_attempts=3, base_delay=2.0),
     "s3.amazonaws.com": HostPolicy(rate=50.0, burst=100.0, max_conc=8, daily_budget=None,
                                    allow_prefetch=True, offline_ok=True, miss_ttl=None, **TILE_HOST),
     # BeamNG.Earth's own data on GitHub Pages (railtags.py: the weekly OSM rail shards, ~300 km each, kept on disk)
@@ -194,9 +199,12 @@ POLICIES = {
     "gis.drcog.org": HostPolicy(rate=2.0, burst=4.0, max_conc=2, daily_budget=20000, allow_prefetch=True,
                                 offline_ok=True, timeout=60.0),
     # the Planetary Computer's STAC search and tile service (lidarheights.py, --lidar-heights on): 17 requests a map
-    # cell (one search, 16 PNG tiles of ~8 KB), cached
+    # cell (one search, 16 PNG tiles of ~8 KB), cached; and Colorado's NAIP 2023 mosaic (pcnaip.py, imagery
+    # "co_naip2023"): one 1024 px tile per export parent, ~1.6 s. Throttled at Microsoft's discretion (no published
+    # numbers): four at once, a few a second; optional (USGS's NAIP and USGS fill in)
     "planetarycomputer.microsoft.com": HostPolicy(rate=4.0, burst=8.0, max_conc=4, daily_budget=20000,
-                                                  allow_prefetch=True, offline_ok=True, timeout=60.0),
+                                                  allow_prefetch=True, offline_ok=True, timeout=60.0,
+                                                  miss_ttl=90 * DAY, optional=True),
     "stac.overturemaps.org": HostPolicy(rate=5.0, burst=10.0, max_conc=2, daily_budget=5000,
                                         allow_prefetch=True, offline_ok=True, timeout=20.0),
     **{h: HostPolicy(rate=20.0, burst=40.0, max_conc=4, daily_budget=None, allow_prefetch=True,
@@ -293,7 +301,8 @@ ROLES = {
     "davidmegginson.github.io": "the airport list; the copy on disk is used meanwhile",
     "data.openstreetmap.us": "road details from OpenStreetMap (lanes, widths, sidewalks); estimated meanwhile",
     "gis.drcog.org": "the Denver region's measured buildings and street widths (DRCOG); the map's own meanwhile",
-    "planetarycomputer.microsoft.com": "US building heights from lidar; the map's own heights meanwhile",
+    "planetarycomputer.microsoft.com": ("US building heights from lidar and Colorado's 2023 aerial photos (NAIP); the map's "
+                                        "own heights and coarser photos meanwhile"),
     "tecnagamer.github.io": "railway details and US railroad crossing equipment; estimated meanwhile",
     "api.open-meteo.com": "live weather; the weather stays as it is meanwhile",
     "downloads.sourceforge.net": "the gravity model; standard gravity meanwhile",

@@ -20,13 +20,13 @@ Measured (Denver, 2026-10-28, a fresh cache): downtown's cell 12/853/1554 "tall"
 a suburb's "towers" 0 buildings for ~2 MB (the files' footers, shared by every cell of the file).
 
 Footprints are simplified to MAX_CORNERS corners (their oriented box when that changes the area too much), each wall
-is one quad in its facade's tint (mesh()), roofs flat or the near tiers' pitched box.
+one quad in its facade's mean colour with the windows lit at night, roofs flat (mesh(): upstream 1.7.0's skyline mesh).
 
 Hidden under the near tiers, exactly (none drawn twice): every building belongs to the anchor's 256 m road tile that
 holds its footprint's centroid (roads.TILE, buildings.tile_buildings' rule), so a skyline tile is cut into one mesh per
 such square ("parts", keyed "tx_ty" like the road and far building tiles) and the mod hides a part while that square's
-road tile or far building tile shows its buildings (roads.lua: the same test that hides a far tile under its road
-tile). Hundreds of parts for a city cell would cost as many objects and draw calls at 30 km, so each skyline tile also
+road tile, far building tile or upstream 1.7.0's skyline square (bldsky, 1 km, to 4.8 km) shows its buildings
+(roads.lua skyPartCovered). Hundreds of parts for a city cell would cost as many objects and draw calls at 30 km, so each skyline tile also
 has the whole cell's buildings merged ("shapes", split under buildings.MAX_MESH_VERTS): the mod draws the merged mesh
 while the car is farther than PARTS_M (mod) from the cell and no part of it is covered, the parts only near it.
 
@@ -52,6 +52,8 @@ ZOOM = 12                   # the skyline's cells (mapcells.CellKey at this zoom
 SEND_M = 40000.0            # cells whose square (anchor frame) comes this close to the car are sent ...
 DROP_M = 44000.0            # ... and dropped beyond this
 TALL_M = 6000.0             # cells this near get the "tall" tier (>= 20 m), the rest the "towers" tier (>= 50 m) ...
+if buildings.SKY_SEND_M > buildings.FAR_SEND_M:
+    TALL_M = 8000.0         # (... to the mid ring's MID_SKY_SEND_M with upstream's skyline squares: the two meet exactly)
 TALL_HYST_M = 1500.0        # ... and keep it until this much farther (no rebuild back and forth at the edge)
 LAYERS = {"tall": ("tall_buildings", "tall_building_parts"), "towers": ("towers", "tower_parts"),
           "mid": ("buildings", None)}
@@ -64,6 +66,11 @@ TIER_CODE = {"tall": "t", "towers": "w", "mid": "m"}    # (in the file names: a 
 MID_ZOOM = 14
 MID_SEND_M = 6000.0
 MID_DROP_M = 7500.0
+# With upstream 1.7.0's skyline squares (buildings.skyline_tile, the "bldsky" tracker: every building of 40 m2 and more
+# to buildings.SKY_SEND_M, 4.8 km) the mid ring starts where they end (no cell wholly within SKY_SEND_M, Chebyshev as
+# their tracker's) and reaches farther; the mod hides a part under a loaded bldsky square (roads.lua skyPartCovered)
+MID_SKY_SEND_M = 8000.0
+MID_SKY_DROP_M = 9500.0
 MID_FLOORS, MID_H, MID_AREA_M2 = 3, 12.0, 1500.0
 PER_POSE = 1                # skyline tiles building at once (low priority: see the module docstring)
 HEADING_BIAS = 0.4          # a cell straight ahead counts (1 - this) times as far; moving faster than HEADING_MIN_MS
@@ -212,37 +219,12 @@ def tile_items(frame, f, parts, elev, tx, ty, skip=None):
 
 
 def mesh(items):
-    """The skyline's mesh of [(Spec, gmin, gmax)] (rings relative to one origin): build()'s arrays, or None. Each wall
-    one quad from the skirt to the eave in its band's plain strip (buildings._plain_strip whole: the facade's tint, no
-    windows: a floor's windows are ~1 px from 2 km, and a quad per floor and wall, the lite mesh's, made downtown
-    Denver's cell 540k vertices); the roof as the near tiers draw it."""
-    m = buildings.Mesh()
-    for spec, gmin, gmax in items:
-        if spec.cls == "toll_booth" or spec.cls in buildings.BRIDGE_CLASSES:
-            continue
-        mat_idx = buildings._Looks(spec.seed)
-        ring = buildings.drawn_ring(spec)
-        mh = spec.min_h or 0.0
-        base = buildings.base_z(spec, gmin, gmax)
-        z0 = gmin - buildings.SKIRT_LITE_M if mh <= 0.5 else base + mh
-        z_eave = base + mh + spec.height
-        fac = mat_idx[spec.facade]
-        if spec.band:
-            bpt = spec.band[1]
-            v0, v1 = buildings._band_v(spec.band, spec.band[0])
-        else:
-            bpt, (v0, v1) = 1, (0.002, 0.995)
-        n = len(ring)
-        for i in range(n):
-            a, b = ring[i], ring[(i + 1) % n]
-            buildings._plain_strip(m, a, b, z0, z_eave, bpt, buildings.TILE_PX_M / bpt, v0, v1, fac, whole=True)
-        if mh > 0.5:                                  # a part over another / a street: its underside
-            m.poly([(p[0], p[1], z0) for p in ring[::-1]], [(0.002, 0.995)] * len(ring), fac)
-        buildings._roof(m, spec, ring, z_eave, mat_idx)
-    if m.n == 0:
-        return None
-    P, UV, T, M, C = m.arrays()
-    return P, UV, T, M, buildings.MATERIALS, C
+    """The skyline's mesh of [(Spec, gmin, gmax)] (rings relative to one origin): build()'s arrays, or None. Upstream
+    1.7.0's skyline mesh (buildings._sky_mesh): per building a quad per wall in its facade's mean colour, the windows'
+    map on it lit at night (bne_bld_sky, nightlights.lua), and its flat roof; ~5 vertices a corner (a floor's windows
+    are ~1 px from 2 km, and a quad per floor and wall, the lite mesh's, made downtown Denver's cell 540k vertices)."""
+    return buildings._sky_mesh([it for it in items
+                                if it[0].cls != "toll_booth" and it[0].cls not in buildings.BRIDGE_CLASSES])
 
 
 def _shifted(mesh, dx, dy):
@@ -313,8 +295,12 @@ def build_tile(frame, key, tier, md, elev, out_dir, vfs_dir, aid, kind="prefetch
 # ----------------------------------------------------------------------------------------------- the tracker
 
 def mid_tracker():
-    """The mid ring's Tracker: z14 cells to MID_SEND_M at the "mid" tier, none wholly under the far building tiles."""
+    """The mid ring's Tracker: z14 cells to MID_SEND_M at the "mid" tier, none wholly under the far building tiles;
+    with upstream's skyline squares (buildings.SKY_SEND_M past FAR_SEND_M) to MID_SKY_SEND_M, none wholly under them."""
     import roads
+    if buildings.SKY_SEND_M > buildings.FAR_SEND_M:
+        return Tracker(MID_SKY_SEND_M, MID_SKY_DROP_M, PER_POSE, zoom=MID_ZOOM, tier=lambda d, had=None: "mid",
+                       inner_m=buildings.SKY_SEND_M)
     return Tracker(MID_SEND_M, MID_DROP_M, PER_POSE, zoom=MID_ZOOM, tier=lambda d, had=None: "mid",
                    inner_m=buildings.FAR_SEND_M - roads.TILE)
 

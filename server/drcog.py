@@ -23,11 +23,13 @@ What it changes (mapdata.MapData, a cell whose box meets EXTENT):
 Requests: the layers' ArcGIS REST query (GeoJSON, 2,000 features a page) per z14 cell, through netfetch (host
 gis.drcog.org), cached per cell under <raw>/drcog/2024/ (the data is a fixed release).
 """
+import collections
 import json
 import logging
 import math
 import os
 import threading
+import time
 import urllib.parse
 
 import numpy as np
@@ -47,6 +49,9 @@ EXTENT = (-105.4019, 39.3086, -104.3702, 40.2129)     # the roofprints' extent (
 PAGE = 2000
 DATASET, LICENSE = "DRCOG Planimetrics 2024", "CC-BY-3.0"
 FT = 0.3048
+# cells kept decoded in memory, per kind (a least-recently-used cache each): the whole dict was cleared past 64 cells of
+# both kinds together, so on a long Denver drive the road widths' edges were read from disk again and again
+MEM_CELLS = {"roofprints": 24, "edges": 64}
 MIN_HEIGHT_M = 1.5          # a roofprint's height under this is not believed (the building's Overture height, or none)
 # DRCOG's building types -> Overture-like classes (buildings.plan) where no Overture building gives one
 TYPE_CLASS = {"Residential": "residential", "Commercial": "commercial", "Industrial": "industrial",
@@ -58,6 +63,7 @@ WIDTH_SAMPLES = (0.25, 0.5, 0.75)
 WIDTH_REACH_M = 25.0
 WIDTH_RANGE_M = (3.0, 40.0)
 WIDTH_MIN_SAMPLES = 2
+EDGES_RETRY_S = 60.0        # a cell whose edges could not be fetched: asked again after this (not by every road in it)
 
 
 def enabled():
@@ -91,6 +97,7 @@ class Drcog:
         self.fetcher = fetcher
         self._lock = threading.Lock()
         self._mem = {}
+        self._edges_failed = {}         # cell key -> time.monotonic() to ask for its edges again
 
     # --- fetching ---------------------------------------------------------------------------------------------
     def _query(self, url, bounds, fields, kind):
@@ -111,7 +118,10 @@ class Drcog:
     def _cached(self, name, key, build):
         path = os.path.join(self.dir, name, str(key.z), str(key.x), f"{key.y}.npz")
         with self._lock:
-            got = self._mem.get(path)
+            mem = self._mem.setdefault(name, collections.OrderedDict())     # (kind -> path -> arrays: LRU, MEM_CELLS)
+            got = mem.get(path)
+            if got is not None:
+                mem.move_to_end(path)
         if got is not None:
             return got
         try:
@@ -124,9 +134,10 @@ class Drcog:
             np.savez_compressed(tmp, **got)
             staging.replace_cached(tmp, path)
         with self._lock:
-            if len(self._mem) > 64:
-                self._mem.clear()
-            self._mem[path] = got
+            mem[path] = got
+            mem.move_to_end(path)
+            while len(mem) > MEM_CELLS.get(name, 32):
+                mem.popitem(last=False)
         return got
 
     def roofprints(self, key, kind="demand"):
@@ -186,25 +197,49 @@ class Drcog:
         """A widths(fid, lonlat) function for roads._measured_widths: the edges' width, else fallback's (the
         buildings' measure: roadwidth.RoadWidths.get)."""
         import mapcells
+        memo, lock = {}, threading.Lock()
 
-        def get(fid, lonlat):
+        def measure(fid, lonlat):
+            """(width or the fallback's, final): not final when the cell's edges could not be had (asked again)."""
             fb = fallback(fid, lonlat) if fallback is not None else None
             ll = np.asarray(lonlat, np.float64)
             if len(ll) < 2:
-                return fb
+                return fb, True
             mid = ll[len(ll) // 2]
             if not covers((mid[0], mid[1], mid[0], mid[1])):
-                return fb
+                return fb, True
+            key = mapcells.cell_of(float(mid[1]), float(mid[0]))
+            with self._lock:
+                retry_at = self._edges_failed.get(key)
+            if retry_at is not None and time.monotonic() < retry_at:
+                import revisit
+                revisit.fault()             # (as the failed fetch did: a build that goes on without it is not kept)
+                return fb, False
             try:
-                key = mapcells.cell_of(float(mid[1]), float(mid[0]))
                 e = self.edges(key, kind)
             except Exception as ex:         # (the buildings' measure, as without the source)
                 log.debug("drcog edges: %s: %s", type(ex).__name__, ex)
-                return fb
-            w = measure_width(ll, e["coords"], e["off"])
+                with self._lock:            # (not every road of the cell asking again: 2,922 requests for 9
+                    self._edges_failed[key] = time.monotonic() + EDGES_RETRY_S     # downtown road tiles offline)
+                return fb, False
+            with self._lock:
+                self._edges_failed.pop(key, None)
+            w = measure_width(ll, e["coords"], e["off"], edge_index(e))
             if w is None:
-                return fb
-            return (w, fb[1] if fb is not None else 2.5)
+                return fb, True
+            return (w, fb[1] if fb is not None else 2.5), True
+
+        def get(fid, lonlat):
+            # decided once per road per run, as the buildings' measure (roadwidth.RoadWidths.get): every consumer
+            # (the ground photos' painted roads, road tiles, the road graph) asks for the same roads again
+            with lock:
+                if fid in memo:
+                    return memo[fid]
+            got, final = measure(fid, lonlat)
+            if not final:                   # (the edges once they come)
+                return got
+            with lock:
+                return memo.setdefault(fid, got)
         return get
 
 
@@ -293,21 +328,85 @@ def merge_buildings(feats, roof):
     return out, len(keep_r)
 
 
-def measure_width(ll, coords, off):
+def _segments(coords, off):
+    """(a, b) (m, 2) the start and end of every segment of the lines coords / off (no segment across two lines)."""
+    if len(coords) < 2:
+        return np.zeros((0, 2)), np.zeros((0, 2))
+    starts = np.repeat(np.arange(len(off) - 1), np.diff(off))
+    same = np.r_[starts[1:] == starts[:-1], False]          # segment k -> k + 1 within one line
+    return coords[:-1][same[:-1]], coords[1:][same[:-1]]
+
+
+# The edges of a cell on a lon / lat grid, so a road's width is measured against the segments near it only: against all
+# of a Denver cell's (~10^5) it cost ~5-10 ms a road, the first painted ground photo or road tile of a downtown cell
+# measuring thousands of roads (Jeff's drive into Denver 2026-10-28: 15-21 s of "roads" in a block's base photo).
+INDEX_CELL_DEG = 0.0005     # ~43 m east-west, ~55 m north-south at 40 N
+_GRID_OFF = 1 << 20         # (grid indices made non-negative for the packed key)
+
+
+class EdgeIndex:
+    """A cell's edge-of-pavement segments (lon / lat) by grid square: near(box) -> the indices of every segment whose
+    bounding box meets the box's squares (a superset of those that meet the box)."""
+
+    def __init__(self, coords, off):
+        self.a, self.b = _segments(np.asarray(coords, np.float64), np.asarray(off, np.int64))
+        lo = np.floor(np.minimum(self.a, self.b) / INDEX_CELL_DEG).astype(np.int64)
+        hi = np.floor(np.maximum(self.a, self.b) / INDEX_CELL_DEG).astype(np.int64)
+        nx, ny = hi[:, 0] - lo[:, 0] + 1, hi[:, 1] - lo[:, 1] + 1
+        cnt = nx * ny
+        seg = np.repeat(np.arange(len(self.a)), cnt)
+        k = np.arange(int(cnt.sum())) - np.repeat(np.cumsum(cnt) - cnt, cnt)    # each square of a segment's box
+        gx = np.repeat(lo[:, 0], cnt) + k % np.repeat(nx, cnt)
+        gy = np.repeat(lo[:, 1], cnt) + k // np.repeat(nx, cnt)
+        key = self._key(gx, gy)
+        order = np.argsort(key, kind="stable")
+        self.keys, self.segs = key[order], seg[order]
+
+    @staticmethod
+    def _key(gx, gy):
+        return (np.asarray(gx, np.int64) + _GRID_OFF) * (2 * _GRID_OFF) + (np.asarray(gy, np.int64) + _GRID_OFF)
+
+    def near(self, x0, y0, x1, y1):
+        cx0, cx1 = int(math.floor(x0 / INDEX_CELL_DEG)), int(math.floor(x1 / INDEX_CELL_DEG))
+        cy0, cy1 = int(math.floor(y0 / INDEX_CELL_DEG)), int(math.floor(y1 / INDEX_CELL_DEG))
+        parts = []
+        for gx in range(cx0, cx1 + 1):          # (a column's squares are one run of the sorted keys)
+            i = np.searchsorted(self.keys, self._key(gx, cy0), side="left")
+            j = np.searchsorted(self.keys, self._key(gx, cy1), side="right")
+            if j > i:
+                parts.append(self.segs[i:j])
+        if not parts:
+            return np.zeros(0, np.int64)
+        return np.unique(np.concatenate(parts))
+
+
+def edge_index(edges):
+    """The EdgeIndex of a cell's edges dict (Drcog.edges), made once and kept in it (in memory only)."""
+    got = edges.get("_index")
+    if got is None:
+        got = edges["_index"] = EdgeIndex(edges["coords"], edges["off"])
+    return got
+
+
+def measure_width(ll, coords, off, index=None):
     """The carriageway width (m) of a road (centreline ll (k, 2) lon/lat) between the nearest edge of pavement lines
     either side of it: at WIDTH_SAMPLES of its length, the nearest crossing each side within WIDTH_REACH_M of a line
     square to it; the median of the samples where both sides have one (WIDTH_MIN_SAMPLES at least), else None.
-    Pure."""
+    index (the lines' EdgeIndex): only the segments near the road are looked at (the same result). Pure."""
     if len(coords) == 0 or len(ll) < 2:
         return None
     lat0 = float(ll[:, 1].mean())
     kx, ky = 111320.0 * math.cos(math.radians(lat0)), 110540.0
     lon0 = float(ll[:, 0].mean())
     P = np.c_[(ll[:, 0] - lon0) * kx, (ll[:, 1] - lat0) * ky]
-    E = np.c_[(coords[:, 0] - lon0) * kx, (coords[:, 1] - lat0) * ky]
-    starts = np.repeat(np.arange(len(off) - 1), np.diff(off))
-    same = np.r_[starts[1:] == starts[:-1], False]          # segment k -> k + 1 within one line
-    A, B = E[:-1][same[:-1]], E[1:][same[:-1]]
+    if index is not None:       # a crossing within the reach of a sample lies within the reach of the road's box
+        rx, ry = (WIDTH_REACH_M + 1.0) / kx, (WIDTH_REACH_M + 1.0) / ky
+        near = index.near(ll[:, 0].min() - rx, ll[:, 1].min() - ry, ll[:, 0].max() + rx, ll[:, 1].max() + ry)
+        a, b = index.a[near], index.b[near]
+    else:
+        a, b = _segments(np.asarray(coords, np.float64), np.asarray(off, np.int64))
+    A = np.c_[(a[:, 0] - lon0) * kx, (a[:, 1] - lat0) * ky]
+    B = np.c_[(b[:, 0] - lon0) * kx, (b[:, 1] - lat0) * ky]
     seg = np.diff(P, axis=0)
     L = np.hypot(seg[:, 0], seg[:, 1])
     cum = np.r_[0.0, np.cumsum(L)]

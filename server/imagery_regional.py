@@ -28,13 +28,16 @@ PLACE = {
     "au_nsw": "New South Wales", "au_tas": "Tasmania", "ontario": "Ontario",
     "co_frederick": "Frederick, CO", "co_boulder_county": "Boulder County, CO", "co_thornton": "Thornton, CO",
     "co_arapahoe": "Arapahoe County, CO", "co_douglas": "Douglas County, CO", "co_jeffco": "Jefferson County, CO",
-    "co_lakewood": "Lakewood, CO", "co_springs": "Colorado Springs",
+    "co_lakewood": "Lakewood, CO", "co_springs": "Colorado Springs", "co_larimer": "Larimer County, CO",
+    "co_pitkin": "Pitkin County, CO",
 }
 
-# name: (url, attribution, (south, west, north, east), kind, leaf_off[, max_zoom])
+# name: (url, attribution, (south, west, north, east), kind, leaf_off[, max_zoom[, nodata]])
 #   kind "xyz": an XYZ / TMS cache; "export": a WMS / ArcGIS export (lazy)
 #   max_zoom: the finest zoom asked (default 17); an export at 18 is one 1024 px image per z16 parent, its z17 tiles
 #   still cover the base photo (imagery.Imagery._passes)
+#   nodata: what an export fills past its data with, "white" (default: MapServer exports) or "black" (ImageServers);
+#   a black one's white is never taken for "outside" (snow on a mountain at a tile's edge)
 REGIONAL = {
     # --- United States (state programmes; spring leaf-off flights) ---------------------------------------------
     "ct2023": ("https://cteco.uconn.edu/ctraster/rest/services/images/Ortho_2023_tiled/ImageServer/tile/{z}/{y}/{x}",
@@ -78,7 +81,13 @@ REGIONAL = {
     # its open data catalog. z18 (0.46 m) for the mesh's L-1 tiles.
     "co_frederick": ("https://gis.frederickco.gov/arcgis/rest/services/Aerial_2024/ImageServer/exportImage?bandIds=0,1,2&"
                      + ARCGIS_EXPORT, "Town of Frederick, CO 2024 orthoimagery (town-frederickco.opendata.arcgis.com)",
-                     (40.04, -105.16, 40.23, -104.70), "export", True, 18),
+                     (40.04, -105.16, 40.23, -104.70), "export", True, 18, "black"),
+    # Larimer County's 2025 flight, the whole county (Fort Collins, Loveland, Estes Park, Wellington; leaf-on, cached
+    # MapServer in state plane, exported in Web Mercator; white past the county line; 0.7 s a 1024 px export,
+    # 2026-10-28); no licence stated on the county's public map service
+    "co_larimer": ("https://maps1.larimer.org/arcgis/rest/services/Imagery/imagery2025FullCounty/MapServer/export?"
+                   + ARCGIS_EXPORT, "Larimer County, CO 2025 aerial imagery", (40.24, -106.06, 41.01, -104.92),
+                   "export", False, 18),
     # DRAPP (the Denver Regional Council of Governments' aerial photography, 6-inch, spring; CC BY 3.0, drcog.org/legal-
     # terms): no host serves the 2024 flight for the whole region, so each member's copy for its own area. Thornton's
     # covers Thornton, Northglenn, Westminster and south Broomfield
@@ -97,7 +106,7 @@ REGIONAL = {
     # DRAPP 2022 via Jefferson County (Arvada, Wheat Ridge, Lakewood, Golden, west Broomfield; black outside)
     "co_jeffco": ("https://gisportal.jeffco.us/image/rest/services/DRAPP/DRAPP2022/ImageServer/exportImage?bandIds=0,1,2&"
                   + ARCGIS_EXPORT, "DRCOG DRAPP 2022 via Jefferson County, CO (CC BY 3.0)",
-                  (39.11, -105.42, 39.93, -105.03), "export", True, 18),
+                  (39.11, -105.42, 39.93, -105.03), "export", True, 18, "black"),
     # DRAPP 2020 via the City of Lakewood: the only DRAPP copy found that reaches central Denver (to ~-104.88; Denver's
     # and Adams County's own servers did not answer or refused scripts, 2026-10-28)
     "co_lakewood": ("https://egis.lakewood.org/server/rest/services/CW/Lakewood2020Aerial/MapServer/export?" + ARCGIS_EXPORT,
@@ -108,6 +117,11 @@ REGIONAL = {
     "co_springs": ("https://gis.coloradosprings.gov/arcgis/rest/services/Basemaps/AerialsBasemap/MapServer/export?"
                    + ARCGIS_EXPORT, "City of Colorado Springs / El Paso County, CO aerial imagery",
                    (38.51, -105.09, 39.14, -104.03), "export", False, 18),
+    # Pitkin County's 2025 flight, 6-inch, the whole county (Aspen, Snowmass, Basalt, Woody Creek; leaf-on summer;
+    # ImageServer in Web Mercator, black past the county line: snow stays snow; 0.8-1 s a 1024 px export)
+    "co_pitkin": ("https://maps.pitkincounty.com/arcgis/rest/services/FullCounty_WM/ImageServer/exportImage?"
+                  + ARCGIS_EXPORT, "Pitkin County, CO 2025 orthoimagery", (38.99, -107.29, 39.42, -106.59), "export",
+                  False, 18, "black"),
     # --- Europe -------------------------------------------------------------------------------------------------
     "swiss": ("https://wmts.geo.admin.ch/1.0.0/ch.swisstopo.swissimage/default/current/3857/{z}/{x}/{y}.jpeg",
               "(c) swisstopo SWISSIMAGE", (45.80, 5.95, 47.81, 10.50), "xyz", False),

@@ -105,6 +105,12 @@
                 <div class="option-reset"></div>
               </div>
 
+              <!-- The Drive: closes the menu and starts it (settings.lua uiTheDrive -> thedrive.lua) -->
+              <div v-if="item.type === 'drive'" class="inline-controls">
+                <BngButton :accent="ACCENTS.main" @click="startDrive(item.route)">{{ item.label }}</BngButton>
+                <div class="option-reset"></div>
+              </div>
+
               <!-- Feedback: the report window or the profiler (the menu closes first: settings.lua M.feedback) -->
               <div v-if="item.type === 'feedback'" class="inline-controls">
                 <BngButton :accent="ACCENTS.outlined" @click="openFeedback(item.what)">{{ item.label }}</BngButton>
@@ -262,6 +268,17 @@ let pathSentAt = 0
 // Mirrors lua/ge/extensions/beamngEarth/settings.lua SCHEMA (the Lua side validates and clamps).
 const settingsSchema = [
   {
+    name: "The Drive",
+    items: [
+      { id: "theDriveDowntown", type: "drive", route: "downtown", label: "Start", name: "Frederick to Castle Rock through downtown Denver", desc: "Closes this menu and puts the car in Old Town Frederick, sets the GPS through Denver Union Station to downtown Castle Rock, and sets the time of day below. The clock starts when the car first moves and shows on the status bar; you get a split at Union Station and the best times are kept. Also Ctrl+Alt+D while driving." },
+      { id: "theDriveI25", type: "drive", route: "i25", label: "Start", name: "Frederick to Castle Rock straight down I-25", desc: "The same, but straight down I-25 the whole way (no E-470, no toll roads). Also Ctrl+Alt+I while driving." },
+      { id: "theDriveTime", type: "select", default: "golden", name: "Time of day", desc: "When The Drive starts. Golden hour: 45 minutes before today's sunset, so it gets dark on the way to Castle Rock. Midday: 12:30. Night: 21:30. Keep: the sky is left as it is. Setting a time switches Sky to Manual; choose Real time to go back. Ctrl+Alt+G and Ctrl+Alt+N set golden hour or night any time.",
+        options: [ { label: "Golden hour", value: "golden" }, { label: "Midday", value: "midday" }, { label: "Night", value: "night" }, { label: "Keep the current time", value: "real" } ] },
+      { id: "theDriveAutodrive", type: "bool", default: false, name: "Autodrive", desc: "The car drives itself the whole way (the GPS autodrive: in its lane, at the speed limit). Ctrl+Alt+A turns it on or off during any GPS route." },
+      { id: "theDriveTimes", type: "info", name: "Best times", desc: "Your best times per route, from when the car first moved to downtown Castle Rock (game time: pausing stops the clock)." },
+    ],
+  },
+  {
     name: "Connection",
     items: [
       { id: "connection", type: "info", name: "Companion server", desc: "State of the connection to the BeamNG.Earth companion server (127.0.0.1:47613) and the session id it gave this game." },
@@ -293,10 +310,14 @@ const settingsSchema = [
       { id: "rocks", type: "bool", default: true, name: "Rocks", desc: "Rocks and boulders on bare, rocky and steep ground. Off removes them (and their collision)." },
       { id: "groundCoverDensity", type: "select", default: "normal", name: "Grass density", desc: "How dense the grass and shrubs are. Without the optional grass patch (tools/gcpatch, Linux) the game regrows the grass in one slower frame each time the ground under the car moves (every ~130-190 m); higher density makes that frame longer.",
         options: [ { label: "Low", value: "low" }, { label: "Normal", value: "normal" }, { label: "High", value: "high" } ] },
-      { id: "groundCoverDistance", type: "select", default: "normal", name: "Grass distance", desc: "How far from the car the grass and shrubs reach. Near: short grass to 50 m, long grass to 70 m (the old setting). Normal: about what the game's own maps use (long grass to 120 m, shrubs to 150 m). Far: long grass to 200 m, shrubs to 250 m. Farther grass has more blades, so like density it makes the slower regrow frame each time the ground under the car moves longer.",
-        options: [ { label: "Near", value: "near" }, { label: "Normal", value: "normal" }, { label: "Far", value: "far" } ] },
+      { id: "groundCoverDistance", type: "select", default: "normal", name: "Grass distance", desc: "How far from the car the grass and shrubs reach. Near: short grass to 50 m, long grass to 70 m (the old setting). Normal: about what the game's own maps use (long grass to 120 m, shrubs to 150 m). Far: long grass to 200 m, shrubs to 250 m. Max: long grass and shrubs to 300 m, about as far as the ground under the car is loaded. Farther grass has more blades: more work for the graphics card, and without the grass patch a slower regrow frame each time the ground under the car moves.",
+        options: [ { label: "Near", value: "near" }, { label: "Normal", value: "normal" }, { label: "Far", value: "far" }, { label: "Max", value: "max" } ] },
+      { id: "groundGrass", type: "bool", default: true, name: "Grass in the distant ground", desc: "Past the 3D grass, grassland in the ground itself gets a grass texture and bumps over the aerial photo, so fields read as grass toward the horizon and the end of the 3D grass doesn't show as a line. Applies to the ground as it loads (after a teleport, or as you drive)." },
       { id: "roads", type: "bool", default: true, name: "Roads", desc: "Real roads from OpenStreetMap / Overture within about 600 m of the car: paved roads as asphalt, gravel and dirt roads and tracks as worn dirt tracks, and the same surfaces under the tyres. Bridges, tunnels, markings and junction shapes come later." },
+      { id: "aiTraffic", type: "select", default: "normal", name: "AI traffic", desc: "The game's own AI traffic on the real roads, when the level-start options leave traffic to the settings (their default; picking traffic there still wins). Normal: the amount the game picks for this PC. Light: about half. Busy: about one and a half times, at most 24. Every traffic car is a full physics car, so busier traffic takes more CPU. Takes effect at the next level start.",
+        options: [ { label: "Off", value: "off" }, { label: "Light", value: "light" }, { label: "Normal", value: "normal" }, { label: "Busy", value: "busy" } ] },
       { id: "drcog", type: "bool", default: true, name: "Denver-region buildings and road widths (DRCOG)", desc: "In the Denver region (the DRCOG area, Frederick included), buildings come from DRCOG's 2024 aerial survey: their measured outlines and heights, in place of the map's footprints they match; street widths come from its edges of pavement. No effect elsewhere. Data: DRCOG Regional Data Catalog (Denver Regional Council of Governments), CC BY 3.0, https://data.drcog.org. Takes effect at the next start of the app." },
+      { id: "lidarHeights", type: "bool", default: true, name: "Building heights from USGS lidar", desc: "In the US, buildings whose map height is missing or only machine-learned get their height measured from the USGS 3D Elevation Program's lidar (the height above ground inside the footprint). Mapped and surveyed heights (OpenStreetMap, DRCOG) stay. Buildings newer than the area's lidar flight keep their map height. No effect outside the US. Data: USGS 3D Elevation Program (3DEP) lidar, public domain, via the Microsoft Planetary Computer. Takes effect at the next start of the app." },
     ],
   },
   {
@@ -418,6 +439,7 @@ function infoValue(item) {
   if (item.id === "deshadow") return s.deshadow || "off"
   if (item.id === "colormatch") return s.colormatch || "off"
   if (item.id === "cacheUsage") return (s.cache && s.cache.line) || "-"
+  if (item.id === "theDriveTimes") return driveTimes(s.theDrive)
   return ""
 }
 
@@ -438,6 +460,22 @@ function luaValue(val) {
 
 function showWelcome() {
   engineLua("if beamngEarth_settings and beamngEarth_settings.showWelcome then beamngEarth_settings.showWelcome() end")
+}
+
+// The Drive's best times: "Downtown 1:02:03 · I-25 58:10" (thedrive.records())
+function driveClock(s) {
+  s = Math.max(0, Math.round(s))
+  const h = Math.floor(s / 3600), m = Math.floor(s / 60) % 60, x = s % 60
+  const pad = n => String(n).padStart(2, "0")
+  return h > 0 ? `${h}:${pad(m)}:${pad(x)}` : `${m}:${pad(x)}`
+}
+function driveTimes(r) {
+  if (!r) return "-"
+  const part = (name, d) => `${name} ${d && typeof d.best === "number" ? driveClock(d.best) : "no run yet"}`
+  return `${part("Downtown", r.downtown)}  ·  ${part("I-25", r.i25)}`
+}
+function startDrive(route) {
+  engineLua(`if beamngEarth_settings and beamngEarth_settings.uiTheDrive then beamngEarth_settings.uiTheDrive(${JSON.stringify(route)}) end`)
 }
 
 // Feedback buttons: settings.lua closes the menu, then opens the report window or starts the profiler

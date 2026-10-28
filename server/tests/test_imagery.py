@@ -250,17 +250,76 @@ class ChainTest(unittest.TestCase):
         self.assertTrue(m[:30, :30].all() and m[:, 200:].all(), "both at once")
 
     def test_front_range_sources(self):
-        """The Front Range's county sources: lazy exports at z18, white past their lines, before NAIP; a newer or
-        finer one before an older one whose box overlaps it."""
-        names = ["co_boulder_county", "co_frederick", "co_thornton", "co_arapahoe", "co_douglas", "co_jeffco",
-                 "co_lakewood", "co_springs"]
+        """Colorado's county sources: lazy exports at z18, their fill past their lines (white for the MapServers,
+        black for the ImageServers), before NAIP; a newer or finer one before an older one whose box overlaps it;
+        then the Planetary Computer's NAIP 2023 for the whole state, then USDA's and USGS's NAIP."""
+        names = ["co_boulder_county", "co_frederick", "co_larimer", "co_thornton", "co_arapahoe", "co_douglas",
+                 "co_jeffco", "co_lakewood", "co_springs", "co_pitkin", "co_naip2023"]
         idx = [imagery.DEFAULT_CHAIN.index(n) for n in names]
         self.assertEqual(idx, sorted(idx))
         self.assertLess(idx[-1], imagery.DEFAULT_CHAIN.index("naipusda"))
+        black = {"co_frederick", "co_jeffco", "co_pitkin", "co_naip2023"}
         for n in names:
             s = imagery.SOURCES[n]
-            self.assertTrue(s.lazy and s.export == 2 and s.max_zoom == 18 and s.nodata == "white", n)
+            self.assertTrue(s.lazy and s.export == 2 and s.max_zoom == (17 if n == "co_naip2023" else 18), n)
+            self.assertEqual(s.nodata, "black" if n in black else "white", n)
             self.assertIn(netfetch.host_of(s.url), netfetch.POLICIES, n)
+        self.assertEqual(imagery.SOURCES["co_naip2023"].resolver, "pcnaip")
+
+    def test_export_url(self):
+        src = imagery.SOURCES["co_larimer"]
+        u = imagery.export_url(src, 15, 6810, 12360, 1024)
+        mb = imagery.mercator_bbox(15, 6810, 12360)
+        self.assertIn("bbox=" + ",".join(f"{v:.3f}" for v in mb), u)
+        self.assertIn("size=1024,1024", u)
+        tiles = replace(src, url="https://x.example/t/{pz}/{px}/{py}@{scale}x.jpg", resolver="")
+        self.assertEqual(imagery.export_url(tiles, 15, 6810, 12360, 1024), "https://x.example/t/15/6810/12360@4x.jpg")
+        self.assertEqual(imagery.export_url(tiles, 13, 1, 2, 64), "https://x.example/t/13/1/2@1x.jpg")
+        old = dict(imagery.RESOLVERS)
+        try:
+            imagery.RESOLVERS["pcnaip"] = lambda fetcher, cache_dir: "https://pc.example/{pz}/{px}/{py}@{scale}x"
+            self.assertEqual(imagery.export_url(imagery.SOURCES["co_naip2023"], 15, 7, 8, 1024),
+                             "https://pc.example/15/7/8@4x")
+        finally:
+            imagery.RESOLVERS.clear()
+            imagery.RESOLVERS.update(old)
+
+    def test_pcnaip_search_id(self):
+        """The mosaic's search id: registered once, kept on disk, used again until an hour before it expires."""
+        import pcnaip
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        made = []
+        now = [1_800_000_000.0]
+
+        def register(fetcher):
+            made.append(fetcher)
+            return f"pc1.{int(now[0] + 86400)}.abc{len(made)}"
+        orig = pcnaip._register
+        pcnaip._register = register
+        self.addCleanup(setattr, pcnaip, "_register", orig)
+        pcnaip.reset()
+        self.addCleanup(pcnaip.reset)
+        t1 = pcnaip.template(None, tmp.name, now=lambda: now[0])
+        self.assertIn("/pc1.", t1)
+        self.assertIn("{pz}/{px}/{py}@{scale}x.jpg", t1)
+        self.assertEqual(pcnaip.template(None, tmp.name, now=lambda: now[0]), t1)
+        pcnaip.reset()                          # a new process: the id from disk, no new registration
+        self.assertEqual(pcnaip.template(None, tmp.name, now=lambda: now[0]), t1)
+        self.assertEqual(len(made), 1)
+        now[0] += 86400 - 1800                  # half an hour before it expires: registered again
+        t2 = pcnaip.template(None, tmp.name, now=lambda: now[0])
+        self.assertNotEqual(t2, t1)
+        self.assertEqual(len(made), 2)
+        self.assertEqual(pcnaip.expiry("pc1.1793247594.db2e"), 1793247594.0)
+        self.assertEqual(pcnaip.expiry("nonsense"), 0.0)
+
+    def test_pcnaip_offline(self):
+        import pcnaip
+        pcnaip.reset()
+        self.addCleanup(pcnaip.reset)
+        with self.assertRaises(netfetch.FetchError):
+            pcnaip.template(netfetch.Fetcher(offline=True), None)
 
     def test_blank_last_source_is_used(self):
         """EOX draws the open ocean as one uniform colour: accepted from the last source."""

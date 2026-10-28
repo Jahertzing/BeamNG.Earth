@@ -1,5 +1,6 @@
 """The DRCOG planimetrics source (server/drcog.py): roofprints merged with Overture's buildings, road widths between
 the edges of pavement, the map data's cells with it on."""
+import math
 import os
 import sys
 import unittest
@@ -123,6 +124,76 @@ class WidthTest(unittest.TestCase):
             self.assertEqual(get("y", np.array([ll(20, 60), ll(180, 60)])), (14.0, 3.0))
             self.assertEqual(get("z", np.array([(-76.6, 39.2), (-76.5, 39.2)])), (14.0, 3.0))   # outside the region
 
+    def test_widths_are_decided_once_per_road(self):
+        d = drcog.Drcog("unused", None)
+        coords, off = self.edges(4.0)
+        calls = []
+        with mock.patch.object(d, "edges", return_value={"coords": coords, "off": off}):
+            get = d.widths(lambda fid, l: calls.append(fid) or (14.0, 3.0))
+            road = np.array([ll(20, 0), ll(180, 0)])
+            first = get("x", road)
+            self.assertEqual(get("x", road), first)
+        self.assertEqual(calls, ["x"])
+
+    def test_a_failed_cell_is_not_asked_by_every_road(self):
+        d = drcog.Drcog("unused", None)
+        coords, off = self.edges(4.0)
+        asked = []
+
+        def edges(key, kind="demand"):
+            asked.append(key)
+            if len(asked) == 1:
+                raise IOError("offline")
+            return {"coords": coords, "off": off}
+        clock = [1000.0]
+        with mock.patch.object(d, "edges", side_effect=edges), \
+                mock.patch.object(drcog.time, "monotonic", side_effect=lambda: clock[0]):
+            get = d.widths(lambda fid, l: (14.0, 3.0))
+            roads = [np.array([ll(20 + i, 0), ll(180 - i, 0)]) for i in range(5)]
+            self.assertEqual([get(i, r) for i, r in enumerate(roads)], [(14.0, 3.0)] * 5)
+            self.assertEqual(len(asked), 1)             # (the others: the fallback, without a request)
+            clock[0] += drcog.EDGES_RETRY_S + 1
+            w = get(0, roads[0])                        # not decided for good: the edges once they come
+            self.assertAlmostEqual(w[0], 8.0, places=3)
+            self.assertEqual(len(asked), 2)
+
+    def test_the_index_gives_the_same_widths(self):
+        # a downtown-like grid of edge lines (blocks of 80 m, roads 8-20 m wide) and roads in every direction
+        rng = np.random.default_rng(7)
+        lines = []
+        for k in range(12):
+            for half in (rng.uniform(4, 10), -rng.uniform(4, 10)):
+                y = k * 80 + half
+                xs = np.linspace(-50, 1000, 40)
+                lines.append(np.array([ll(x, y + rng.normal(0, 0.3)) for x in xs]))
+                lines.append(np.array([ll(y + rng.normal(0, 0.3), x) for x in xs]))
+        for _ in range(200):                 # stray short pieces (driveways, islands)
+            x, y, a = rng.uniform(0, 950), rng.uniform(0, 950), rng.uniform(0, math.pi)
+            lines.append(np.array([ll(x, y), ll(x + 15 * math.cos(a), y + 15 * math.sin(a))]))
+        coords = np.concatenate(lines)
+        off = np.r_[0, np.cumsum([len(x) for x in lines])]
+        index = drcog.EdgeIndex(coords, off)
+        found = 0
+        for _ in range(300):
+            x, y, a = rng.uniform(0, 950), rng.uniform(0, 950), rng.choice([0, math.pi / 2, rng.uniform(0, math.pi)])
+            n = int(rng.integers(2, 6))
+            road = np.array([ll(x + t * math.cos(a), y + t * math.sin(a)) for t in np.linspace(0, rng.uniform(10, 300), n)])
+            want = drcog.measure_width(road, coords, off)
+            self.assertEqual(drcog.measure_width(road, coords, off, index), want)
+            found += want is not None
+        self.assertGreater(found, 30)
+
+    def test_index_near(self):
+        coords = np.array([ll(0, 0), ll(500, 0), ll(0, 100), ll(0, 110)])      # one long segment, one short
+        index = drcog.EdgeIndex(coords, np.array([0, 2, 4]))
+        x, y = ll(250, 0)
+        self.assertEqual(index.near(x - 1e-5, y - 1e-5, x + 1e-5, y + 1e-5).tolist(), [0])
+        x, y = ll(0, 105)
+        self.assertEqual(index.near(x - 1e-5, y - 1e-5, x + 1e-5, y + 1e-5).tolist(), [1])
+        x, y = ll(300, 300)
+        self.assertEqual(index.near(x, y, x, y).tolist(), [])
+        self.assertEqual(len(drcog.EdgeIndex(np.zeros((0, 2)), np.array([0])).near(0, 0, 1, 1)), 0)
+
 
 @needs_duckdb
 class MapDataTest(Sources, SmallBlocks, unittest.TestCase):
@@ -149,6 +220,48 @@ class MapDataTest(Sources, SmallBlocks, unittest.TestCase):
             self.assertTrue(b.own[-1])
             ds = [d["dataset"] for p in cd.provenance for d in p.get("datasets", [])]
             self.assertIn(drcog.DATASET, ds)
+
+    def test_roads_come_with_their_edges(self):
+        # (fix/road-paint-perf: a cell's edges were first fetched by the ground photo's road widths, 2-3.5 s in it)
+        with mock.patch.dict(os.environ, {drcog.ENV: "1"}),                 mock.patch.object(drcog, "covers", return_value=True):
+            md, _ = self.mapdata(cache=os.path.join(self.tmp, "c3"))
+            got = {"coords": np.zeros((0, 2)), "off": np.array([0])}
+            with mock.patch.object(drcog.Drcog, "edges", return_value=got) as edges:
+                md.cell(mf.CELL, ("roads",))
+                md.layer_arrays(mf.CELL, "roads")
+            self.assertEqual(edges.call_count, 1, "once per cell")
+            md2, _ = self.mapdata(cache=os.path.join(self.tmp, "c4"))
+            with mock.patch.object(drcog.Drcog, "edges", side_effect=OSError("down")) as edges:
+                cd = md2.cell(mf.CELL, ("roads",))         # (the roads all the same)
+                self.assertGreater(len(cd.layers["roads"]), 0)
+                md2.layer_arrays(mf.CELL, "roads")
+            self.assertEqual(edges.call_count, 2, "a failed fetch is tried again")
+
+
+class MemoryTest(unittest.TestCase):
+    def test_lru_per_kind(self):
+        import mapcells
+        d = drcog.Drcog(os.path.join(os.path.dirname(__file__), "no-such-dir"), None)
+        built = []
+
+        def build(i):
+            def f():
+                built.append(i)
+                return {"i": np.array([i])}
+            return f
+        with mock.patch.object(drcog.np, "savez_compressed"), mock.patch.object(drcog.staging, "replace_cached"),                 mock.patch.object(drcog.os, "makedirs"),                 mock.patch.dict(drcog.MEM_CELLS, {"edges": 3, "roofprints": 2}):
+            keys = [mapcells.CellKey(14, 3400 + i, 6200) for i in range(5)]
+            for i in range(3):
+                d._cached("edges", keys[i], build(i))
+            for i in range(4):                          # roofprints do not push the edges out
+                d._cached("roofprints", keys[i], build(10 + i))
+            d._cached("edges", keys[0], build(99))      # (kept: no build; now the most recent)
+            d._cached("edges", keys[3], build(3))       # keys[1] goes, the least recent
+            d._cached("edges", keys[0], build(98))
+            d._cached("edges", keys[1], build(1))
+        self.assertEqual(built, [0, 1, 2, 10, 11, 12, 13, 3, 1])
+        self.assertEqual(len(d._mem["edges"]), 3)
+        self.assertEqual(len(d._mem["roofprints"]), 2)
 
 
 if __name__ == "__main__":

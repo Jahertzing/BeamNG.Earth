@@ -11,7 +11,13 @@ that failed, a map cell that could not be read, land cover or land use not cache
 and would be kept so). fault() marks that, process wide; a build is kept when faults() did not change during it.
 
 The key holds the server's code (code_key: a hash of its source files and native module), so any change to how things
-are built starts afresh."""
+are built starts afresh.
+
+A baked route's items (tools/route_bake.py) are pinned: an item built in one of the route's anchors (PIN_SUBDIR's
+anchors.json, the anchors the mod pins its teleports and rebases to: routepins.lua) goes to PIN_SUBDIR, which is
+never cut back, so a whole route (several GB) stays on disk. Its anchor is the key's first two parts (lat, lon), as
+every anchor's kind has them. load() looks there first. A code change makes them unreachable as any other; the bake
+tool builds the route again and removes what that run did not use."""
 import hashlib
 import json
 import os
@@ -23,11 +29,15 @@ ON = os.environ.get("BNE_REVISIT", "on") != "off"
 SKIP = {k for k in os.environ.get("BNE_REVISIT_SKIP", "").split(",") if k}     # kinds left out (tests: "roads,far")
 MAX_MB = float(os.environ.get("BNE_REVISIT_MB", "2000"))      # the cache's size, cut back at start (earthd)
 SUBDIR = "revisit"
+PIN_SUBDIR = "bake"         # a baked route's items: never cut back (route_bake.py removes the stale ones)
+ANCHORS = "anchors.json"    # in PIN_SUBDIR: {"anchors": [[lat, lon], ...]} the baked route's anchors
 CACHE_DIR = None            # the server's cache folder (blockworker._State, earthd.Server): stores without one at hand
 
 _faults = [0]
 _code = []
 _lock = threading.Lock()
+_at = {}                    # key -> its anchor (lat, lon), from key(): whether store() pins it
+_pins = {"stamp": None, "set": frozenset()}
 
 
 def fault():
@@ -64,18 +74,52 @@ def code_key():
 def key(kind, *parts):
     """The cache key of an item: its kind, what it was built from (the anchor's lat/lon, the tile, the settings) and
     the code."""
-    return hashlib.sha1(repr((kind, code_key(), parts)).encode()).hexdigest()
+    k = hashlib.sha1(repr((kind, code_key(), parts)).encode()).hexdigest()
+    if len(parts) >= 2 and isinstance(parts[0], float) and isinstance(parts[1], float):
+        with _lock:
+            if len(_at) > 100000:
+                _at.clear()
+            _at[k] = (parts[0], parts[1])
+    return k
 
 
-def _path(cache_dir, kind, k):
-    return os.path.join(cache_dir, SUBDIR, kind, k[:2], k + ".zip")
+def pinned_anchors(cache_dir):
+    """The baked route's anchors {(lat, lon) rounded to 7 places} (PIN_SUBDIR/ANCHORS; read again when it changes)."""
+    path = os.path.join(cache_dir, PIN_SUBDIR, ANCHORS)
+    try:
+        st = os.stat(path)
+        stamp = (path, st.st_mtime_ns, st.st_size)
+    except OSError:
+        return frozenset()
+    with _lock:
+        if _pins["stamp"] == stamp:
+            return _pins["set"]
+    try:
+        with open(path, encoding="utf-8") as f:
+            got = frozenset((round(float(a[0]), 7), round(float(a[1]), 7)) for a in json.load(f)["anchors"])
+    except Exception:
+        got = frozenset()
+    with _lock:
+        _pins["stamp"], _pins["set"] = stamp, got
+    return got
+
+
+def _pinned(cache_dir, k):
+    with _lock:
+        at = _at.get(k)
+    return at is not None and (round(at[0], 7), round(at[1], 7)) in pinned_anchors(cache_dir)
+
+
+def _path(cache_dir, kind, k, sub=SUBDIR):
+    return os.path.join(cache_dir, sub, kind, k[:2], k + ".zip")
 
 
 def store(cache_dir, kind, k, blobs, extra=None):
-    """Keep an item under key k: blobs {name: bytes}, extra JSON data. Never raises; False when not kept."""
+    """Keep an item under key k: blobs {name: bytes}, extra JSON data (in PIN_SUBDIR when built in a baked route's
+    anchor). Never raises; False when not kept."""
     if not ON or kind in SKIP:
         return False
-    path = _path(cache_dir, kind, k)
+    path = _path(cache_dir, kind, k, PIN_SUBDIR if _pinned(cache_dir, k) else SUBDIR)
     tmp = f"{path}.{os.getpid()}.{threading.get_ident()}.tmp"
     try:
         os.makedirs(os.path.dirname(path), exist_ok=True)
@@ -97,9 +141,19 @@ def load(cache_dir, kind, k):
     """({name: bytes}, extra) of the item under key k, or None when there is none (or it cannot be read)."""
     if not ON or kind in SKIP:
         return None
-    path = _path(cache_dir, kind, k)
+    path = _path(cache_dir, kind, k, PIN_SUBDIR)
     if not os.path.exists(path):
-        return None
+        path = _path(cache_dir, kind, k)
+        if not os.path.exists(path):
+            return None
+        if _pinned(cache_dir, k):           # (kept before its route was baked: pinned now)
+            pin = _path(cache_dir, kind, k, PIN_SUBDIR)
+            try:
+                os.makedirs(os.path.dirname(pin), exist_ok=True)
+                os.replace(path, pin)
+                path = pin
+            except OSError:
+                pass
     try:
         with zipfile.ZipFile(path) as z:
             meta = json.loads(z.read("meta.json"))

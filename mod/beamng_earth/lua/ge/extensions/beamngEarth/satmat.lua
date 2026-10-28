@@ -74,6 +74,30 @@ M.ASPHALT_FIELDS = {
   { 'useAnisotropic', '1' },
 }
 
+-- The grassy land's grain (the user, 2026-10-28: "im looking miles ahead so like 200m is NOTHING"): the 3D grass
+-- (groundcover.lua) grows only on the physics block, ~300 m at most. Where the server wrote a grass mask beside the
+-- texture (far_<a>_<key>_grass.dds, surface.grass_mask: grassy land cover, roads cut out) the material gets a layer
+-- of the same photo with our grass detail and detail normal maps (tools/make_grass_textures.py) on UV1, shown
+-- through the mask: tufts near, clumps to ~1 km, patches for kilometres, each in the mips that fit its distance, so
+-- grassland keeps reading as grass past the 3D grass and its edge does not show as a line. The maps are 0.5 grey on
+-- average: the photo's colour stays. Under the asphalt layer (roads over grass). The same fields as ASPHALT_FIELDS
+-- (a pooled material's layer moves between the two kinds); '$photo' is the tile's texture.
+M.GRASS_LAYER = true
+M.GRASS_DETAIL_MAP = '/art/beamngEarth/detail_grass.dds'
+M.GRASS_FIELDS = {
+  { 'baseColorMap', '$photo' },
+  { 'baseColorFactor', '1 1 1 1' },
+  { 'detailMap', M.GRASS_DETAIL_MAP },
+  { 'detailMapUseUV', '1' },
+  { 'detailScale', '0.0625 0.0625' },      -- UV1 is world metres / 2: one repeat per 32 m (the texture's)
+  { 'detailBaseColorMapStrength', '1' },
+  { 'detailNormalMap', '/art/beamngEarth/detail_grass_nm.dds' },
+  { 'normalDetailMapUseUV', '1' },
+  { 'detailNormalMapStrength', '1' },
+  { 'roughnessFactor', '1' },
+  { 'useAnisotropic', '1' },
+}
+
 -- The road mask beside a far tile's texture (its revision suffix dropped), or nil.
 function M.maskOf(texture)
   if type(texture) ~= 'string' then return nil end
@@ -81,22 +105,47 @@ function M.maskOf(texture)
   return (base:gsub('%.dds$', '_road.dds'))
 end
 
--- Point material m at texture, with the asphalt layer where the tile has a road mask and world-locked UV1 (detail:
--- the layer's grain is laid out on it), and without it otherwise (a pooled material moves between tiles).
+-- The grass mask beside a far tile's texture (its revision suffix dropped), or nil.
+function M.grassMaskOf(texture)
+  if type(texture) ~= 'string' then return nil end
+  local base = texture:gsub('_r%d+%.dds$', '.dds')
+  return (base:gsub('%.dds$', '_grass.dds'))
+end
+
+local grassChecked, grassOk = false, false
+local function hasGrassMaps()
+  if not grassChecked then
+    grassChecked = true
+    grassOk = FS:fileExists(M.GRASS_DETAIL_MAP) and true or false
+    if not grassOk then log('W', 'beamngEarth', 'grass detail texture missing: ' .. M.GRASS_DETAIL_MAP) end
+  end
+  return grassOk
+end
+
+-- Point material m at texture, with the grass layer where the tile has a grass mask and the asphalt layer where it
+-- has a road mask (both need world-locked UV1, detail: the layers' grain is laid out on it), and without them
+-- otherwise (a pooled material moves between tiles).
 local function setTexture(m, texture, detail)
   m:setField('colorMap', 0, texture)
-  local mask = M.maskOf(texture)
-  local on = M.ASPHALT_LAYER and detail ~= false and mask ~= nil and FS:fileExists(mask)
+  local layers = {}
+  if detail ~= false then
+    local gm = M.grassMaskOf(texture)
+    if M.GRASS_LAYER and gm ~= nil and FS:fileExists(gm) and hasGrassMaps() then
+      layers[#layers + 1] = { mask = gm, fields = M.GRASS_FIELDS }
+    end
+    local rm = M.maskOf(texture)
+    if M.ASPHALT_LAYER and rm ~= nil and FS:fileExists(rm) then
+      layers[#layers + 1] = { mask = rm, fields = M.ASPHALT_FIELDS }
+    end
+  end
   local v15 = tostring(m:getField('version', 0)) == '1.5'
-  if not on and not v15 then return end
+  if #layers == 0 and not v15 then return end
   m:setField('version', 0, '1.5')
   m:setField('baseColorMap', 0, texture)
-  if on then
-    m:setField('activeLayers', 0, '2')
-    m:setField('opacityMap', 1, mask)
-    for _, f in ipairs(M.ASPHALT_FIELDS) do m:setField(f[1], 1, f[2]) end
-  else
-    m:setField('activeLayers', 0, '1')
+  m:setField('activeLayers', 0, tostring(1 + #layers))
+  for i, l in ipairs(layers) do
+    m:setField('opacityMap', i, l.mask)
+    for _, f in ipairs(l.fields) do m:setField(f[1], i, f[2] == '$photo' and texture or f[2]) end
   end
 end
 M._setTexture = setTexture  -- (tests)
@@ -343,6 +392,7 @@ function M.clearAll()
   mats, delQ, queued, nMats = {}, {}, {}, 0
   retexQ, rqH, rqT, retexWant = {}, 1, 0, {}
   detailChecked = false
+  grassChecked = false
 end
 
 function M.count() return nMats end

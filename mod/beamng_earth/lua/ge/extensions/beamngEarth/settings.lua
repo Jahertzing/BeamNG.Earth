@@ -37,6 +37,10 @@ M.LEVEL_ID = 'beamng_earth'
 
 -- key -> { kind = 'number'|'bool'|'enum', default, min, max, values, label }. Order = ORDER.
 M.SCHEMA = {
+  -- The Drive (thedrive.lua): the time of day it starts at and whether the car drives itself
+  theDriveTime = { kind = 'enum', default = 'golden', values = { 'golden', 'midday', 'night', 'real' },
+    label = 'The Drive: time of day' },
+  theDriveAutodrive = { kind = 'bool', default = false, label = 'The Drive: autodrive' },
   rebaseDistance = { kind = 'number', default = rebase.DEFAULT_DISTANCE, min = rebase.MIN_DISTANCE,
     max = rebase.MAX_DISTANCE, label = 'Rebase distance (m)' },
   viewDistanceMode = { kind = 'enum', default = 'horizon', values = { 'fixed', 'horizon' }, label = 'View distance' },
@@ -50,12 +54,19 @@ M.SCHEMA = {
   groundCover = { kind = 'bool', default = true, label = 'Grass and shrubs' },
   groundCoverDensity = { kind = 'enum', default = 'normal', values = { 'low', 'normal', 'high' }, label = 'Grass density' },
   -- how far out the grass reaches (groundcover.REACH; 'near' was the only distance before 2026-10-28)
-  groundCoverDistance = { kind = 'enum', default = 'normal', values = { 'near', 'normal', 'far' }, label = 'Grass distance' },
+  groundCoverDistance = { kind = 'enum', default = 'normal', values = { 'near', 'normal', 'far', 'max' }, label = 'Grass distance' },
+  -- the grass grain in the ground tiles past the 3D grass (satmat.lua GRASS_LAYER; the server's grass masks)
+  groundGrass = { kind = 'bool', default = true, label = 'Grass in the distant ground' },
+  -- BeamNG's own AI traffic on our roads when the level-start configurator leaves it to the settings (its default):
+  -- off, light, normal (the game's amount for this PC), busy (navgraph.lua MODES)
+  aiTraffic = { kind = 'enum', default = 'normal', values = { 'off', 'light', 'normal', 'busy' }, label = 'AI traffic' },
   -- roads near the player (roads.lua; the server's --roads on)
   roads = { kind = 'bool', default = true, label = 'Roads' },
   -- the Denver region's DRCOG planimetrics (server drcog.py): launcher.py reads this file and starts the server with
   -- --drcog on / off (bmplaunch.mod_setting); takes effect at the next start of the app
   drcog = { kind = 'bool', default = true, label = 'Denver-region buildings and road widths (DRCOG)' },
+  -- US building heights from USGS 3DEP lidar (server lidarheights.py): --lidar-heights on / off, as drcog
+  lidarHeights = { kind = 'bool', default = true, label = 'Building heights from USGS lidar' },
   -- the vegetation tiles' rocks and boulders (trees.lua groups rock, desert_rock; GitHub #5, after PR #321)
   rocks = { kind = 'bool', default = true, label = 'Rocks' },
   -- Earth imagery on supported vehicle dashboard screens (dashboard.lua)
@@ -82,9 +93,9 @@ M.SCHEMA = {
   -- not on the page: the newer version whose update notice the player dismissed (core.lua drawUpdateNotice)
   updateDismissed = { kind = 'string', default = '', maxLen = 40, label = 'Update notice dismissed (version)' },
 }
-M.ORDER = { 'rebaseDistance', 'viewDistanceMode', 'viewDistanceKm', 'hazeStrength', 'skyMode', 'clouds',
-  'weatherMode', 'realGravity', 'groundCover', 'groundCoverDensity', 'groundCoverDistance', 'rocks', 'roads', 'drcog',
-  'dashboardSatellite', 'hudVisible', 'statusBar',
+M.ORDER = { 'theDriveTime', 'theDriveAutodrive', 'rebaseDistance', 'viewDistanceMode', 'viewDistanceKm', 'hazeStrength',
+  'skyMode', 'clouds', 'weatherMode', 'realGravity', 'groundCover', 'groundCoverDensity', 'groundCoverDistance',
+  'groundGrass', 'rocks', 'roads', 'aiTraffic', 'drcog', 'lidarHeights', 'dashboardSatellite', 'hudVisible', 'statusBar',
   'placeNamesOnline', 'creditsVisible', 'beammpOnLaunch',
   'creditsCorner', 'creditsSize', 'cacheCapGb', 'devOutlineKm', 'devMapKm' }
 
@@ -260,7 +271,9 @@ M.APPLY = {
   groundCover = function(v) require('beamngEarth/groundcover').setEnabled(v) end,
   groundCoverDensity = function(v) require('beamngEarth/groundcover').setDensity(v) end,
   groundCoverDistance = function(v) require('beamngEarth/groundcover').setReach(v) end,
+  groundGrass = function(v) require('beamngEarth/satmat').GRASS_LAYER = v and true or false end,
   rocks = function(v) require('beamngEarth/trees').setGroupEnabled({ 'rock', 'desert_rock' }, v) end,
+  aiTraffic = function(v) require('beamngEarth/navgraph').setMode(v) end,     -- (from the next level start)
   roads = function(v)
     local core = ext('beamngEarth_core')
     if core and core.setRoadsEnabled then core.setRoadsEnabled(v) else require('beamngEarth/roads').setEnabled(v) end
@@ -383,6 +396,8 @@ function M.uiState()
   -- the cache folder and the BeamMP launcher (the server's app_paths), asked with the cache numbers
   if core and core.appPath and cachePolls % M.CACHE_POLL == 1 then core.appPath() end
   status.paths = core and core.appPathState and core.appPathState() or nil
+  local okD, drive = pcall(function() return require('beamngEarth/thedrive').records() end)
+  status.theDrive = okD and drive or nil       -- The Drive's best times per route
   local schema = {}
   for _, k in ipairs(M.ORDER) do
     local s = M.SCHEMA[k]
@@ -585,6 +600,21 @@ function M.uiMapGps(lat, lon, name)
   local gps = require('beamngEarth/gps')
   if lat == nil then gps.clear() return { ok = true } end
   return { ok = gps.setDestination(lat, lon, name) }
+end
+
+-- The Drive (thedrive.lua): the keys (actions/beamngEarth.json) start it at once; the page's buttons close the menu
+-- first. route: 'downtown' | 'i25'. uiTheDrive answers { ok, error, records }; uiTheDriveState { records, run }.
+function M.theDrive(route, opts)
+  return require('beamngEarth/thedrive').start(route, opts)
+end
+function M.uiTheDrive(route)
+  M.navigate('play')
+  local ok, err = require('beamngEarth/thedrive').start(route)
+  return { ok = ok and true or false, error = err, records = require('beamngEarth/thedrive').records() }
+end
+function M.uiTheDriveState()
+  local d = require('beamngEarth/thedrive')
+  return { records = d.records(), run = d.status() }
 end
 
 -- The map's GPS "Autodrive": the player's car drives itself along the route (gps.lua) / stops doing so.

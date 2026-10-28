@@ -42,6 +42,9 @@ ROOF_UV_M = 6.0             # m per repeat of the roof textures
 SIDING_UV_M = 3.0           # m per repeat of the plain wall textures (sheds, garages)
 PITCH = {"gabled": 32.0, "hipped": 26.0}     # degrees
 EAVE_M = 0.35               # m a pitched roof overhangs its walls
+BOX_FILL = 0.8              # a pitched roof on the oriented box: footprints filling this share of their box at least
+SKEL_MIN_FILL = 0.5         # a skeleton roof (skeleton_of) on footprints filling this share of their box at least
+FLATTENED_MAX_M = 12.0      # m: a mapped height up to this on a pitched roof drawn flat is taken down to the roof's mean
 CORNICE_OUT_M = 0.28        # a flat roof's cornice: how far it stands out, its depth below and above the eave
 CORNICE_DOWN_M = 0.45
 CORNICE_UP_M = 0.2
@@ -516,10 +519,18 @@ def plan(ring, attrs, neighbours=0, lat=None, lon=None, look=None, town=False, d
                 roof = "gabled" if seed < 1.0 - style.hipped else "hipped"
         else:
             roof = "flat"
-    # pitched roofs only on near-rectangular footprints (a church's nave keeps its gable beside a tower or an apse)
-    if roof != "flat" and (box_fill < (0.6 if church else 0.8) or hw < 2.0
-                           or hw > (18.0 if barn else 20.0 if church else 14.0)):
-        roof = "flat"
+    # pitched roofs on near-rectangular footprints (the oriented box's roof; a church's nave keeps its gable beside a
+    # tower or an apse), and on any other outline the straight skeleton roofs (skeleton_of: an L, a T, a tract
+    # house's bays and bump-outs). Before the skeleton roofs a footprint under BOX_FILL of its box was flat, and with
+    # a mapped height (DRCOG's and OSM's are the roof's top) all of it went to the walls: a third of Frederick's
+    # houses came out flat-topped boxes a storey too tall (fix/house-heights, 2026-10-28; Jeff's report)
+    skel = None
+    wide = hw < 2.0 or hw > (18.0 if barn else 20.0 if church else 14.0)
+    if roof != "flat" and not church and not wide and box_fill >= SKEL_MIN_FILL:
+        skel = skeleton_of(ring, roof)
+    flattened = False
+    if roof != "flat" and not skel and (box_fill < (0.6 if church else BOX_FILL) or wide):
+        roof, flattened = "flat", True
     # a city tower's ground floor is shops or a lobby (Midtown, 2026-10-14: most towers have no class, and their
     # curtain wall came down to the pavement)
     tall = (nf or (h or 0) / FLOOR_M) >= TOWER_SHOP_FLOORS
@@ -532,10 +543,17 @@ def plan(ring, attrs, neighbours=0, lat=None, lon=None, look=None, town=False, d
         if west_town and roof == "flat" and nf == 1 and area >= 80 and not (shed or barn):
             h += FALSE_FRONT_M                      # a main-street shop's tall parapet
     else:
+        tp = math.tan(math.radians(style.pitch or PITCH.get(roof, PITCH["hipped"])))
         if attrs.get("roof_height") and np.isfinite(attrs["roof_height"]) and roof != "flat":
             h = max(2.5, h - float(attrs["roof_height"]))
         elif roof != "flat":
-            h = max(2.5, h - hw * math.tan(math.radians(style.pitch or PITCH[roof])))
+            # the mapped height is the ridge's: the walls stop the drawn roof's rise under it (a skeleton roof's
+            # ridge is its outline's innermost point, lower than the oriented box's half width on an L or a T)
+            h = max(2.5, h - (skeleton_rise(skel, style.pitch or PITCH[roof]) if skel else hw * tp))
+        elif flattened and h <= FLATTENED_MAX_M:
+            # a pitched roof the outline cannot carry, drawn flat: at the mapped roof's mean height (its eave plus
+            # half the rise over the footprint's mean half width), not its ridge
+            h = max(2.5, h - 0.5 * hw * box_fill * tp)
         if nf is None:
             # a church: one tall storey (Cluj's St. Michael's, 25 m, came out as three 8 m floors)
             nf = 1 if church else max(1, int(round(h / floor_h)))
@@ -663,7 +681,7 @@ def plan(ring, attrs, neighbours=0, lat=None, lon=None, look=None, town=False, d
     return Spec(ring=ring, floors=nf, floor_h=floor_h, height=h, roof=roof, roof_mat=roof_mat, facade=facade,
                 band=band, shop=shop and not shed and nf >= 1, plain=plain, seed=seed, min_h=0.0, wall=wall,
                 windows=windows, steeple=church and area < 2500, porch=porch, cls=cls,
-                deck=garage and roof == "flat", pitch=style.pitch)
+                deck=garage and roof == "flat", pitch=style.pitch, skel=skel if roof != "flat" else None)
 
 
 class Mesh:
@@ -823,9 +841,49 @@ def _walls(m, spec, ring, z0, z_eave, mat_idx, lite=False):
         bool(spec.shop), int(door[0]) if door else -1, float(door[1]) if door else 0.0, spec.roof == "flat",
         float(spec.seed) if isinstance(spec.seed, float) else 0.0, spec.windows is False,
         int(spec.front) if spec.front is not None else -1, bool(lite), _WALL_CONSTS)
+    if mid and spec.wall and spec.windows is not False and getattr(spec, "drive", None) and not lite:
+        P, UV, mid = _garage_windows_out(spec, ring, z_eave, P, UV, mid)
     if mid:
         m.quads(P, UV, mid, [mat_idx[spec.facade], mat_idx[SHOP] if (spec.shop or spec.wall) else None,
                              mat_idx["bne_bld_fac_white"] if spec.wall else None])
+
+
+def _garage_windows_out(spec, ring, z_eave, P, UV, mid):
+    """building_walls' quads without the ground floor's windows over the house's garage door (facadekit.garage_span,
+    with house_window_slots' 0.3 m margin): the native loop (upstream 1.7.0) lays the windows in every bay but the
+    front door's, and its API has no gap to pass; a window there stood in the garage door's plane (both WIN_OUT_M out:
+    z-fighting). Each window is one quad of material 2; the trims (facadekit.windows) round house_window_slots, the
+    same windows. (P, UV, mid) as given, less those quads."""
+    import facadekit
+    ring = np.asarray(ring, np.float64)[:, :2]
+    e = int(spec.drive[0])
+    if not 0 <= e < len(ring):
+        return P, UV, mid
+    a, b = ring[e], ring[(e + 1) % len(ring)]
+    L = float(math.hypot(*(b - a)))
+    gs = facadekit.garage_span(spec, e, L) if L > 1e-6 else None
+    if gs is None:
+        return P, UV, mid
+    d = (b - a) / L
+    M = (np.frombuffer(bytes(mid), np.uint8) if isinstance(mid, (bytes, bytearray)) else np.asarray(mid)).astype(np.int64)
+    w = np.flatnonzero(M == 2)
+    if not len(w):
+        return P, UV, mid
+    Q = np.asarray(P, np.float64).reshape(-1, 4, 3)[w]
+    c = Q[:, :, :2].mean(1) - a
+    s = c @ d
+    off = c[:, 0] * d[1] - c[:, 1] * d[0]                  # (out from the wall: WIN_OUT_M on this wall)
+    zf0 = z_eave - spec.floors * spec.floor_h + WIN_SILL
+    drop = ((np.abs(off - WIN_OUT_M) < 1e-3) & (s > -1e-6) & (s < L + 1e-6)
+            & (np.abs(Q[:, :, 2].min(1) - zf0) < 1e-6)
+            & (s + WIN_W / 2 > gs[0] - 0.3) & (s - WIN_W / 2 < gs[1] + 0.3))
+    if not drop.any():
+        return P, UV, mid
+    keep = np.ones(len(M), bool)
+    keep[w[drop]] = False
+    k = np.flatnonzero(keep)
+    return (np.asarray(P, np.float64).reshape(-1, 12)[k].ravel().tolist(),
+            np.asarray(UV, np.float64).reshape(-1, 8)[k].ravel().tolist(), M[k].tolist())
 
 
 PLAIN_STRIP = 0.3           # of a bay: the plain wall between two windows of a sheet's band (centred on a bay edge)
@@ -951,20 +1009,34 @@ def roof_skeleton(spec):
     if got is not None:
         return got or None
     got = False
-    ring = np.asarray(spec.ring, np.float64)
-    if spec.roof in ("gabled", "hipped") and spec.cls not in ("pyramid",) and not spec.steeple \
-            and spec.cls not in CHURCH_CLASSES and len(ring) >= 4 and not _box_like(ring):
-        import roofskel
-        eaves = None if roofskel.degenerate(ring.tolist()) else roofskel.offset_ring(ring.tolist(), EAVE_M)
-        sk = roofskel.skeleton(eaves) if eaves is not None else None
-        if sk is not None:
-            nodes, nt, faces = sk
-            gables = []
-            if spec.roof == "gabled":
-                nodes, nt, faces, gables = roofskel.gable(eaves, nodes, nt, faces)
-            got = (eaves, nodes, nt, faces, gables)
+    if spec.cls not in ("pyramid",) and not spec.steeple and spec.cls not in CHURCH_CLASSES:
+        got = skeleton_of(spec.ring, spec.roof)
     spec.skel = got
     return got or None
+
+
+def skeleton_of(ring, roof):
+    """roof_skeleton's roof of a footprint (local ring (n, 2), counter-clockwise) under a roof kind: the tuple, or
+    False (none: not pitched, near its own box, degenerate, or the skeleton failed). Pure."""
+    ring = np.asarray(ring, np.float64)
+    if roof not in ("gabled", "hipped") or len(ring) < 4 or _box_like(ring):
+        return False
+    import roofskel
+    eaves = None if roofskel.degenerate(ring.tolist()) else roofskel.offset_ring(ring.tolist(), EAVE_M)
+    sk = roofskel.skeleton(eaves) if eaves is not None else None
+    if sk is None:
+        return False
+    nodes, nt, faces = sk
+    gables = []
+    if roof == "gabled":
+        nodes, nt, faces, gables = roofskel.gable(eaves, nodes, nt, faces)
+    return (eaves, nodes, nt, faces, gables)
+
+
+def skeleton_rise(sk, pitch):
+    """How far a skeleton roof's ridge stands over its walls' eave (m) at pitch (degrees): its innermost node's
+    distance in from the eaves (EAVE_M out from the walls) up the slope, less the overhang's drop."""
+    return max(0.0, (max(sk[2]) - EAVE_M) * math.tan(math.radians(pitch)))
 
 
 def _box_like(ring):
@@ -3105,8 +3177,9 @@ def _sky_mesh(items):
         windows = spec.windows is not False
         wall = (ms if windows else mi, _sky_colour(spec.facade, f))
         roof = (mi, _sky_colour(spec.roof_mat or ROOF_FLAT, f))
-        z0 = gmin - SKIRT_LITE_M
-        z1 = base_z(spec, gmin, gmax) + float(spec.min_h or 0.0) + float(spec.height or 0.0)
+        mh = float(spec.min_h or 0.0)
+        z0 = gmin - SKIRT_LITE_M if mh <= 0.5 else base_z(spec, gmin, gmax) + mh     # (a part over another: its own)
+        z1 = base_z(spec, gmin, gmax) + mh + float(spec.height or 0.0)
         if z1 <= z0 + 0.5:
             continue
         n = len(ring)
@@ -3126,6 +3199,8 @@ def _sky_mesh(items):
             else:
                 m.quad((a[0], a[1], z0), (b[0], b[1], z0), (b[0], b[1], z1), (a[0], a[1], z1), uv, uv, uv, uv, wall)
         m.poly([(p[0], p[1], z1) for p in ring], [uv] * n, roof)
+        if mh > 0.5:                                # (its underside)
+            m.poly([(p[0], p[1], z0) for p in ring[::-1]], [uv] * n, wall)
     if not m.n:
         return None
     P, UV, T, M, C = m.arrays()
