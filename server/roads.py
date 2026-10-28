@@ -232,6 +232,9 @@ POCKET_MAJOR_RANK = 4       # a road of this POCKET_RANK or higher (tertiary) cr
 POCKET_APPROACH_CLASSES = frozenset({"trunk", "primary", "secondary"})     # (c)'s approaches ...
 POCKET_APPROACH_LANES = 4   # ... with this many through lanes (both ways; a divided road's carriageway: 2) ...
 POCKET_APPROACH_MIN_M = 30.0    # ... and at least this long
+POCKET_SIGNAL_M = 25.0      # m past a junction's widest road its mapped traffic signal may stand (furniture's)
+SIGNALS_FN = None           # cell key -> (n, 2) lon / lat of its mapped traffic signals, None not known (its
+                            # infrastructure not read yet): signals_provider, set by blockworker and earthd
 # Carriageway = driving width + parking lanes on city streets or paved edge strips on rural roads
 # (docs/research/2026-10-11-official-road-study.md §2: rural paved surface = AI width + 2-2.5 m;
 # West Coast USA's plain streets 12.5 m for 8 m of driving: ~2.3 m of parking each side). A width
@@ -2863,11 +2866,12 @@ def clear_of(pts, blockers):
 #       A centre turn lane opening (CDOT's painted medians: lanes_c) or another lane count opens at a side street too,
 #       the centre lane from nothing, the rest evenly; not across a junction of roads of its rank;
 #   (c) where OpenStreetMap gives no turn lanes, the approaches (trunk, primary, secondary, in a regional table's area:
-#       Colorado) to a junction a road of POCKET_MAJOR_RANK or higher crosses: a centre turn lane gets a left arrow
+#       Colorado) to a junction a road of POCKET_MAJOR_RANK or higher crosses, or with a mapped traffic signal
+#       (SIGNALS_FN: Overture's infrastructure, the cells round the junction): a centre turn lane gets a left arrow
 #       near the junction; an approach with a lane more than goes on beyond it has its leftmost lane as the left turn
 #       lane (arrows; CDOT's left turn lanes are counted in the lanes so); elsewhere, unless CDOT or an override says
 #       its lanes, one with POCKET_APPROACH_LANES through lanes or more (a divided carriageway two) and no centre lane
-#       gets a left pocket (as (a)). BNE_TURN_POCKETS=tags leaves (c) out, =off all of it.
+#       gets a left pocket (as (a)) where the junction has a signal. BNE_TURN_POCKETS=tags leaves (c) out, =off all.
 # A profile: Widening(w the base width, L m along the road's line (its first ring, lon scaled by cos lat as
 # sub_polyline), comps, added, ring, c, s): comps ((kind, o_b, sigma, knots), ...), knots ((s, e), ...) linear between:
 # "ins" moves every offset from o_b on (toward sigma, POCKET_TOL_M short of it included) by sigma x e, "mid" every
@@ -3233,6 +3237,57 @@ def _travels(sp, at_end):
     return 1 if along == at_end else -1
 
 
+def cell_signals(infra):
+    """(n, 2) lon / lat of the mapped traffic signals (Overture infrastructure transportation / traffic_signals) of a
+    cell's infrastructure Features (furniture.mapped_signals' points)."""
+    if infra is None or len(infra) == 0 or infra.attrs.get("class") is None:
+        return np.zeros((0, 2))
+    hit = np.asarray(infra.attrs["class"]).astype(str) == "traffic_signals"
+    sub = infra.attrs.get("subtype")
+    if sub is not None:
+        hit &= np.asarray(sub).astype(str) == "transportation"
+    pts = []
+    for i in np.flatnonzero(hit):
+        a = infra.coord_off[infra.ring_off[infra.part_off[i]]]
+        b = infra.coord_off[infra.ring_off[infra.part_off[i + 1]]]
+        if b > a:
+            pts.append(infra.lonlat[a:b].mean(axis=0))
+    return np.asarray(pts, np.float64).reshape(-1, 2)
+
+
+def signals_provider(md):
+    """A SIGNALS_FN over a mapdata.MapData's cached cells (never waits: a cell not cached is not known)."""
+    def fn(key):
+        try:
+            if not md.has(key, "infrastructure"):
+                return None
+            infra = md.cell(key, layers=("infrastructure",), kind="background").layers.get("infrastructure")
+            return cell_signals(infra)
+        except Exception:       # (an unreadable cell: not known)
+            return None
+    return fn
+
+
+def _signalled(ll, reach_m):
+    """Is there a mapped traffic signal within reach_m of the point ll (lon, lat): True / False, None not known (no
+    SIGNALS_FN, a cell's infrastructure not read). The cells round the point: the same for every tile and painter."""
+    if SIGNALS_FN is None:
+        return None
+    lon, lat = float(ll[0]), float(ll[1])
+    dy = reach_m / 110540.0
+    dx = reach_m / (111320.0 * max(math.cos(math.radians(lat)), 0.1))
+    keys = sorted({mapcells.cell_of(lat + sy * dy, lon + sx * dx) for sx in (-1, 1) for sy in (-1, 1)})
+    known = True
+    for k in keys:
+        pts = SIGNALS_FN(k)
+        if pts is None:
+            known = False
+            continue
+        if len(pts) and (np.hypot((pts[:, 0] - lon) / dx, (pts[:, 1] - lat) / dy) <= 1.0).any():
+            return True
+    return False if known else None
+
+
 def pocket_profiles(feats_list, urban_fn=None, widths=None, left_hand=False):
     """{fid: Widening} of the roads of feats_list (the "roads" Features of the cells at hand; each road's spec and
     geometry from the first that has it, as build_tile takes them) whose carriageway is not of one width (rules (a)
@@ -3245,7 +3300,10 @@ def pocket_profiles(feats_list, urban_fn=None, widths=None, left_hand=False):
         got = _POCKET_MEMO.get(key)
         if got is not None and len(got[0]) == len(fl) and all(a is b for a, b in zip(got[0], fl)):
             return got[1]
-    out = _pocket_profiles(fl, urban_fn, widths, left_hand)
+    unknown = []
+    out = _pocket_profiles(fl, urban_fn, widths, left_hand, unknown)
+    if unknown:                         # (a signal not known yet: asked again next time, not remembered)
+        return out
     with _POCKET_LOCK:
         if len(_POCKET_MEMO) >= _POCKET_MEMO_N:
             _POCKET_MEMO.pop(next(iter(_POCKET_MEMO)))
@@ -3262,7 +3320,7 @@ def _unit_at(ring, at_end, leaving):
     return -v if leaving else v
 
 
-def _pocket_profiles(fl, urban_fn, widths, left_hand):
+def _pocket_profiles(fl, urban_fn, widths, left_hand, unknown=None):
     roads = {}                          # fid -> (feats, i, spec, ring, name)
     ends = {}                           # end key -> [(fid, at_end)]
     for feats in fl:
@@ -3483,8 +3541,15 @@ def _pocket_profiles(fl, urban_fn, widths, left_hand):
             k = _pkey(ring[-1] if at_end else ring[0])
             on = going_on(fid, at_end)
             cross = [f for f, _e in ends.get(k, ()) if f != fid and (on is None or f != on[0])]
-            if min([rank(f) for f in cross] + [thr[_vkey(k)]]) > POCKET_MAJOR_RANK:
-                continue                # (no major road crosses there)
+            best = min([rank(f) for f in cross] + [thr[_vkey(k)]])
+            if best >= 7:
+                continue                # (nothing crosses there)
+            reach = POCKET_SIGNAL_M + max(roads[f][2].width / 2 for f, _e in ends.get(k, ()))
+            sig = _signalled(ring[-1] if at_end else ring[0], reach)
+            if sig is None and unknown is not None:
+                unknown.append(k)
+            if best > POCKET_MAJOR_RANK and not sig:
+                continue                # (neither a major road crossing nor a signal)
             L = float(_ring_metric(ring)[1][-1])
             lay = lane_layout(sp, left_hand)
             grp = [g for g in (lay["groups"] if lay is not None else ()) if g[0] == d]
@@ -3500,8 +3565,8 @@ def _pocket_profiles(fl, urban_fn, widths, left_hand):
                 # turn lanes and OpenStreetMap's lane counts both count it in the approach's lanes)
                 arrows.setdefault(fid, []).append((d, (("left",),) + ((),) * (n - 1)))
                 continue
-            if sp.lsrc in ("cdot", "override"):
-                continue                # (they say what lanes it has: no turn lane here)
+            if sp.lsrc in ("cdot", "override") or not sig:
+                continue                # (they say what lanes it has: no turn lane here; or no signal there)
             through = sum(g[1] for g in lay["groups"])
             if not (through >= POCKET_APPROACH_LANES if not sp.oneway else (sp.median and n >= 2)):
                 continue

@@ -99,6 +99,7 @@ def main():
     import surface
     roads.ROADS_IN_GROUND = False
     md = mapdata.MapData(a.cache_dir)
+    roads.SIGNALS_FN = roads.signals_provider(md)        # (rule (c): the junctions' mapped traffic signals)
     sf = surface.Surface(md)
     widths = roadwidth.RoadWidths(
         lambda k: md.cell(k, layers=("buildings",), kind="demand").layers.get("buildings")).get

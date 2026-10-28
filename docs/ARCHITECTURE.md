@@ -1106,7 +1106,9 @@ three days of testing: dem 741 MB / 7.5k files, imagery 1.4 GB / 35k, deshadow 7
   secondary approach in a regional table's area without OSM turn lanes gets a left arrow in its centre turn
   lane, or in its leftmost lane where it has a lane more than goes on beyond the junction, or, where neither
   CDOT nor an override gives its lanes and it has 4+ through lanes (a divided carriageway 2+), an inferred
-  left pocket (as rule (a)). `BNE_TURN_POCKETS=tags` keeps rules (a) / (b) only. Turn arrows keep clear of
+  left pocket (as rule (a)) where the junction has a mapped traffic signal (`roads.SIGNALS_FN`: Overture's
+  infrastructure of the cells round it, cached cells only; a signal also makes a side street's junction count).
+  `BNE_TURN_POCKETS=tags` keeps rules (a) / (b) only. Turn arrows keep clear of
   crosswalks and stop lines. Not done: CDOT's turn lane counts as their own columns (they are folded into
   the lanes; a column would rebuild every Colorado road cell), right-turn bays without OSM tags.
 - Curb ramps: the tactile pad is the first 0.6 m of the slope (tinted yellow); brick sidewalks on 55 % of
