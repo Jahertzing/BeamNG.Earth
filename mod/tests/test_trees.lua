@@ -416,5 +416,16 @@ do
   T.check(count() == 2, 'rocks on again: back')
   trees.clear()
 end
+do  -- static parked cars: a group per model from cars.json, every paint at its own size (scale 1)
+  local n = trees.installCars({ midsize = { height = 1.48, files = { 'bne_car_midsize_white.dae', 'bne_car_midsize_red.dae' } },
+                                broken = { files = { 'x.dae' } } })
+  T.check(n == 1, 'one model installed (no height: left out)')
+  T.check(trees.STATIC_CARS[1] == 'car_midsize' and #trees.STATIC_CARS == 1, 'listed for the setting')
+  local sh, sc = trees.pick('car_midsize', 1.45, 0.2)
+  T.check(sc == 1, 'scale 1 whatever the row height')
+  T.check(sh == trees.CARS_DIR .. 'bne_car_midsize_white' or sh == trees.CARS_DIR .. 'bne_car_midsize_red', 'a paint: ' .. tostring(sh))
+  T.check(trees.GROUP_MAX_M.car_midsize == trees.CAR_MAX_M, 'shown near only')
+  T.check(trees.installCars(nil) == 0, 'no cars.json: nothing')
+end
 trees.FRAME_MS, trees.POOL_SPARE = FRAME_MS, POOL_SPARE
 T.done('test_trees')

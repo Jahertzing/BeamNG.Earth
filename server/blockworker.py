@@ -564,6 +564,9 @@ def _roads_tile(aid, lat, lon, zoom, tx, ty, out_dir, vfs_dir, sidewalks, lift, 
         if fuel:
             import gasstations
             park = gasstations.clear_park(park, fuel)
+        if streetlifemod.ENABLED and streetlifemod.STATIC_CARS:     # still cars on a share of the spots
+            cars, park = streetlifemod.static_park(frame, park, town=bool(town))
+            props.extend(cars)
         buildingsmod.brick_walks(walks, items, lat, lon)
     mesh = roadmeshmod.build(frame, chunks, elev, (x0, y0, 0.0), lift, clip=box, follow=True, q=q, drawn=drawn,
                              context=ctx)
