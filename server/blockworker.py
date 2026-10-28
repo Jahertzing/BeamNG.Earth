@@ -53,6 +53,9 @@ class _State:
         # runways graded in (--airports on): the copy the server loaded, never refreshed here
         self.airports = load_airports(cache_dir, self.dem) if airports else None
         md = mapdatamod.MapData(cache_dir, fetcher=net) if (roads or surface or sea) else None
+        if md is not None:      # (the junctions' mapped traffic signals: roads.pocket_profiles' rule (c))
+            import roads as roadsmod
+            roadsmod.SIGNALS_FN = roadsmod.signals_provider(md)
         if md is not None:
             md.dem = self.dem       # (gradesep's ground)
         # the sea's and the lakes' floors carved in (--sea on)

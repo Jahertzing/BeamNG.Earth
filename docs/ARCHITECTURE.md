@@ -1094,6 +1094,10 @@ three days of testing: dem 741 MB / 7.5k files, imagery 1.4 GB / 35k, deshadow 7
   layer 8): rule (a)'s pocket covers its own way's share (POCKET_M where the segment is one way), and where OSM's
   lanes are the ones in use (`Spec.lsrc` None / "osm"), a part of another lane count is wider or narrower by those
   lanes, the step tapering inside the wider part as rule (b) (rule (d); a pocket's part keeps the segment's width).
+  Each part draws its own lanes (`part_lines`, `_part_spec`: the split each way its end's turn lanes ask for, else
+  the one keeping the centre line nearest the segment's); across a taper a line both parts have runs from one to
+  the other and a new lane's line starts where the lane is 2/3 wide (`POCKET_LINE_SHARE`, US lane-add striping); the
+  arrows stand in the lanes of the part at their end. Build time only (no layer bump).
 - Turn lanes without turn:lanes (rule (c), 2026-10-28): CDOT counts a stretch's left turn lanes into its
   lanes (a painted median: `lanes_c`; else the direction's lanes), and its stretches are short, so CO-52
   through Frederick widens near its junctions by segment; those steps now taper too (a centre turn lane
@@ -1102,7 +1106,9 @@ three days of testing: dem 741 MB / 7.5k files, imagery 1.4 GB / 35k, deshadow 7
   secondary approach in a regional table's area without OSM turn lanes gets a left arrow in its centre turn
   lane, or in its leftmost lane where it has a lane more than goes on beyond the junction, or, where neither
   CDOT nor an override gives its lanes and it has 4+ through lanes (a divided carriageway 2+), an inferred
-  left pocket (as rule (a)). `BNE_TURN_POCKETS=tags` keeps rules (a) / (b) only. Turn arrows keep clear of
+  left pocket (as rule (a)) where the junction has a mapped traffic signal (`roads.SIGNALS_FN`: Overture's
+  infrastructure of the cells round it, cached cells only; a signal also makes a side street's junction count).
+  `BNE_TURN_POCKETS=tags` keeps rules (a) / (b) only. Turn arrows keep clear of
   crosswalks and stop lines. Not done: CDOT's turn lane counts as their own columns (they are folded into
   the lanes; a column would rebuild every Colorado road cell), right-turn bays without OSM tags.
 - Curb ramps: the tactile pad is the first 0.6 m of the slope (tinted yellow); brick sidewalks on 55 % of

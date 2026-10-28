@@ -240,6 +240,46 @@ class PartsTest(unittest.TestCase):
         self.assertAlmostEqual(el, er, places=6)
         self.assertAlmostEqual(sum(edges_at(wd, 100.0 + roads.POCKET_TAPER_M / 2)), lw, places=6)
 
+    def marks(self, f, wd):
+        sp = roads.road_specs(f, None)[0]
+        ring = f.parts(0)[0][0]
+        lonlat, s = roads.widen_nodes(wd, ring, roads.widen_s(wd, ring))
+        pts = np.c_[(lonlat[:, 0] - LON) * M_LON, (lonlat[:, 1] - LAT) * M_LAT, np.full(len(s), 10.0)]
+        return sp, s, roads.extras(sp, pts, LON_US, wid=(wd, s))
+
+    def test_each_part_draws_its_own_lanes(self):
+        """2 lanes, then 4: the 4-lane part's two lane lines start in its taper where the new lanes are 2/3 wide; the
+        centre line goes on through."""
+        f = self.merged([[0, 0.5, 2], [0.5, 1, 4]], 2, {})
+        wd = profiles(f)["id000"]
+        self.assertEqual([p[2] for p in wd.parts], [2, 4])
+        (sa, sb, kn, kw), = wd.ptapers
+        self.assertEqual((kn, kw), (0, 1))
+        sp, s, ex = self.marks(f, wd)
+        lines = [ln for lk, w, ln in ex if lk is roads.LANE_LINE]
+        self.assertEqual(len(lines), 2)
+        start = sa + (sb - sa) * roads.POCKET_LINE_SHARE
+        for ln in lines:
+            self.assertGreater(ln[0, 0], start - roads.POCKET_STEP_M - 0.5)
+            self.assertLess(ln[0, 0], start + roads.POCKET_STEP_M + 0.5)
+            self.assertAlmostEqual(ln[-1, 0], 200.0, delta=0.5)
+        yellow = [ln for lk, w, ln in ex if lk["m"] == "line_yellow"]
+        self.assertEqual(len(yellow), 2)
+        self.assertTrue(all(ln[0, 0] < 1.0 and ln[-1, 0] > 199.0 for ln in yellow))
+
+    def test_arrows_in_the_end_parts_lanes(self):
+        """The last way's turn lanes (3 forward) fit its part's lanes (4: 3 forward, 1 back), not the segment's (2)."""
+        f = self.merged([[0, 0.5, 2], [0.5, 1, 4]], 2,
+                        {"lanes:forward": "1", "lanes:backward": "1", "turn:lanes:forward": "left|through|through"})
+        wd = profiles(f)["id000"]
+        sp, s, ex = self.marks(f, wd)
+        arrows = [ln for lk, w, ln in ex if lk.get("arrow")]
+        self.assertTrue(arrows)
+        lw = roads._lane_width(roads._part_spec(sp, 4, wd.parts[1][3], 3))
+        left = [a for a in arrows if len(a) == 2 and abs(a[1, 1] - a[0, 1]) > 1.0]  # (the left arrow's bent stroke)
+        self.assertTrue(left)
+        self.assertTrue(all(a[:, 1].mean() > -lw for a in left))           # (the leftmost forward lane: by the centre)
+
     def test_one_way_segments_and_unknown_lanes_unchanged(self):
         self.assertEqual(profiles(self.merged([[0, 0.5, None], [0.5, 1, 2]], 2, {})), {})
         f = road([[(0, 0), (200, 0)]], ["primary"], ["Main"], lanes=[2], rows=[{}])
@@ -280,10 +320,17 @@ class ApproachTest(unittest.TestCase):
     """(c): the approaches to a junction of major roads where OpenStreetMap gives no turn lanes."""
 
     def setUp(self):
-        self.was = roads.POCKET_INFER_ON
+        self.was = (roads.POCKET_INFER_ON, roads.SIGNALS_FN)
+        self.signal(True)
 
     def tearDown(self):
-        roads.POCKET_INFER_ON = self.was
+        roads.POCKET_INFER_ON, roads.SIGNALS_FN = self.was
+
+    @staticmethod
+    def signal(on, known=True):
+        """A traffic signal mapped 5 m from the junction at x = 0 (on) or none; known False: no cell read yet."""
+        pts = np.array([[LON + 5.0 / M_LON, LAT]]) if on else np.zeros((0, 2))
+        roads.SIGNALS_FN = (lambda key: pts) if known else (lambda key: None)
 
     def junction(self, lanes, rows, beyond=None, cross="secondary", regional=True, link=False):
         """Main (id000) from x = -200 to the junction at x = 0, crossed there by Cross (id001); Main going on beyond
@@ -315,11 +362,28 @@ class ApproachTest(unittest.TestCase):
         ex = roads.extras(sp, pts, LON_US, wid=(wd, s))
         self.assertTrue([1 for lk, w, ln in ex if lk.get("arrow")])     # (its left arrow in the pocket)
 
+    def test_signals(self):
+        """A pocket is inferred only at a signal; a signal makes a junction of a side street major (its arrows); not
+        known yet: no pocket, and not remembered."""
+        self.signal(False)
+        self.assertEqual(profiles(self.junction(4, {})), {})
+        rows = {"lanes:forward": "1", "lanes:backward": "1", "lanes:both_ways": "1"}
+        self.assertEqual(profiles(self.junction(3, rows, cross="residential")), {})
+        self.signal(True)
+        self.assertIn((1, "C"), profiles(self.junction(3, rows, cross="residential"))["id000"].turns)
+        self.signal(True, known=False)
+        f = self.junction(4, {})
+        self.assertEqual(profiles(f), {})
+        self.signal(True)
+        self.assertIn("id000", profiles(f))                    # (asked again once the cell is read)
+
     def test_no_pocket_on_two_lanes_or_without_a_major_road_or_outside_the_tables(self):
         self.assertEqual(profiles(self.junction(2, {})), {})
-        self.assertEqual(profiles(self.junction(4, {}, cross="residential")), {})
-        self.assertEqual(profiles(self.junction(4, {}, regional=False)), {})
+        self.signal(False)
+        self.assertEqual(profiles(self.junction(4, {}, cross="residential")), {})   # (no signal: a side street)
         self.assertEqual(profiles(self.junction(4, {}, link=True)), {})     # (a slip road is no cross street)
+        self.signal(True)
+        self.assertEqual(profiles(self.junction(4, {}, regional=False)), {})
         roads.POCKET_INFER_ON = False
         self.assertEqual(profiles(self.junction(4, {})), {})
 

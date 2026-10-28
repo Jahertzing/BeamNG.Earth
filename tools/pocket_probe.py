@@ -87,8 +87,9 @@ def main():
     ap.add_argument("--at", default=None, help="lat,lon of one place (else PLACES)")
     ap.add_argument("--name", default="place")
     ap.add_argument("--half", type=float, default=200.0, help="m from the place to the picture's edge")
-    ap.add_argument("--before", choices=("off", "noparts"), default="off",
-                    help="the before picture: no pockets at all, or pockets without the merged ways' parts")
+    ap.add_argument("--before", choices=("off", "noparts", "nolines"), default="off",
+                    help="the before picture: no pockets at all, pockets without the merged ways' parts, or the parts "
+                         "without their own lane lines")
     ap.add_argument("--cache-dir", default=os.path.expanduser("~/.cache/beamng-earth"))
     a = ap.parse_args()
     import geodesy
@@ -98,6 +99,7 @@ def main():
     import surface
     roads.ROADS_IN_GROUND = False
     md = mapdata.MapData(a.cache_dir)
+    roads.SIGNALS_FN = roads.signals_provider(md)        # (rule (c): the junctions' mapped traffic signals)
     sf = surface.Surface(md)
     widths = roadwidth.RoadWidths(
         lambda k: md.cell(k, layers=("buildings",), kind="demand").layers.get("buildings")).get
@@ -110,8 +112,9 @@ def main():
         got = {}
         parts = roads.osm_parts
         for on in (False, True):
-            roads.POCKETS_ON = on or a.before == "noparts"
-            roads.osm_parts = parts if on else (lambda feats, i: None)
+            roads.POCKETS_ON = on or a.before in ("noparts", "nolines")
+            roads.osm_parts = parts if on or a.before == "nolines" else (lambda feats, i: None)
+            roads.PART_LINES_ON = on or a.before != "nolines"
             roads._POCKET_MEMO.clear()
             build(md, frame, tiles, sf.urban, widths)           # (warm: the cells and specs once)
             chunks, walks, dt = build(md, frame, tiles, sf.urban, widths)
