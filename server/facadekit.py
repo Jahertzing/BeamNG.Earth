@@ -7,7 +7,8 @@ buildings._walls); the kit puts thin pieces in front of them: a window's sill, h
 light. The walls get depth of their own (depth(), run on buildings._walls' quads): the windows set into the walls
 (recess(): the openings cut out of the wall quads, the glass set back, reveals round it; houses' windows and the
 plaster sheet's lower floors), the shopfronts' glass set back (shopfronts()), aluminium fins and floor ledges on the
-curtain walls (fins()). Each piece is one or two quads (a front and a top), not a box: a house's
+curtain walls (fins()). Pitched roofs get a soffit and fascia under their overhang, gutters and
+downspouts (eaves(), gutters()); a share of the US houses a stone veneer front (veneer()). Each piece is one or two quads (a front and a top), not a box: a house's
 trims cost ~30 vertices a window, and a road tile's four building meshes (roads.BLD_PARTS_MAX x buildings.MAX_MESH_VERTS)
 hold the town; buildings.build_parts leaves the kit off a building whose kit would not fit (it never drops a
 building). The far tiles' lite mesh and the near tiles' coarse detail (buildings.BLD_LOD_PX) have none.
@@ -86,6 +87,23 @@ FIN_END_M = 0.3                     # m: no fin this close to a wall's corner
 LEDGE_H, LEDGE_D = 0.2, 0.08        # m: a floor line's spandrel ledge, its height and depth
 OFFICE_BANDS = ((0, 5), (1, 4))
 FIN_UV = (202 / 1024, 208 / 1024, 1.0 - 230 / 1024, 1.0 - 20 / 1024)   # band 0's bay-edge mullion (unlit at night)
+# House fronts (2026-10-28, Frederick's suburban streets): the pitched roofs' overhang closed (a soffit and a fascia:
+# the roof planes are one-sided, the overhang showed the sky from below), gutters and downspouts, and a stone veneer
+# across a share of the US houses' fronts (eaves(), gutters(), veneer()).
+EAVES = True                        # False: the overhang open as before
+FASCIA_H = 0.2                      # m: the fascia board's height; the soffit hangs this far under the roof's plane
+FASCIA_TINTS = ((0.95, 0.95, 0.93), (0.95, 0.95, 0.93), (0.95, 0.95, 0.93), (0.30, 0.25, 0.21), (0.24, 0.24, 0.25))
+GUTTERS = True                      # False: no gutters or downspouts
+GUTTER_D, GUTTER_H = 0.12, 0.13     # m: a gutter's depth out from the fascia, its height under the eave edge
+DOWNSPOUT_W = 0.08                  # m square
+DOWNSPOUT_IN = 0.1                  # m from the front wall's corner to its centre (clear of a garage door's frame)
+VENEER = True                       # False: no stone fronts
+VENEER_SHARE = {"us_west": 0.4, "us_plains": 0.3, "us_south": 0.25, "us_east": 0.2}   # of the region's pitched houses
+VENEER_H = (0.9, 1.2)               # m over the floors' base (hashed), but under the front windows' sills
+VENEER_OUT = 0.04                   # m it stands out from the wall
+VENEER_TINTS = (0, 1, 3, 4)         # buildings.WALL_TINTS[STONE]: limestone, honey, grey, warm grey
+VENEER_CLEAR_M = 0.05               # m kept from a door's, garage door's or window's trims
+VENEER_PIER_M = 1.4                 # m: a garage door's stone pier at most this wide
 WAINSCOT_TOL = 0.1                  # m an opening may reach down behind a stone base band (a house's sill: 5 cm)
 DOOR_CLEAR_M = 0.05                 # m kept between an opening and a door / garage door frame
 # The plaster sheet's window openings (x0, y0, x1, y1 px of 1024, image top first) per band (buildings.BAND_TALL,
@@ -683,6 +701,314 @@ def depth(spec, ring, z_eave, P, UV, mid):
     return fins(spec, ring, z_eave, P, UV, mid)
 
 
+def _oq(m, pts, uv, mat, want):
+    """A quad (4 (x, y, z)) facing along `want` (its corners reversed if they ran the other way)."""
+    p = np.asarray(pts, np.float64)
+    nrm = np.cross(p[1] - p[0], p[2] - p[0])
+    if float(np.dot(nrm, want)) < 0:
+        pts, uv = pts[::-1], uv[::-1]
+    m.quad(*[tuple(float(v) for v in q) for q in pts], *uv, mat)
+
+
+_PLAIN = ((0.002, 0.995), (0.012, 0.995), (0.012, 0.999), (0.002, 0.999))
+_UP, _DOWN = np.array([0.0, 0.0, 1.0]), np.array([0.0, 0.0, -1.0])
+
+
+def _xyz(p, z):
+    return float(p[0]), float(p[1]), float(z)
+
+
+def _out3(n):
+    return np.array([n[0], n[1], 0.0])
+
+
+def eave_runs(spec, ring, z_eave):
+    """A pitched roof's eaves as buildings._roof draws them: (ze (the eave edge's height), runs, rakes, tp). runs:
+    [(edges, closed)], each edge (W0, W1, E0, E1): its wall line (at z_eave) and its eave edge (EAVE_M out, at ze),
+    in order round the roof. rakes, the gables' overhangs (the roof's planes past a gable wall): [(soffit quads (4
+    (x, y, z) on the roof's plane), fascia edges ((x, y, z), (x, y, z), its outward (3,)))]. None for other roofs."""
+    if spec.roof not in ("gabled", "hipped") or spec.cls in B.CHURCH_CLASSES or spec.steeple:
+        return None
+    tp = math.tan(math.radians(B.roof_pitch(spec)))
+    ze = z_eave - B.EAVE_M * tp
+    sk = B.roof_skeleton(spec)
+    if sk is not None:
+        eaves_, nodes, nt, faces, gables = sk
+        W, E = np.asarray(spec.ring, np.float64)[:, :2], np.asarray(eaves_, np.float64)[:, :2]
+        n = len(W)
+        if len(E) != n or float(np.hypot(*(E - W).T).max()) > 4 * B.EAVE_M:
+            return None
+        gab = {int(i): int(g) for i, g in gables}
+        edges = [None if i in gab else (W[i], W[(i + 1) % n], E[i], E[(i + 1) % n]) for i in range(n)]
+        ns = [_unit(np.array([(E[(i + 1) % n] - E[i])[1], -(E[(i + 1) % n] - E[i])[0]])) for i in range(n)]
+
+        def zf(p, j):                                   # the height of face j's plane over p
+            return ze + float(np.dot(E[j] - p, ns[j])) * tp
+        rakes = []
+        for i, g in gab.items():
+            G = np.asarray(nodes[g], np.float64)[:2]
+            Gw = G - ns[i] * B.EAVE_M
+            j0, j1 = (i - 1) % n, (i + 1) % n
+            soff = [[(*W[i], zf(W[i], j0)), (*E[i], zf(E[i], j0)), (*G, zf(G, j0)), (*Gw, zf(Gw, j0))],
+                    [(*Gw, zf(Gw, j1)), (*G, zf(G, j1)), (*E[j1], zf(E[j1], j1)), (*W[j1], zf(W[j1], j1))]]
+            fas = [((*E[i], zf(E[i], j0)), (*G, zf(G, j0)), _out3(ns[i])),
+                   ((*G, zf(G, j1)), (*E[j1], zf(E[j1], j1)), _out3(ns[i]))]
+            rakes.append((soff, fas))
+        if not gab:
+            return ze, [(edges, True)], rakes, tp
+        runs, cur = [], []
+        start = (max(gab) + 1) % n
+        for k in range(n):
+            e = edges[(start + k) % n]
+            if e is None:
+                if cur:
+                    runs.append((cur, False))
+                cur = []
+            else:
+                cur.append(e)
+        if cur:
+            runs.append((cur, False))
+        return ze, runs, rakes, tp
+    c, u, hl, hw = B.oriented_box(np.asarray(ring, np.float64)[:, :2])
+    v = np.array([-u[1], u[0]])
+    hl2, hw2 = hl + B.EAVE_M, hw + B.EAVE_M
+
+    def P(s, t):
+        return c + u * s + v * t
+    if spec.roof == "hipped":
+        cw = [(-hl, -hw), (hl, -hw), (hl, hw), (-hl, hw)]
+        ce = [(-hl2, -hw2), (hl2, -hw2), (hl2, hw2), (-hl2, hw2)]
+        edges = [(P(*cw[i]), P(*cw[(i + 1) % 4]), P(*ce[i]), P(*ce[(i + 1) % 4])) for i in range(4)]
+        return ze, [(edges, True)], [], tp
+    zr = ze + hw2 * tp
+
+    def z(t):
+        return ze + (hw2 - abs(t)) * tp
+    runs = [([(P(-hl2, -hw), P(hl2, -hw), P(-hl2, -hw2), P(hl2, -hw2))], False),
+            ([(P(hl2, hw), P(-hl2, hw), P(hl2, hw2), P(-hl2, hw2))], False)]
+    rakes = []
+    for sgn in (-1.0, 1.0):
+        out = np.array([u[0] * sgn, u[1] * sgn, 0.0])
+        soff = [[(*P(sgn * hl, 0.0), zr), (*P(sgn * hl2, 0.0), zr), (*P(sgn * hl2, t * hw), z(hw)),
+                 (*P(sgn * hl, t * hw), z(hw))] for t in (-1.0, 1.0)]
+        fas = [((*P(sgn * hl2, t * hw2), ze), (*P(sgn * hl2, 0.0), zr), out) for t in (-1.0, 1.0)]
+        rakes.append((soff, fas))
+    return ze, runs, rakes, tp
+
+
+def _fascia_mat(spec, mat_idx):
+    r, g, b = FASCIA_TINTS[int(B._hash01(spec.seed, "fascia") * len(FASCIA_TINTS))]
+    f = mat_idx[TRIM]
+    return (f[0], (int(r * 255), int(g * 255), int(b * 255), 255))
+
+
+def eaves(m, spec, ring, z_eave, mat_idx, er=None):
+    """A pitched roof's overhang closed (EAVES): a soffit under it (the roof's plane FASCIA_H lower, from the wall out
+    to the eave edge: the roof's planes were open from below, the sky through the overhang) and a fascia board down
+    the eave edge, the gables' overhangs (rakes) too; the trim white or a dark tint (hashed)."""
+    er = er or eave_runs(spec, ring, z_eave)
+    if not EAVES or er is None:
+        return
+    ze, runs, rakes, tp = er
+    fm = _fascia_mat(spec, mat_idx)
+    soffit = mat_idx[TRIM]
+    fh = FASCIA_H
+    for edges, _ in runs:
+        for W0, W1, E0, E1 in edges:
+            nrm = _out3(E0 - W0)
+            _oq(m, [_xyz(W0, z_eave - fh), _xyz(W1, z_eave - fh), _xyz(E1, ze - fh), _xyz(E0, ze - fh)], _PLAIN,
+                soffit, _DOWN)
+            _oq(m, [_xyz(E0, ze - fh), _xyz(E1, ze - fh), _xyz(E1, ze), _xyz(E0, ze)], _PLAIN, fm, nrm)
+    for soff, fas in rakes:
+        for q in soff:
+            _oq(m, [(x, y, zz - fh) for x, y, zz in q], _PLAIN, soffit, _DOWN)
+        for p0, p1, out in fas:
+            _oq(m, [(p0[0], p0[1], p0[2] - fh), (p1[0], p1[1], p1[2] - fh), p1, p0], _PLAIN, fm, out)
+
+
+def _box_faces(m, a, d, n, s0, s1, w0, w1, z0, z1, mat, faces, uv=_PLAIN):
+    """Faces of a box on a wall (a: its start, d: along, n: out): s0..s1 along, w0..w1 out, z0..z1; faces: a string of
+    f(ront) b(ack) l(eft, -d) r(ight, +d) t(op) u(nderside)."""
+    def p(s, w, z):
+        q = a + d * s + n * w
+        return float(q[0]), float(q[1]), float(z)
+    N, D = _out3(n), _out3(d)
+    if "f" in faces:
+        _oq(m, [p(s0, w1, z0), p(s1, w1, z0), p(s1, w1, z1), p(s0, w1, z1)], uv, mat, N)
+    if "b" in faces:
+        _oq(m, [p(s0, w0, z0), p(s1, w0, z0), p(s1, w0, z1), p(s0, w0, z1)], uv, mat, -N)
+    if "l" in faces:
+        _oq(m, [p(s0, w0, z0), p(s0, w1, z0), p(s0, w1, z1), p(s0, w0, z1)], uv, mat, -D)
+    if "r" in faces:
+        _oq(m, [p(s1, w0, z0), p(s1, w1, z0), p(s1, w1, z1), p(s1, w0, z1)], uv, mat, D)
+    if "t" in faces:
+        _oq(m, [p(s0, w0, z1), p(s1, w0, z1), p(s1, w1, z1), p(s0, w1, z1)], uv, mat, _UP)
+    if "u" in faces:
+        _oq(m, [p(s0, w0, z0), p(s1, w0, z0), p(s1, w1, z0), p(s0, w1, z0)], uv, mat, _DOWN)
+
+
+def front_edge(spec):
+    """The wall a house faces the street with: its front door's, else its driveway's, else street_edge()."""
+    if spec.door:
+        return int(spec.door[0])
+    dr = getattr(spec, "drive", None)
+    if dr:
+        return int(dr[0])
+    return street_edge(spec)
+
+
+def porch_span(spec, ring):
+    """(s0, s1) along the front door's wall that buildings._porch covers, or None."""
+    if not (spec.porch and spec.door):
+        return None
+    w_ = _wall(ring, spec.door[0])
+    if w_ is None or w_[3] < 4.0:
+        return None
+    L = w_[3]
+    w = min(L * 0.75, 7.5)
+    c0 = float(np.clip(spec.door[1], w / 2, L - w / 2))
+    return c0 - w / 2 - 0.15, c0 + w / 2 + 0.15
+
+
+def gutters(m, spec, ring, gmin, z_eave, mat_idx, er=None):
+    """A gutter along every horizontal eave (GUTTERS: its front, bottom (both sides) and open ends' caps, mitred round
+    a hipped roof's corners) and a downspout at the front wall's two corners (down the wall from under the soffit, out
+    to the gutter), none where the porch stands."""
+    er = er or eave_runs(spec, ring, z_eave)
+    if not GUTTERS or er is None:
+        return
+    ze, runs, rakes, tp = er
+    mat = _fascia_mat(spec, mat_idx)
+    zg0, zg1 = ze - GUTTER_H, ze - 0.02
+    for edges, closed in runs:
+        k = len(edges)
+        ns = [np.array([(e[3] - e[2])[1], -(e[3] - e[2])[0]]) / max(float(np.hypot(*(e[3] - e[2]))), 1e-9)
+              for e in edges]
+        offs = []
+        for j in range(k + 1):                          # the offset at each vertex of the run (mitred inside it)
+            if (0 < j < k) or (closed and k > 1):
+                a_, b_ = ns[(j - 1) % k], ns[j % k]
+                offs.append((a_ + b_) / max(1.0 + float(a_ @ b_), 0.2) * GUTTER_D)
+            else:
+                offs.append(ns[min(j, k - 1)] * GUTTER_D)
+        for j, (W0, W1, E0, E1) in enumerate(edges):
+            G0, G1 = E0 + offs[j], E1 + offs[j + 1]
+            N = _out3(ns[j])
+            _oq(m, [_xyz(G0, zg0), _xyz(G1, zg0), _xyz(G1, zg1), _xyz(G0, zg1)], _PLAIN, mat, N)
+            bot = [_xyz(E0, zg0), _xyz(E1, zg0), _xyz(G1, zg0), _xyz(G0, zg0)]
+            _oq(m, bot, _PLAIN, mat, _DOWN)
+            _oq(m, bot, _PLAIN, mat, _UP)
+            dd = _out3(E1 - E0)
+            if not closed and j == 0:
+                _oq(m, [_xyz(E0, zg0), _xyz(G0, zg0), _xyz(G0, zg1), _xyz(E0, zg1)], _PLAIN, mat, -dd)
+            if not closed and j == k - 1:
+                _oq(m, [_xyz(E1, zg0), _xyz(G1, zg0), _xyz(G1, zg1), _xyz(E1, zg1)], _PLAIN, mat, dd)
+    # downspouts at the front wall's corners, on the eave over it
+    f = front_edge(spec)
+    wl = _wall(ring, f) if f is not None else None
+    if wl is None:
+        return
+    a, d, n, L = wl
+    if L < 2.0:
+        return
+    if not any(abs(float(np.dot(_unit(E1 - E0), d)) - 1.0) < 1e-6 and abs(float(np.dot(W0 - a, n))) < 1e-3
+               for edges, _ in runs for W0, W1, E0, E1 in edges):
+        return
+    ps = porch_span(spec, ring) if spec.door and spec.door[0] == f else None
+    hw_ = DOWNSPOUT_W / 2
+    z_top = ze - FASCIA_H - 0.02                        # just under the soffit at the eave edge
+    z_el = z_top - DOWNSPOUT_W
+    wg = B.EAVE_M + GUTTER_D / 2
+    for s in (DOWNSPOUT_IN, L - DOWNSPOUT_IN):
+        if ps is not None and ps[0] - hw_ < s < ps[1] + hw_:
+            continue
+        _box_faces(m, a, d, n, s - hw_, s + hw_, 0.0, DOWNSPOUT_W, gmin - 0.1, z_el, mat, "flr")    # down the wall
+        _box_faces(m, a, d, n, s - hw_, s + hw_, 0.0, wg + hw_, z_el, z_top, mat, "flrtu")         # out under it
+        _box_faces(m, a, d, n, s - hw_, s + hw_, wg - hw_, wg + hw_, z_top, zg0, mat, "fblr")      # up to the gutter
+
+
+def _unit(x):
+    return x / max(float(np.hypot(*x)), 1e-9)
+
+
+def veneer_share(spec):
+    return VENEER_SHARE.get(getattr(spec, "region", None) or "", 0.0)
+
+
+def has_veneer(spec):
+    """A pitched-roof house with a stone veneer front (VENEER_SHARE of its region's; never with a wainscot)."""
+    return bool(VENEER and spec.wall and spec.windows is not False and spec.roof in ("gabled", "hipped")
+            and not has_wainscot(spec) and B._hash01(spec.seed, "veneer") < veneer_share(spec))
+
+
+def veneer(m, spec, ring, gmin, z_eave, mat_idx):
+    """Ledgestone across a house's front wall (has_veneer; a hashed warm tan or grey stone): a band from the ground
+    to VENEER_H (hashed, but under the lowest front window's sill trim), round the door's and garage door's frames,
+    and full height on the garage door's piers (between its frame and the wall's end, the door's frame or a window,
+    VENEER_PIER_M wide at most), standing out VENEER_OUT. (z0, z1, s spans) of its pieces for the tests."""
+    if not has_veneer(spec):
+        return []
+    f = front_edge(spec)
+    wl = _wall(ring, f) if f is not None else None
+    if wl is None or wl[3] < 3.0:
+        return []
+    a, d, n, L = wl
+    base = z_eave - spec.floors * spec.floor_h
+    tints = VENEER_TINTS
+    mat = mat_idx[f"{B.STONE}|{tints[int(B._hash01(spec.seed, 'veneer tint') * len(tints))]}"]
+    c = VENEER_CLEAR_M
+    top = base + VENEER_H[0] + (VENEER_H[1] - VENEER_H[0]) * B._hash01(spec.seed, "veneer h")
+    shut = B._hash01(spec.seed, "shutters") < SHUTTER_SHARE and spec.roof != "flat"
+    wins = []                                           # the front's ground-floor windows: their trims' / shutters' span
+    for cpt, zf in B.house_window_slots(spec, a, d, n, L, z_eave, f):
+        if zf < base + spec.floor_h:
+            s = float(np.dot(cpt - a, d))
+            h = B.WIN_W / 2 + TRIM_W + (B.WIN_W / 2 if shut else 0.0)
+            wins.append((s - h - c, s + h + c))
+            top = min(top, zf - SILL_H - 0.02)
+    holes = []                                          # (s0, s1) the band leaves out
+    if spec.door and spec.door[0] == f:
+        h = DOOR_W / 2 + FRAME_W * 1.5 + c
+        holes.append((spec.door[1] - h, spec.door[1] + h))
+    piers = []
+    dr = getattr(spec, "drive", None)
+    if dr and dr[0] == f:
+        gs = garage_span(spec, f, L)
+        if gs is not None:
+            g0, g1 = gs[0] - FRAME_W - c, gs[1] + FRAME_W + c
+            holes.append((g0, g1))
+            stops = sorted([0.0, L] + [x for h_ in holes[:-1] + wins for x in h_])
+            left = max([x for x in stops if x <= g0 + 1e-9], default=0.0)
+            right = min([x for x in stops if x >= g1 - 1e-9], default=L)
+            for p0, p1 in ((max(left, g0 - VENEER_PIER_M), g0), (g1, min(right, g1 + VENEER_PIER_M))):
+                if p1 - p0 >= 0.2 and not any(w0 < p1 and w1 > p0 for w0, w1 in wins + holes[:-1]):
+                    piers.append((p0, p1))
+    pier_top = min(base + spec.floor_h, z_eave - 0.3)
+    if top - base < 0.3:
+        top = None
+    su = B.SIDING_UV_M
+    z0 = gmin - 0.3
+    pieces = []
+    spans = [(0.0, L)]
+    for h0, h1 in sorted(holes + piers):
+        nxt = []
+        for s0, s1 in spans:
+            if h1 <= s0 or h0 >= s1:
+                nxt.append((s0, s1))
+                continue
+            if h0 > s0:
+                nxt.append((s0, h0))
+            if h1 < s1:
+                nxt.append((h1, s1))
+        spans = nxt
+    for (s0, s1), z1 in ([(sp, top) for sp in spans if sp[1] - sp[0] >= 0.15] if top is not None else []) \
+            + [(p, pier_top) for p in piers]:
+        uv = ((s0 / su, z0 / su), (s1 / su, z0 / su), (s1 / su, z1 / su), (s0 / su, z1 / su))
+        _box_faces(m, a, d, n, s0, s1, 0.0, VENEER_OUT, z0, z1, mat, "flrt", uv)
+        pieces.append((z0, z1, s0, s1))
+    return pieces
+
+
 def add(m, spec, ring, gmin, gmax, z_eave, mat_idx):
     """All of a building's kit (its drawn ring, its ground, its eave height)."""
     if spec.cls in B.BRIDGE_CLASSES or (spec.min_h or 0.0) > 0.5 or spec.deck:
@@ -695,3 +1021,8 @@ def add(m, spec, ring, gmin, gmax, z_eave, mat_idx):
     awning(m, spec, ring, base, mat_idx)
     balconies(m, spec, ring, z_eave, mat_idx)
     wainscot(m, spec, ring, gmin, base, mat_idx)
+    if EAVES or GUTTERS:
+        er = eave_runs(spec, ring, z_eave)
+        eaves(m, spec, ring, z_eave, mat_idx, er)
+        gutters(m, spec, ring, gmin, z_eave, mat_idx, er)
+    veneer(m, spec, ring, gmin, z_eave, mat_idx)

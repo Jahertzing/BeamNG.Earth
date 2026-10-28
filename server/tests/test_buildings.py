@@ -385,7 +385,9 @@ class SplitTest(unittest.TestCase):
         self.assertGreaterEqual(len(parts), 3)
         self.assertTrue(all(len(p[0]) <= len(one[0]) // 3 for p in parts))
         self.assertEqual(sum(len(p[2]) for p in parts), len(one[2]), "every triangle in exactly one part")
-        self.assertEqual(len(bld.build_parts(items)), 1, "a small tile stays one mesh")
+        # (20 of these two-storey houses: with the facade kit's recessed windows and house fronts 30 of them
+        # came to ~62k vertices, past one mesh)
+        self.assertEqual(len(bld.build_parts(items[:20])), 1, "a small tile stays one mesh")
 
     def test_parts_carry_their_lite_mesh(self):
         # a near tile's shape draws the far tiles' lite mesh while it is small on screen (camera LOD)

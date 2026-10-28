@@ -278,7 +278,8 @@ class Spec:
     """What is built for one footprint (decided by plan())."""
     __slots__ = ("ring", "floors", "floor_h", "height", "roof", "roof_mat", "facade", "band", "shop", "plain", "min_h", "wall", "door", "windows", "front", "steeple", "stoop",
                  "sign", "porch", "cls", "seed", "deck", "pitch", "portal", "gring", "skel", "drive",
-                 "rise", "lantern", "stands", "club", "canopy")      # (the last: landmarks.py's curved roofs, bowls)
+                 "rise", "lantern", "stands", "club", "canopy",      # (landmarks.py's curved roofs, bowls)
+                 "region")                                          # (its region's Style name: the facade kit)
 
     def __init__(self, **kw):
         for k in self.__slots__:
@@ -731,7 +732,8 @@ def plan(ring, attrs, neighbours=0, lat=None, lon=None, look=None, town=False, d
     if porch:   # pitched roofs draw the walls on the oriented box: an L-shaped house's door wall can be inside it
         _, _, hl, hw = oriented_box(ring)
         porch = area >= 0.9 * 4 * hl * hw
-    return Spec(ring=ring, floors=nf, floor_h=floor_h, height=h, roof=roof, roof_mat=roof_mat, facade=facade,
+    return Spec(region=style.name, ring=ring, floors=nf, floor_h=floor_h, height=h, roof=roof, roof_mat=roof_mat,
+                facade=facade,
                 band=band, shop=shop and not shed and nf >= 1, plain=plain, seed=seed, min_h=0.0, wall=wall,
                 windows=windows, steeple=church and area < 2500 and not curved, porch=porch, cls=cls,
                 deck=garage and roof == "flat", pitch=style.pitch, skel=skel if roof != "flat" else None, rise=rise,
