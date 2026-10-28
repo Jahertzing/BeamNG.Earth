@@ -1564,7 +1564,7 @@ The user: "make the world look alive ... look like a professionally made map".
   conflicts with (layer file `buildings.drcog2024`); the measured road widths come from the edges of pavement
   first (the nearest edge line either side, median of 3 samples). CC BY 3.0, credited as a map dataset.
   Frederick's cell: 1,848 Overture footprints -> 3,475 roofprints + 12 kept, heights 76 % -> 100 %; 1.6 MB, 4 s.
-- **Lidar heights** (`server/lidarheights.py`, `--lidar-heights on`, off by default; 2026-10-28): in the US, a
+- **Lidar heights** (`server/lidarheights.py`, `--lidar-heights on`, on by default since 2026-10-28: the settings page's "Building heights from USGS lidar"; US cells only): in the US, a
   building whose height is missing or machine-learned takes the median of the USGS 3DEP height-above-ground
   inside its footprint (spikes over 1.5 x median + 4 m dropped): the Planetary Computer's `3dep-lidar-hag`
   rasters (LERC COGs) read as its tile service's z16 PNGs (0-127.5 m, 0.5 m steps, ~8 KB a tile, 16 a map

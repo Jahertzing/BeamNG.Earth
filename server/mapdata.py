@@ -320,7 +320,8 @@ class MapData:
                 name = f"{name}.{drcog.TAG}"
         if layer == "buildings" and self.lidar() is not None:
             import lidarheights
-            name = f"{name}.{lidarheights.TAG}"     # (--lidar-heights on: 3DEP heights in, kept under their own name)
+            if lidarheights.covers(key.bounds()):   # (--lidar-heights on: 3DEP heights in, kept under their own name)
+                name = f"{name}.{lidarheights.TAG}"
         if layer == "roads":
             tag = self.regional().covering(key.bounds())
             if tag is not None:         # a cell inside a regional OSM table: built with its tags, kept under its tag
@@ -399,7 +400,9 @@ class MapData:
         staging.replace_cached(tmp, path)
 
     def _build(self, key, layer, kind):
-        """(content arrays, provenance record or None) of one layer, from the sources."""
+        """(content arrays, provenance record or None) of one layer, from the sources. arrays["transient"]: built
+        without an optional source that failed (the lidar heights): used, not stored (layer_arrays)."""
+        transient = False
         if layer in VECTOR_LAYERS:
             # the roads' OpenStreetMap tags are read alongside Overture's (each half a fresh cell's wait)
             osm = self._osm_pool().submit(self._osm_cell, key, kind) if layer == "roads" else None
@@ -411,15 +414,18 @@ class MapData:
                     if n:                   # (credited with the cell's datasets: credits.FEATURES)
                         sources = dict(sources)
                         sources[(drcog.DATASET, drcog.LICENSE)] = n
-            if layer == "buildings" and self.lidar() is not None and len(feats):
-                import lidarheights
+            import lidarheights
+            if layer == "buildings" and self.lidar() is not None and len(feats) and lidarheights.covers(key.bounds()):
                 try:
                     feats, n = lidarheights.apply(feats, self.lidar().heights(feats, key, kind))
                 except DEFERRED:
-                    raise
-                except Exception as e:      # (outside 3DEP, the service down: the heights as they were)
-                    log.warning("mapdata: lidar heights of %s: %s: %s", key, type(e).__name__, e)
-                    n = 0
+                    if kind not in ("demand", "urgent"):
+                        raise                   # (a prefetch: built later, as the OSM tags)
+                    log.warning("mapdata: lidar heights of %s: the host is busy (%s); not kept", key, kind)
+                    n, transient = 0, True
+                except Exception as e:      # (the service down: the heights as they were, this time only)
+                    log.warning("mapdata: lidar heights of %s: %s: %s; not kept", key, type(e).__name__, e)
+                    n, transient = 0, isinstance(e, (OSError, ValueError))
                 if n:                       # (credited with the cell's datasets: credits.FEATURES)
                     sources = dict(sources)
                     sources[(lidarheights.DATASET, lidarheights.LICENSE)] = n
@@ -448,6 +454,8 @@ class MapData:
             arrays = _layer_arrays(r)
             prov = dict(CANOPY, files=r.files) if r is not None else None
         arrays["provenance"] = np.array(json.dumps(prov, sort_keys=True))
+        if transient:
+            arrays["transient"] = np.array(True)
         return arrays
 
     def _osm_pool(self):
@@ -510,7 +518,8 @@ class MapData:
                 return self._mirrored(key, layer, path, arrays), True
             try:
                 arrays = self._build(key, layer, kind)
-                self._store(path, arrays)
+                if arrays.pop("transient", None) is None:       # (an optional source failed: next time again)
+                    self._store(path, arrays)
             finally:
                 if mine:
                     xproc.release(path + ".lock")

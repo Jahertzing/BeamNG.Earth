@@ -115,6 +115,31 @@ class MapDataTest(Sources, SmallBlocks, unittest.TestCase):
             ds = [d["dataset"] for p in cd.provenance for d in p.get("datasets", [])]
             self.assertIn(LH.DATASET, ds)
 
+    def test_outside_the_us_no_request_and_the_layer_kept(self):
+        with mock.patch.dict(os.environ, {LH.ENV: "1"}):
+            md, _ = self.mapdata(cache=os.path.join(self.tmp, "c3"))
+            london = mapcells.cell_of(51.5, -0.12)
+            self.assertNotIn(LH.TAG, md.path(london, "buildings"))      # (the file cached before stays the one)
+            self.assertIn(LH.TAG, md.path(mf.CELL, "buildings"))
+
+    def test_a_failed_fetch_is_used_but_not_kept(self):
+        import netfetch
+        with mock.patch.dict(os.environ, {LH.ENV: "1"}):
+            md, _ = self.mapdata(cache=os.path.join(self.tmp, "c4"))
+            with mock.patch.object(LH.Lidar, "heights", side_effect=netfetch.FetchFailed("down")):
+                cd = md.cell(mf.CELL, ("buildings",))
+            self.assertGreater(len(cd.layers["buildings"]), 0)       # (the buildings, without the lidar's heights)
+            self.assertFalse(os.path.exists(md.path(mf.CELL, "buildings")))
+
+
+class CoverageTest(unittest.TestCase):
+    def test_covers(self):
+        self.assertTrue(LH.covers(KEY.bounds()))                        # Frederick
+        self.assertTrue(LH.covers(mapcells.cell_of(21.30, -157.85).bounds()))   # Honolulu
+        self.assertTrue(LH.covers(mapcells.cell_of(61.2, -149.9).bounds()))     # Anchorage
+        self.assertFalse(LH.covers(mapcells.cell_of(51.5, -0.12).bounds()))     # London
+        self.assertFalse(LH.covers(mapcells.cell_of(19.43, -99.13).bounds()))   # Mexico City
+
 
 if __name__ == "__main__":
     unittest.main()

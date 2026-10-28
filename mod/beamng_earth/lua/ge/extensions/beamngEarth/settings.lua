@@ -56,6 +56,8 @@ M.SCHEMA = {
   -- the Denver region's DRCOG planimetrics (server drcog.py): launcher.py reads this file and starts the server with
   -- --drcog on / off (bmplaunch.mod_setting); takes effect at the next start of the app
   drcog = { kind = 'bool', default = true, label = 'Denver-region buildings and road widths (DRCOG)' },
+  -- US building heights from USGS 3DEP lidar (server lidarheights.py): --lidar-heights on / off, as drcog
+  lidarHeights = { kind = 'bool', default = true, label = 'Building heights from USGS lidar' },
   -- the vegetation tiles' rocks and boulders (trees.lua groups rock, desert_rock; GitHub #5, after PR #321)
   rocks = { kind = 'bool', default = true, label = 'Rocks' },
   -- Earth imagery on supported vehicle dashboard screens (dashboard.lua)
@@ -84,7 +86,7 @@ M.SCHEMA = {
 }
 M.ORDER = { 'rebaseDistance', 'viewDistanceMode', 'viewDistanceKm', 'hazeStrength', 'skyMode', 'clouds',
   'weatherMode', 'realGravity', 'groundCover', 'groundCoverDensity', 'groundCoverDistance', 'rocks', 'roads', 'drcog',
-  'dashboardSatellite', 'hudVisible', 'statusBar',
+  'lidarHeights', 'dashboardSatellite', 'hudVisible', 'statusBar',
   'placeNamesOnline', 'creditsVisible', 'beammpOnLaunch',
   'creditsCorner', 'creditsSize', 'cacheCapGb', 'devOutlineKm', 'devMapKm' }
 

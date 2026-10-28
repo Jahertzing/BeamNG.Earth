@@ -5044,9 +5044,10 @@ def main():
                     help="the Denver region's DRCOG 2024 planimetrics (drcog.py): its stereo-compiled roofprints with "
                          "their heights in place of the Overture footprints they match, its edges of pavement for the "
                          "road widths (CC BY 3.0, credited); off = Overture's footprints everywhere")
-    ap.add_argument("--lidar-heights", choices=("on", "off"), default="off",
+    ap.add_argument("--lidar-heights", choices=("on", "off"), default="on",
                     help="US building heights from USGS 3DEP lidar (lidarheights.py: the Planetary Computer's height-"
-                         "above-ground rasters) where the map has none or a machine-learned one; public domain")
+                         "above-ground rasters) where the map has none or a machine-learned one; public domain; "
+                         "on by default (the settings page's switch), no effect outside the US")
     ap.add_argument("--gas-stations", choices=("on", "off"), default="off",
                     help="gas stations with refuelling at real stations (gasstations.py; Overture places, needs "
                          "--roads on): West Coast USA's pumps and canopies, the stock refuel prompt")
