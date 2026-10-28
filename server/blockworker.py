@@ -20,6 +20,7 @@ import time
 
 import numpy as np
 
+import decklidar
 import dem as demmod
 import farfield
 import furniture
@@ -320,6 +321,7 @@ def _bridges(aid, frame, elev):
             bridges.wet = sea.depth if sea is not None else None        # (decks clear the water: roads.water_clear)
             bridges.infra_fn = lambda key: _s.md.cell(key, layers=("infrastructure",), kind="demand").layers.get(
                 "infrastructure")                                       # (bridge:structure tags: bridgetypes)
+            bridges.surface = decklidar.surface_for(_s.md, _s.dem)    # (decks at the lidar's heights)
             for old in sorted(_s.bridges)[:-ANCHORS_KEPT]:
                 del _s.bridges[old]
     return bridges
@@ -343,6 +345,7 @@ def _nav_bridges(aid, frame, elev):
             bridges.wet = sea.depth if sea is not None else None
             bridges.infra_fn = lambda key: _s.md.cell(key, layers=("infrastructure",), kind="demand").layers.get(
                 "infrastructure")
+            bridges.surface = decklidar.surface_for(_s.md, _s.dem)
             for old in sorted(nav)[:-ANCHORS_KEPT]:
                 del nav[old]
     return bridges
@@ -740,6 +743,7 @@ def far_bridge_tile(aid, lat, lon, zoom, tx, ty, out_dir, vfs_dir):
                 lambda la, lo: ground(frame, la, lo, _s.dem.sample(la, lo, zoom)))
             sea = getattr(_s, "sea", None)
             bridges.wet = sea.depth if sea is not None else None
+            bridges.surface = decklidar.surface_for(_s.md, _s.dem)
             for old in sorted(far)[:-ANCHORS_KEPT]:
                 del far[old]
     k = revisit.key("brfar", round(float(lat), 7), round(float(lon), 7), zoom, tx, ty,

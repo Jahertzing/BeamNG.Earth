@@ -1879,12 +1879,15 @@ def _merge_overlaps(lines, zs, widths, levels, rounds=3, pins=None):
 DUAL_DECK_M = 30.0      # m: parts of one level parallel within this are one deck's carriageways (_merge_overlaps)
 
 
-def deck_profile(lines, ground_fn, crossings=(), clear=None, grade=None, lift=None, levels=None, widths=None, pins=None):
+def deck_profile(lines, ground_fn, crossings=(), clear=None, grade=None, lift=None, levels=None, widths=None, pins=None,
+                 observed=None, clear_of=None):
     """deck_profile_once, then repeated with the deck-over-deck requirements: where two parts of
     different levels cross, the higher one clears the lower one's deck by `clear` (2026-10-11: crossing
     decks clipped into each other). pins: points where a ground road goes on from a joint of decks (abutments too: _pin).
-    Pure given ground_fn."""
-    zs = deck_profile_once(lines, ground_fn, crossings, clear, grade, lift, pins=pins)
+    observed: per part the lidar's deck heights at its points (NaN: none) or None (decklidar.observations); clear_of:
+    per part the clearance over what it crosses (default clear). Pure given ground_fn."""
+    zs = deck_profile_once(lines, ground_fn, crossings, clear, grade, lift, pins=pins, observed=observed,
+                           clear_of=clear_of)
     n_road = len(crossings)
     if levels is None or len(lines) < 2:
         return zs
@@ -1905,7 +1908,7 @@ def deck_profile(lines, ground_fn, crossings=(), clear=None, grade=None, lift=No
         if not extra:
             break
         new = deck_profile_once(lines, ground_fn, list(crossings) + extra, clear, grade, lift, n_road=n_road,
-                                levels=levels, pins=pins)
+                                levels=levels, pins=pins, observed=observed, clear_of=clear_of)
         if all(np.allclose(a, b, atol=0.02, equal_nan=True) for a, b in zip(new, zs)):
             zs = new
             break
@@ -2007,13 +2010,15 @@ NAV_RUN_M = 100.0           # a wet run this long takes the bridge's navigation 
 
 
 def deck_profile_once(lines, ground_fn, crossings=(), clear=None, grade=None, lift=None, n_road=None, levels=None,
-                      pins=None):
+                      pins=None, observed=None, clear_of=None):
     """Deck heights (one array per part) of a bridge chain: deck_heights between the abutments, at
     least `lift` over the ground under it, and at least `clear` over each crossing road below
     ((part index, arc m, road height)), the requirement falling at `grade` along the chain; then
     smoothed per part with its end heights kept. A road crossing (the first n_road crossings, default all, without
     their own clearance) by an abutment the deck cannot get AT_GRADE_M over is a junction at grade: the deck
-    meets the road's height there. Pure given ground_fn(xy (m, 2)) -> heights."""
+    meets the road's height there. A part with lidar measurements (observed: decklidar) starts from them instead of the
+    straight line between its ends, and keeps within decklidar.OBS_TOL_M of them where measured. Pure given
+    ground_fn(xy (m, 2)) -> heights."""
     clear = DECK_ROAD_CLEAR if clear is None else clear
     grade = DECK_GRADE if grade is None else grade
     lift = DECK_CLEAR if lift is None else lift
@@ -2028,6 +2033,7 @@ def deck_profile_once(lines, ground_fn, crossings=(), clear=None, grade=None, li
         deg[a] += 1
         deg[b] += 1
     deg = _pin(nodes, deg, pins)
+    meas = _observed_start(zs, edges, deg, observed) if observed is not None else [None] * len(zs)
     # no steeper than DECK_MAX_GRADE from an abutment: a short bridge over a road cannot reach full
     # headroom (2026-10-11: such decks became steep wedges, "walls" in the user's screenshot)
     cap = [np.full(len(ln), np.inf) for ln in lines]
@@ -2047,7 +2053,7 @@ def deck_profile_once(lines, ground_fn, crossings=(), clear=None, grade=None, li
     req = [np.full(len(ln), -np.inf) for ln in lines]
     for ci, cr in enumerate(crossings):     # (part, arc, height under it[, its own clearance: over water])
         pi, sc, zc = cr[:3]
-        cl = cr[3] if len(cr) > 3 and cr[3] is not None else clear
+        cl = cr[3] if len(cr) > 3 and cr[3] is not None else (clear if clear_of is None else clear_of[pi])
         # a deck-over-deck requirement (its 5th element: the upper part's level) lifts the parts of that level and
         # above only: falling along the chain it reached the lower deck it was measured on, lifting it, and so the
         # upper again each round (the Tsing Ma Bridge's upper deck 33 m over its lower one, 7 m in life, 2026-10-18)
@@ -2104,11 +2110,17 @@ def deck_profile_once(lines, ground_fn, crossings=(), clear=None, grade=None, li
         # sharp peak and floored there has no spike
         g = np.maximum(g, _ground_envelope(s, g, 0.0, 1.0 / (2.0 * DECK_CREST_R)))
         cap[k] = np.maximum(cap[k], _ground_envelope(s, g, DECK_MAX_GRADE))
+        if meas[k] is not None:     # the deck as measured: room up to it (a real ramp's 7 % off its abutment)
+            import decklidar
+            cap[k] = np.maximum(cap[k], np.where(meas[k], z + decklidar.OBS_TOL_M, -np.inf))
         # ... but never steeper than DECK_STEEP_GRADE off an abutment where the ground under it is lower (nor under
         # the straight line between the abutments): raised by the ground 90 m off at the far, 10 m higher abutment, a
         # water clearance stood the New York Thruway's deck over the Vloman Kill 5 m up in its first 3.6 m, a wall an
         # AI car hit at 65 mph (2026-10-27)
         cap[k] = np.minimum(cap[k], np.maximum(np.maximum(steep[k], g), np.where(np.isfinite(z), z, -np.inf)))
+        if meas[k] is not None:
+            import decklidar
+            cap[k] = np.maximum(cap[k], np.where(meas[k], z + decklidar.OBS_TOL_M, -np.inf))
         zz = np.maximum(np.minimum(np.maximum(z, req[k]), cap[k]), g)
         if deg[a] == 1:                         # an abutment keeps the ground's height
             zz[0] = z[0]
@@ -2124,11 +2136,50 @@ def deck_profile_once(lines, ground_fn, crossings=(), clear=None, grade=None, li
             # Smoothing is aesthetic: it must not remove feasible structural headroom.
             # Keep the abutment/grade cap, rather than turning a short bridge into a wall.
             floor = np.maximum(np.minimum(req[k], cap[k]), g)
+            if meas[k] is not None:     # ... nor take it off the measured deck
+                import decklidar
+                floor = np.maximum(floor, np.minimum(np.where(meas[k], z - decklidar.OBS_TOL_M, -np.inf), cap[k]))
             zz = np.maximum(sm, floor)
             zz[0], zz[-1] = sm[0], sm[-1]
             zz = _curve_deck(s, zz, floor, cap[k])
         out.append(zz)
     return out
+
+
+def _observed_start(zs, edges, deg, observed):
+    """zs (deck_heights' straight lines, changed in place) made the lidar's measured profiles where a part has them
+    (decklidar.filled), its abutments kept at their ground (decklidar.end_blend) and every joint at one height: the
+    mean of the measured parts' ends there, the unmeasured parts' lines shifted to meet it. Returns per part its
+    measured-points mask, or None. Pure."""
+    import decklidar
+    meas = [None] * len(zs)
+    node_z = {}
+    for k, (a, b, s) in enumerate(edges):
+        ob = observed[k] if k < len(observed) else None
+        if ob is None or len(ob) != len(zs[k]) or not np.isfinite(zs[k]).all():
+            continue
+        z, ok = decklidar.filled(s, ob, zs[k])
+        zs[k] = decklidar.end_blend(s, z, zs[k][0], zs[k][-1], deg[a] == 1, deg[b] == 1)
+        meas[k] = ok
+        for node, e in ((a, 0), (b, -1)):
+            if deg[node] > 1:
+                node_z.setdefault(node, []).append(float(zs[k][e]))
+    if not node_z:
+        return meas
+    node_z = {n: float(np.mean(v)) for n, v in node_z.items()}
+    for k, (a, b, s) in enumerate(edges):
+        if not np.isfinite(zs[k]).all() or s[-1] <= 0:
+            continue
+        za, zb = node_z.get(a), node_z.get(b)
+        if meas[k] is not None:     # a measured part: its ends to the joints' one height (a few cm)
+            zs[k] = decklidar.end_blend(s, zs[k], za if za is not None else zs[k][0],
+                                        zb if zb is not None else zs[k][-1], za is not None, zb is not None)
+            continue
+        da = (za - zs[k][0]) if za is not None else 0.0
+        db = (zb - zs[k][-1]) if zb is not None else 0.0
+        if da or db:
+            zs[k] = zs[k] + da + (db - da) * s / s[-1]
+    return meas
 
 
 DECK_CREST_R = 60.0     # m: the ground under a deck is its floor rounded to vertical curves this wide (deck_profile_once)
@@ -3985,21 +4036,26 @@ def _rail_drawn(feats, i):
     return railways.drawn(feats, i) is not None
 
 
-def _clearance_deficits(lines, zs, crossings):
+def _clearance_deficits(lines, zs, crossings, measured=None):
     """(part, usable m) below the road target in a modelled crossing corridor.
 
     Road heights are the graded lower road's height at the crossing. Keep true
     abutment junctions at grade; data/grade constraints cannot promise global clearance.
+    measured: per part, True for a deck at the lidar's height (decklidar.LIDAR_HEADROOM_M its target).
     """
     out = []
     for pi, sc, zc in crossings:
+        need = MIN_BRIDGE_HEADROOM_M
+        if measured is not None and measured[pi]:
+            import decklidar
+            need = decklidar.LIDAR_HEADROOM_M
         s = np.r_[0.0, np.cumsum(np.hypot(*np.diff(lines[pi][:, :2], axis=0).T))]
         if min(sc, s[-1] - sc) <= AT_GRADE_REACH_M:
             continue
         lo, hi = max(0.0, sc - DECK_CLEAR_REACH_M), min(s[-1], sc + DECK_CLEAR_REACH_M)
         at = np.r_[lo, s[(s > lo) & (s < hi)], hi]
         headroom = float(np.min(np.interp(at, s, zs[pi]))) - zc - roadmesh.DECK_DEPTH - roadmesh.GIRDER_D
-        if not np.isfinite(headroom) or headroom < MIN_BRIDGE_HEADROOM_M - 1e-6:
+        if not np.isfinite(headroom) or headroom < need - 1e-6:
             out.append((pi, headroom))
     return out
 
@@ -4137,6 +4193,7 @@ class BridgeProfiles:
 
     wet = None      # wet(lat, lon) -> water depth (m) or None: decks clear the water (water_clear)
     infra_fn = None     # infra_fn(cell key) -> the infrastructure Features (bridge:structure tags: bridgetypes)
+    surface = None      # surface(lat, lon) -> the lidar's surface height or NaN (decklidar.Surface): decks as measured
 
     def __init__(self, frame, cell_fn, elev):
         self.frame, self.cell_fn, self.elev = frame, cell_fn, elev
@@ -4319,15 +4376,40 @@ class BridgeProfiles:
             log.debug("nav clearance: %s: %s", type(ex).__name__, ex)
             nav = 0.0
         required = [(c[0], c[1], z) for c, z in zip(cr, road_z)]
-        rails = [(c[0], c[1], z, DECK_ROAD_CLEAR) for c, z in zip(rcr, rail_z)]
-        zs = deck_profile(lines, self._ground, required + rails + self._water(lines, nav),
-                          levels=[pool[k][3] for k in comp], widths=[pool[k][0].width for k in comp],
-                          pins=_ground_pins(lines, gl))
-        deficits = _clearance_deficits(lines, zs, required + [r[:3] for r in rails])
+        levels, widths = [pool[k][3] for k in comp], [pool[k][0].width for k in comp]
+        observed, clear_of = self._observed(lines, widths, levels)
+        rails = [(c[0], c[1], z, DECK_ROAD_CLEAR if clear_of is None else clear_of[c[0]]) for c, z in zip(rcr, rail_z)]
+        zs = deck_profile(lines, self._ground, required + rails + self._water(lines, nav), levels=levels, widths=widths,
+                          pins=_ground_pins(lines, gl), observed=observed, clear_of=clear_of)
+        deficits = _clearance_deficits(lines, zs, required + [r[:3] for r in rails],
+                                       None if observed is None else [o is not None for o in observed])
         if deficits:
             log.warning("bridge clearance below %.1f m target: %s; abutment/grade or map constraints prevent full headroom",
                         MIN_BRIDGE_HEADROOM_M, [(comp[i], round(h, 2)) for i, h in deficits[:3]])
         return zs
+
+    def _observed(self, lines, widths, levels):
+        """(per part the lidar's deck heights or None, per part the clearance it keeps over what it crosses), or (None,
+        None) without the lidar (decklidar)."""
+        if self.surface is None or not lines:
+            return None, None
+        import decklidar
+
+        def surface_xy(xy):
+            la, lo, _ = self.frame.enu_to_geodetic(xy[:, 0], xy[:, 1], 0.0)
+            z = np.asarray(self.surface(la, lo), np.float64)
+            return self.frame.geodetic_to_enu(la, lo, z)[2]
+        try:
+            obs = decklidar.observations(lines, widths, levels, surface_xy)
+        except Exception as ex:     # the decks as made without it, not kept (revisit.fault)
+            import revisit
+            log.debug("deck lidar: %s: %s", type(ex).__name__, ex)
+            revisit.fault()
+            return None, None
+        if all(o is None for o in obs):
+            return None, None
+        lc = decklidar.lidar_road_clear()
+        return obs, [DECK_ROAD_CLEAR if o is None else lc for o in obs]
 
     def parts(self, cells_feats, box):
         """[(fid, spec, xy, z, lon)] of the bridge parts in these cells that come near box."""

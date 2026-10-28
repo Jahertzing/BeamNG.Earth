@@ -91,6 +91,7 @@ import prewarm as prewarmmod  # noqa: E402
 import parking as parkingmod  # noqa: E402
 import gasstations as gasstationsmod  # noqa: E402
 import roads as roadsmod  # noqa: E402
+import decklidar as decklidarmod  # noqa: E402
 import rails as railsmod  # noqa: E402
 import randomplace as randomplacemod  # noqa: E402
 import placepreview as placepreviewmod  # noqa: E402
@@ -1093,6 +1094,7 @@ class Server:
                     anchor.bridges.wet = self.sea.depth if self.sea is not None else None
                     anchor.bridges.infra_fn = lambda key: self.mapdata.cell(
                         key, layers=("infrastructure",), kind="demand").layers.get("infrastructure")
+                    anchor.bridges.surface = decklidarmod.surface_for(self.mapdata, self.dem)
             for fid, _spec, xy, z, _lon in anchor.bridges.parts(feats, (x - w, y - w, x + w, y + w)):
                 decks.setdefault(fid, []).append((np.asarray(xy, np.float64)[:, :2], np.asarray(z, np.float64)))
         except Exception as e:          # no decks: the graph follows the ground under bridges
@@ -1269,6 +1271,7 @@ class Server:
                 anchor.bridges.wet = self.sea.depth if self.sea is not None else None    # (decks clear the water)
                 anchor.bridges.infra_fn = lambda key: self.mapdata.cell(
                     key, layers=("infrastructure",), kind="demand").layers.get("infrastructure")
+                anchor.bridges.surface = decklidarmod.surface_for(self.mapdata, self.dem)
             if anchor.tunnels is None:
                 anchor.tunnels = roadsmod.TunnelProfiles(
                     anchor.frame, lambda key: self.mapdata.cell(key, layers=("roads",), kind="demand").layers.get("roads"),

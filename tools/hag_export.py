@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
-"""Copies the USGS lidar height-above-ground mosaics (lidarheights.Lidar, fetched and cached when missing) of the map
-cells round the interchanges of tools/interchange_probe.py to a folder, for working on the deck heights offline where
-the Planetary Computer is out of reach.
+"""Copies the USGS lidar height-above-ground mosaics (lidarheights.Lidar), or with --dsm the surface model's
+(decklidar.Dsm), fetched and cached when missing, of the map cells round the interchanges of
+tools/interchange_probe.py to a folder, for working on the deck heights offline where the Planetary Computer is out of
+reach. --probe-tile prints what the tile service answers for one DSM tile (shape, type, values) and stops.
 
     python tools/hag_export.py --out C:\\beamng-earth\\interchanges\\hag [--reach 1500]
+    python tools/hag_export.py --dsm --out C:\\beamng-earth\\interchanges\\dsm
 """
 import argparse
 import os
@@ -21,6 +23,8 @@ def main():
     ap.add_argument("--cache-dir", default=os.path.expanduser("~/.cache/beamng-earth"))
     ap.add_argument("--out", required=True)
     ap.add_argument("--reach", type=float, default=1500.0, help="m round each place")
+    ap.add_argument("--dsm", action="store_true", help="the surface model (decklidar.Dsm), not the height above ground")
+    ap.add_argument("--probe-tile", action="store_true")
     a = ap.parse_args()
     import interchange_probe
     import lidarheights
@@ -29,6 +33,24 @@ def main():
     import netfetch
     raw = os.path.join(a.cache_dir, "mapdata", "raw")       # (mapdata.MapData.raw_dir)
     lid = lidarheights.Lidar(raw, netfetch.Fetcher())
+    if a.dsm or a.probe_tile:
+        import decklidar
+        lid = decklidar.Dsm(raw, netfetch.Fetcher())
+    if a.probe_tile:
+        import io
+        k = mapcells.cell_of(39.7800, -104.9894)
+        items = lid.items(k.bounds())
+        print("items", items[:3])
+        t = mapcells.CellKey(lidarheights.ZOOM, k.x * 4 + 1, k.y * 4 + 1)
+        url = (f"{lidarheights.TILES}/{t.z}/{t.x}/{t.y}@1x?collection={decklidar.DSM_COLLECTION}&item={items[0][0]}"
+               f"&assets=data&format=npy")
+        body = lid.fetcher.get(url).body
+        arr = np.load(io.BytesIO(body), allow_pickle=False)
+        print("npy", arr.shape, arr.dtype, [float(np.nanmin(b)) for b in arr.reshape(-1, 256, 256)],
+              [float(np.nanmax(b)) for b in arr.reshape(-1, 256, 256)])
+        z = decklidar.npy_tile(arr)
+        print("tile", z.shape, np.nanmin(z), np.nanmedian(z), np.nanmax(z), "nan", int(np.isnan(z).sum()))
+        return
     keys = {}
     for name, (la, lo, _) in interchange_probe.PLACES.items():
         dla, dlo = a.reach / 111000.0, a.reach / (111000.0 * np.cos(np.radians(la)))
