@@ -573,22 +573,27 @@ def grass_mask(frame, x0, y0, size, px, surface, widths=None):
     """The grassy land cover (px x px uint8, 0-255, row 0 north) of a tile photo's square [x0, x0 + size]² (its gutter
     included: the mask lines up with it on UV0), or None (no surface, nothing grassy, or a cell not cached yet: then
     the tile goes without, rather than with a hole where the cell was missing)."""
+    return grass_mask_ex(frame, x0, y0, size, px, surface, widths)[0]
+
+
+def grass_mask_ex(frame, x0, y0, size, px, surface, widths=None):
+    """(grass_mask's mask or None, complete): complete is False only when a land cover cell was not cached yet."""
     if surface is None:
-        return None
+        return None, True
     t = (np.arange(px) + 0.5) * (size / px)
     gx, gy = np.meshgrid(x0 + t, y0 + size - t)           # row 0 = north
     la, lo, _ = frame.enu_to_geodetic(gx.ravel(), gy.ravel(), np.zeros(px * px))
     la, lo = np.asarray(la, np.float64), np.asarray(lo, np.float64)
     classes, complete = surface.classes(la, lo)
     if not complete:
-        return None
+        return None, False
     w = _GRASS_LUT[classes]
     urban = classes == roadsmod.URBAN_CLASS
     if urban.any():
         w[urban] = np.where(lawns(la[urban], lo[urban]), GRASS_LAWN_WEIGHT, 0.0)
     w = _box_blur(w.reshape(px, px), GRASS_BLUR_PX)
     if not (w > 0.02).any():
-        return None
+        return None, True
     out = np.clip(w * 255.0 + 0.5, 0, 255).astype(np.uint8)
     # no grass grain on the roads and forecourts the photo has painted in (any surface: dirt tracks too)
     feats = _square_roads(frame, x0, y0, size, surface)
@@ -601,7 +606,7 @@ def grass_mask(frame, x0, y0, size, px, surface, widths=None):
     for cut in (roads, pads):
         if cut is not None:
             out = (out.astype(np.uint16) * (255 - cut.astype(np.uint16)) // 255).astype(np.uint8)
-    return out if out.any() else None
+    return (out if out.any() else None), True
 
 
 # A road without sidewalks gets a verge of VERGE_M a side painted bare where the ground would carry grass or shrubs:

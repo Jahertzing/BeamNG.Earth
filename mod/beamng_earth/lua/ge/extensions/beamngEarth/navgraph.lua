@@ -486,6 +486,41 @@ function M.setMode(v)
   return M.MODE
 end
 
+-- ... and the stock parked cars (parking.lua) the same way (settings.lua parkedCars): with no choice made at level start
+-- the drive's streets and lots were empty, the stock system never started (2026-10-28, "make the drive feel lived-in").
+-- They are the light simple_traffic cars, engines off, moved to spots ahead as the player drives (gameplay/parking.lua).
+M.PARKED = 'normal'
+M.PARKED_MODES = { off = 0, few = 0.5, normal = 1, many = 2 }
+M.PARKED_MAX = 32
+M.PARKED_FEW_MIN = 4
+
+function M.setParked(v)
+  if M.PARKED_MODES[v] then M.PARKED = v end
+  return M.PARKED
+end
+
+-- Pure: the player's own parked-car amount (nil: automatic) from Options > Gameplay's setting, trafficParkingAmount
+-- since 0.40 (default 5; 0: automatic, the stock setupVehicles' clamp(getIdealSpawnAmount, 4, 16)), and the older
+-- trafficParkedAmount it replaced, which 0.40 ignores but a player's settings.json still holds (Jeff's PC: 16 there, 5
+-- read): the larger.
+function M.ownParked(new, old)
+  local a, b = tonumber(new) or 0, tonumber(old) or 0
+  local n = math.max(a, b)
+  return n >= 1 and n or nil
+end
+
+-- Pure: the parked-car amount for gameplay_parking.setupVehicles in parked mode `mode`, given the player's own amount
+-- `own` (M.ownParked; nil: the game's automatic amount): 0 none, -1 the game's own (automatic).
+function M.parkedAmount(mode, own)
+  local f = M.PARKED_MODES[mode]
+  if not f or f <= 0 then return 0 end
+  if not own or own < 1 then return -1 end
+  if f == 1 then return own end
+  local n = math.floor(own * f + 0.5)
+  if f < 1 then return math.min(own, math.max(M.PARKED_FEW_MIN, n)) end
+  return math.min(M.PARKED_MAX, math.max(own, n))
+end
+
 -- Pure: the number of cars for gameplay_traffic.setupTraffic in traffic mode `mode`, given the game's own amount
 -- `auto` (gameplay_traffic.getIdealSpawnAmount; nil unknown): 0 none, -1 the game's own (with its extra pooled cars).
 function M.modeAmount(mode, auto)
@@ -519,12 +554,25 @@ function M.takeChoice(o)
     return M.choice
   end
   local fromSetting = o.trafficMode ~= 'enabled' and o.trafficMode ~= 'disabled'
+  -- The parked cars' option is only ever "enabled" or "disabled", "disabled" by default (stock freeroam.lua's
+  -- spawningOptionsHelper): with traffic left to the settings (the configurator not applied) it was never chosen, so
+  -- the parkedCars setting decides it too. Picked at level start with the amount on automatic (the configurator never
+  -- sets one): the setting's amount (0.40 reads only trafficParkingAmount, 5 by default).
+  local parkedFromSetting = fromSetting and o.trafficParked ~= 'enabled'
+  local st0 = rawget(_G, 'settings')
+  local own = st0 and st0.getValue and M.ownParked(st0.getValue('trafficParkingAmount'), st0.getValue('trafficParkedAmount'))
   M.choice = { traffic = o.trafficMode == 'enabled' or (fromSetting and (M.MODES[M.MODE] or 0) > 0),
-               parked = o.trafficParked == 'enabled',
+               parked = o.trafficParked == 'enabled' or (parkedFromSetting and (M.PARKED_MODES[M.PARKED] or 0) > 0),
                police = o.trafficPolice == 'enabled', trafficAmount = tonumber(o.trafficAmount) or -1,
                -- (0.40 renamed trafficParkedAmount to trafficParkingAmount)
                parkedAmount = tonumber(o.trafficParkingAmount or o.trafficParkedAmount) or -1,
-               mode = fromSetting and M.MODE or nil }
+               mode = fromSetting and M.MODE or nil, parkedMode = parkedFromSetting and M.PARKED or nil }
+  if M.choice.parkedMode then
+    M.choice.parkedAmount = M.parkedAmount(M.PARKED, own)
+  elseif M.choice.parked and M.choice.parkedAmount < 0 then
+    local a = M.parkedAmount(M.PARKED, own)
+    if a > 0 then M.choice.parkedAmount = a end
+  end
   -- (as stock freeroam: with traffic and parked cars both chosen, Options > Gameplay's parked vehicles setting off
   -- means none; GitHub #320 / #145: parked cars came with the setting off)
   local st = rawget(_G, 'settings')
@@ -532,9 +580,10 @@ function M.takeChoice(o)
     M.choice.parked = false
   end
   if log then
-    log('I', 'beamngEarth', string.format('traffic choice: traffic %s, parked %s, police %s (freeroam %s / %s%s)',
+    log('I', 'beamngEarth', string.format('traffic choice: traffic %s, parked %s, police %s (freeroam %s / %s%s%s)',
       tostring(M.choice.traffic), tostring(M.choice.parked), tostring(M.choice.police), tostring(o.trafficMode),
-      tostring(o.trafficParked), M.choice.mode and (', AI traffic setting ' .. M.choice.mode) or ''))
+      tostring(o.trafficParked), M.choice.mode and (', AI traffic setting ' .. M.choice.mode) or '',
+      M.choice.parkedMode and (', parked cars setting ' .. M.choice.parkedMode) or ''))
   end
   heldOpts = { o, { o.trafficMode, o.trafficParked, o.trafficPolice } }
   o.trafficMode, o.trafficParked, o.trafficPolice = 'disabled', 'disabled', 'disabled'

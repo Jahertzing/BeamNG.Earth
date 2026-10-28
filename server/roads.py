@@ -6166,6 +6166,12 @@ def build_tile(frame, tx, ty, cells, elev, urban_fn=None, walks=None, bridges=No
                                      speeds={k: v for k, v in speeds.items() if v is not None}, mph=mph,
                                      decks=decks, signals=signals, buried=buried, region=lamp_region,
                                      lits=lits))
+        import streetlife
+        if streetlife.ENABLED:                      # a dense core's blue boxes, bike racks and planters
+            props.extend(streetlife.off_roads(streetlife.clear_of(
+                streetlife.downtown_rows(roads, walks, (x0, y0, x1, y1), us=bool(mph) and furniture._na(lamp_region),
+                                         town=town is None or bool(town)), props),
+                [(pts, spec.width / 2, spec.cls, spec.urban) for _, spec, pts, _ in roads]))
     if park is not None and walks is not None:      # curbside parking spots (parking.py)
         import parking
         dirs = {}
@@ -6183,7 +6189,8 @@ def build_tile(frame, tx, ty, cells, elev, urban_fn=None, walks=None, bridges=No
         names = {fid: f.attrs["name"][i] for fid, (f, i, sp) in seen.items() if f.attrs.get("name") is not None}
         signs.append(guidesigns.tile(frame, roads, (x0, y0, x1, y1), ground=ground, urban=urban_fn, mph=mph,
                                      barriers=barriers, left_hand=left_hand, names=names,
-                                     avoid=[(r[1], r[2]) for r in props or () if len(r) > 2]))
+                                     avoid=[(r[1], r[2]) for r in props or () if len(r) > 2],
+                                     booms=[r for r in props or () if len(r) > 4 and r[0] == "signal"]))
     return chunks
 
 

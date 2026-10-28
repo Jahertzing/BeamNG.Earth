@@ -70,7 +70,8 @@ N.restoreChoice()
 T.check(o.trafficMode == 'enabled' and o.trafficParked == 'enabled', 'the player\'s options back afterwards')
 T.check(N.MODE == 'normal' and N.takeChoice({ trafficMode = 'fromSetting', trafficParked = 'disabled' }).traffic,
   'fromSetting (freeroam\'s default): the AI traffic setting, normal by default')
-T.check(N.choice.mode == 'normal' and not N.choice.parked, '... its mode kept for the amount; no parked cars')
+T.check(N.choice.mode == 'normal' and N.choice.parked and N.choice.parkedMode == 'normal',
+  '... its mode kept for the amount; the parked cars (their option "disabled" by default) left to parkedCars too')
 N.restoreChoice()
 N.setMode('off')
 T.check(not N.takeChoice({ trafficMode = 'fromSetting', trafficParked = 'disabled' }).traffic, 'fromSetting, setting off: off')
@@ -96,6 +97,46 @@ T.check(not N.takeChoice({ trafficMode = 'enabled', trafficParked = 'enabled' })
   'traffic and parked chosen, the parked vehicles setting off: none (as stock freeroam, GitHub #320)')
 N.restoreChoice()
 T.check(N.takeChoice({ trafficMode = 'disabled', trafficParked = 'enabled' }).parked, 'parked only: the setting does not apply')
+N.restoreChoice()
+settings = nil
+-- the parked cars' own setting (parkedCars) when the level-start options leave them to it
+T.check(N.ownParked(5, 16) == 16 and N.ownParked(5, nil) == 5 and N.ownParked(0, nil) == nil and N.ownParked(nil, 0) == nil,
+  'ownParked: the larger of 0.40\'s trafficParkingAmount and the old trafficParkedAmount; 0: automatic')
+T.check(N.parkedAmount('off', 16) == 0 and N.parkedAmount('normal', 16) == 16 and N.parkedAmount('normal', nil) == -1,
+  'parkedAmount: off none, normal the player\'s own (automatic: the game\'s)')
+T.check(N.parkedAmount('few', 16) == 8 and N.parkedAmount('few', 5) == 4 and N.parkedAmount('few', 3) == 3,
+  'parkedAmount: few about half, at least PARKED_FEW_MIN, never more than normal')
+T.check(N.parkedAmount('many', 10) == 20 and N.parkedAmount('many', 16) == N.PARKED_MAX and N.parkedAmount('many', nil) == -1,
+  'parkedAmount: many twice, at most PARKED_MAX')
+settings = { getValue = function(k) return ({ trafficParkingAmount = 5, trafficParkedAmount = 16 })[k] end }
+c = N.takeChoice({ trafficMode = 'fromSetting', trafficParked = 'fromSetting' })
+T.check(c.parked and c.parkedMode == 'normal' and c.parkedAmount == 16,
+  'fromSetting parked cars: on by default at the player\'s own amount (16 in the old key, 5 in the new)')
+N.restoreChoice()
+c = N.takeChoice({ trafficMode = 'fromSetting' })
+T.check(c.parked and c.parkedMode == 'normal', 'no parked option at all: left to the setting')
+N.restoreChoice()
+N.setParked('many')
+T.check(N.takeChoice({ trafficMode = 'fromSetting', trafficParked = 'fromSetting' }).parkedAmount == N.PARKED_MAX, 'many: 32')
+N.restoreChoice()
+N.setParked('off')
+T.check(not N.takeChoice({ trafficMode = 'fromSetting', trafficParked = 'fromSetting' }).parked, 'parkedCars off: none')
+N.restoreChoice()
+T.check(N.takeChoice({ trafficMode = 'fromSetting', trafficParked = 'enabled', trafficParkingAmount = 7 }).parkedAmount == 7
+  and not N.choice.parkedMode, 'parked cars picked at level start: on whatever the setting, the amount picked there')
+N.restoreChoice()
+T.check(not N.takeChoice({ trafficMode = 'enabled', trafficParked = 'disabled' }).parked,
+  'the configurator applied, traffic without parked cars: none')
+N.restoreChoice()
+N.setParked('normal')
+T.check(N.takeChoice({ trafficMode = 'enabled', trafficParked = 'enabled', trafficParkedAmount = -1 }).parkedAmount == 16,
+  'the configurator\'s "enabled" (its amount automatic): the setting\'s amount, 16 from the old key')
+N.restoreChoice()
+T.check(N.setParked('nonsense') == 'normal', 'setParked: an unknown mode is ignored')
+N.setParked('normal')
+settings = { getValue = function(k) if k == 'trafficParkedVehicles' then return false end end }
+T.check(not N.takeChoice({ trafficMode = 'fromSetting', trafficParked = 'fromSetting' }).parked,
+  'fromSetting, with traffic on and Options > Gameplay parked vehicles off: none (the stock rule)')
 N.restoreChoice()
 settings = nil
 T.check(math.abs(N.boxMoved({ -708, -452, 196, 452 }, { -1092, -452, -188, 452 }) - 384) < 1e-9,

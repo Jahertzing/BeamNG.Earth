@@ -63,9 +63,16 @@ M.SCHEMA = {
   groundCoverDistance = { kind = 'enum', default = 'normal', values = { 'near', 'normal', 'far', 'max' }, label = 'Grass distance' },
   -- the grass grain in the ground tiles past the 3D grass (satmat.lua GRASS_LAYER; the server's grass masks)
   groundGrass = { kind = 'bool', default = true, label = 'Grass in the distant ground' },
+  -- grass cards on grassland from the 3D grass out to ~1 km (roads.lua M.grassCards; the server's grasscards.py)
+  grassCards = { kind = 'bool', default = true, label = 'Grass to 1 km' },
   -- BeamNG's own AI traffic on our roads when the level-start configurator leaves it to the settings (its default):
   -- off, light, normal (the game's amount for this PC), busy (navgraph.lua MODES)
   aiTraffic = { kind = 'enum', default = 'normal', values = { 'off', 'light', 'normal', 'busy' }, label = 'AI traffic' },
+  -- BeamNG's own parked cars on our curbs, lots and aisles (parking.lua) when the level-start options leave them to
+  -- the settings: off, few, normal (the game's parked-vehicle amount), many (navgraph.lua PARKED_MODES)
+  parkedCars = { kind = 'enum', default = 'normal', values = { 'off', 'few', 'normal', 'many' }, label = 'Parked cars' },
+  -- mailboxes, trash carts, bus stops, driveway cars and the other small things along the streets (server streetlife.py)
+  streetLife = { kind = 'bool', default = true, label = 'Street life' },
   -- roads near the player (roads.lua; the server's --roads on)
   roads = { kind = 'bool', default = true, label = 'Roads' },
   -- the Denver region's DRCOG planimetrics (server drcog.py): launcher.py reads this file and starts the server with
@@ -104,7 +111,7 @@ M.SCHEMA = {
 }
 M.ORDER = { 'theDriveTime', 'theDriveAutodrive', 'rebaseDistance', 'viewDistanceMode', 'viewDistanceKm', 'hazeStrength',
   'colorGrade', 'skyMode', 'clouds', 'weatherMode', 'realGravity', 'groundCover', 'groundCoverDensity', 'groundCoverDistance',
-  'groundGrass', 'rocks', 'roads', 'cityGlow', 'aiTraffic', 'drcog', 'lidarHeights', 'dashboardSatellite', 'hudVisible', 'statusBar',
+  'groundGrass', 'grassCards', 'rocks', 'roads', 'cityGlow', 'aiTraffic', 'parkedCars', 'streetLife', 'drcog', 'lidarHeights', 'dashboardSatellite', 'hudVisible', 'statusBar',
   'placeNamesOnline', 'creditsVisible', 'beammpOnLaunch',
   'creditsCorner', 'creditsSize', 'cacheCapGb', 'devOutlineKm', 'devMapKm' }
 
@@ -281,9 +288,12 @@ M.APPLY = {
   groundCoverDensity = function(v) require('beamngEarth/groundcover').setDensity(v) end,
   groundCoverDistance = function(v) require('beamngEarth/groundcover').setReach(v) end,
   groundGrass = function(v) require('beamngEarth/satmat').GRASS_LAYER = v and true or false end,
+  grassCards = function(v) require('beamngEarth/roads').grassCards = v and true or false end,
   cityGlow = function(v) require('beamngEarth/nightglow').setEnabled(v) end,
   rocks = function(v) require('beamngEarth/trees').setGroupEnabled({ 'rock', 'desert_rock' }, v) end,
   aiTraffic = function(v) require('beamngEarth/navgraph').setMode(v) end,     -- (from the next level start)
+  parkedCars = function(v) require('beamngEarth/navgraph').setParked(v) end,  -- (from the next level start)
+  streetLife = function(v) local t = require('beamngEarth/trees') t.setGroupEnabled(t.STREET_LIFE, v) end,
   roads = function(v)
     local core = ext('beamngEarth_core')
     if core and core.setRoadsEnabled then core.setRoadsEnabled(v) else require('beamngEarth/roads').setEnabled(v) end

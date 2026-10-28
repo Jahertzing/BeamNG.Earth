@@ -128,8 +128,8 @@ T.check(pr.mod and pr.anchorId == 4 and pr.far.live == 900 and pr.far.exactMiss 
 -- time: manual, the fields, the clock stopped
 local r = B.setTime({ time = 0.916667, year = 2026, month = 9, day = 22, utcOffset = -7.8862 })
 T.check(r.ok and sky.getMode() == 'manual', 'setTime: sky manual')
-T.check(tod.time == 0.916667 and tod.month == 9 and tod.day == 22 and tod.utcOffset == -7.8862 and tod.play == false
-  and tod.dayLength == 86400, 'setTime: TimeOfDay fields, play off, dayLength kept')
+T.check(tod.time == 0.916667 and tod.month == 9 and tod.day == 22 and tod.utcOffset == -7.8862 and tod.play == true
+  and tod.dayLength == B.FROZEN_DAY_S, 'setTime: TimeOfDay fields, the clock at a crawl (the sun follows it)')
 
 -- weather: manual, clear, the height fog the weather gives 60 km at the player's ground (clear air: weather.fogSigmaFor)
 r = B.setWeather({ coverage = 0, cirrus = 0, visM = 60000 })

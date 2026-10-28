@@ -132,10 +132,12 @@ class HouseFrontTest(unittest.TestCase):
             base = spec.height - spec.floors * spec.floor_h
             shut = bld._hash01(spec.seed, "shutters") < fk.SHUTTER_SHARE
             boxes = []                                              # (s0, s1, z0, z1) the stone must not touch
-            for c, zf in bld.house_window_slots(spec, a, d, out, L, spec.height, f):
-                s = float((c - a) @ d)
-                h = bld.WIN_W / 2 + fk.TRIM_W + (bld.WIN_W / 2 if shut else 0.0)
-                boxes.append((s - h, s + h, zf - fk.SILL_H, zf + bld.WIN_H + fk.HEAD_H))
+            for w in fk.house_windows(spec, ring, f, spec.height):    # (the windows there: facadekit.HOUSE_VARIETY's)
+                b0, b1, c0, c1 = w.box()
+                sl = sr = w.uw / 2 if shut else 0.0
+                if fk.HOUSE_VARIETY:
+                    sl, sr = (w.uw / 2 if w.shut[0] else 0.0), (w.uw / 2 if w.shut[1] else 0.0)
+                boxes.append((b0 - sl, b1 + sr, c0, c1))
             if spec.door and spec.door[0] == f:
                 h = fk.DOOR_W / 2 + fk.FRAME_W * 1.5
                 boxes.append((spec.door[1] - h, spec.door[1] + h, -9.0, base + 3.0))
@@ -188,6 +190,43 @@ class HouseFrontTest(unittest.TestCase):
                 for s0, s1 in spans:
                     self.assertFalse(s.min() < s1 and s.max() > s0, "a downspout on a door, garage door or porch")
         self.assertGreater(checked, 20)
+
+    def test_downspout_offset_under_the_eave(self):
+        """The downspout's offset runs from the wall up into the gutter's bottom, under the soffit and below the
+        fascia's bottom edge all the way (nothing of it through them)."""
+        checked = 0
+        for spec in houses(40):
+            ring = bld.drawn_ring(spec)
+            er = fk.eave_runs(spec, ring, spec.height)
+            f = fk.front_edge(spec)
+            if er is None or f is None:
+                continue
+            ze, runs, rakes, tp = er
+            m = _Rec()
+            fk.gutters(m, spec, ring, 0.0, spec.height, bld._Looks(spec.seed), er)
+            a, d, out, L = fk._wall(ring, f)
+            zg0 = ze - fk.GUTTER_H
+            pts = [(float((q[:2] - a) @ out), float(q[2])) for Q, _ in m.q for q in Q
+                   if abs(float((q[:2] - a) @ d) - fk.DOWNSPOUT_IN) < 0.2 and 0.01 < (q[:2] - a) @ out < 0.6
+                   and q[2] > spec.height - 2.0]
+            if not pts:
+                continue
+            checked += 1
+            for w, z in pts:
+                if w <= bld.EAVE_M:
+                    self.assertLessEqual(z, spec.height - fk.FASCIA_H - w * tp + 1e-6, "through the soffit")
+                    self.assertLessEqual(z, ze - fk.FASCIA_H + (bld.EAVE_M - w) * 2.0 + 1e-6)
+                else:
+                    self.assertLessEqual(z, zg0 + 1e-6, "above the gutter's bottom")
+            self.assertAlmostEqual(max(z for w, z in pts if w > bld.EAVE_M), zg0, places=6)
+            # (its top between its corners: under the fascia's bottom edge where it passes the eave line)
+            top = {}
+            for w, z in pts:
+                top[round(w, 6)] = max(top.get(round(w, 6), -1e9), z)
+            ws = sorted(top)
+            self.assertLessEqual(float(np.interp(bld.EAVE_M, ws, [top[w] for w in ws])), ze - fk.FASCIA_H + 1e-6,
+                                 "the offset through the fascia")
+        self.assertGreater(checked, 10)
 
     def test_gutters_follow_the_eaves(self):
         """A hipped roof's gutter goes round (one front a side, no end caps); a gabled box roof's two run along the

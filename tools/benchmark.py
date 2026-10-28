@@ -25,7 +25,8 @@ Safe for the user: refuses while the player vehicle moves faster than 1 m/s (--f
 stops before the next teleport when it does mid-run (the user took the car: it is then left alone),
 zeroes the inputs and sets the parking brake (again after each teleport), and always (finally, also
 on Ctrl-C / SIGTERM, each step even after a second interrupt) puts back the weather and sky modes and
-values, teleports the player back to where it started and gives the camera back (the game camera, or
+values (and the HUD, hidden with --hide-hud), teleports the player back to where it started and gives the camera
+back (the game camera, or
 the user's free camera at the same place relative to the car; the free camera's own zoom as it was).
 A teleport that fails or never commits takes no shots (they would show the previous place); a
 timed-out MCP request is sent once more.
@@ -434,7 +435,7 @@ def options(**kw):
     """The run options with their defaults (argparse fills the same names)."""
     o = dict(force=False, timeout=TIMEOUT_S, view_timeout=VIEW_TIMEOUT_S, home_timeout=HOME_TIMEOUT_S,
              settle=SETTLE_S, fps_seconds=FPS_S, poll=POLL_S, exact=True, backlog=False, png=False, server_log=None,
-             region_quiet=REGION_QUIET_S, weather=None)
+             region_quiet=REGION_QUIET_S, weather=None, hide_hud=False)
     o.update(kw)
     return argparse.Namespace(**o)
 
@@ -697,7 +698,7 @@ class Bench:
             if home:
                 res["home_s"] = step("home", lambda: self.go_home(home))
             step("inputs", lambda: self.call("zeroInputs"))
-        r = step("camera", lambda: self.call("restore", saved, {"cam": True}))
+        r = step("camera", lambda: self.call("restore", saved, {"cam": True, "ui": True}))
         if r is not None:
             res["errors"] += r.get("errors") or []
             res["camera"] = r.get("cam")
@@ -752,6 +753,8 @@ def run(game, places, out_dir, opts, clock=time, log=print, meta=None):
     leave_car = None
     try:
         b.call("zeroInputs")
+        if opts.hide_hud:                       # (restore() shows it again, as it was: info()'s saved.ui)
+            rec["hud"] = b.call("hud", False)
         for i, pl in enumerate(places):
             # the user may take the car back during a run: no teleport from under them (--force: the
             # car may move)
@@ -1125,6 +1128,8 @@ def main(argv=None):
     rp.add_argument("--server-log", default=None, help="earthd's log file: also wait for colour-match / de-shadow regions")
     rp.add_argument("--region-quiet", type=float, default=REGION_QUIET_S)
     rp.add_argument("--weather", default=None, choices=("clear", "keep"), help="override every place's weather")
+    rp.add_argument("--hide-hud", action="store_true",
+                    help="the game's UI hidden for the shots (as Alt+U; shown again by the restore)")
     sub.add_parser("check")
     cp = sub.add_parser("compare")
     cp.add_argument("run_a")

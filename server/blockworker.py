@@ -471,6 +471,7 @@ def _write_bytes(path, data):
 def _roads_tile(aid, lat, lon, zoom, tx, ty, out_dir, vfs_dir, sidewalks, lift, buildings, left_hand, mph, q,
                 gas_stations, buried=0.0, lamp_region=None):
     import parking as parkingmod
+    import streetlife as streetlifemod
     import rails as railsmod
     import roadmesh as roadmeshmod
     import roads as roadsmod
@@ -523,13 +524,14 @@ def _roads_tile(aid, lat, lon, zoom, tx, ty, out_dir, vfs_dir, sidewalks, lift, 
                                          (box[0] - 8, box[1] - 8, box[2] + 8, box[3] + 8))
     cover = []                          # the ground carriageways for the decks' parapets (roadmesh.deck ground=)
     signs = []                          # highway signs (guidesigns.py)
+    tile_ground = lambda x, y: roadmeshmod.drawn_ground(frame, drawn, np.c_[x, y], q)   # noqa: E731
     chunks = roadsmod.build_tile(frame, tx, ty, cells, elev, urban, walks=walks, deck_context=ctx, bridges=bridges, widths=_s.widths,
                                  walk_cuts=fuel_cuts,    # (the stations' made-up driveways: no sidewalk across them)
                                  props=props, lines=lines, wires=wires, town=town, park=park,
                                  left_hand=left_hand, mph=mph, buried=buried, lamp_region=lamp_region,
                                  structures=buildingsmod.centres(items, tx, ty) if items else (),
                                  tunnels=tunnels, walls=rwalls,
-                                 ground=lambda x, y: roadmeshmod.drawn_ground(frame, drawn, np.c_[x, y], q),
+                                 ground=tile_ground,
                                  terrain_paint=getattr(_s, "surface", None) is not None, cover_out=cover,
                                  pocket_cells=pocket_cells,
                                  signals=furniture.signals_for(_s.md, frame,
@@ -549,6 +551,12 @@ def _roads_tile(aid, lat, lon, zoom, tx, ty, out_dir, vfs_dir, sidewalks, lift, 
         props.extend(buildingsmod.doors(items, lines, x0, y0, drives))
         props.extend(buildingsmod.toll_booth_rows(items, x0, y0))
         props.extend(buildingsmod.beacon_rows(items, x0, y0))      # (red lights on towers)
+        if streetlifemod.ENABLED:       # mailboxes, carts, bus stops; the driveways' parking spots
+            props.extend(streetlifemod.tile_rows(
+                frame, _s.md, roadsmod.cells_of_tile(frame, tx, ty, margin=0.0), drives, walks, lines, box, tile_ground,
+                us=bool(mph) and str(lamp_region or "").startswith("na"), town=bool(town), left_hand=left_hand,
+                props=props, spots=park,
+                blockers=[buildingsmod.drawn_ring(spec) + np.array([x0, y0]) for spec, *_ in items]))
         drives.extend(buildingsmod.garage_drives(items, lines, x0, y0))
         chunks += drives
         park = parkingmod.clear_of(park, props, drives)
@@ -709,6 +717,37 @@ def far_buildings_tile(aid, lat, lon, zoom, tx, ty, out_dir, vfs_dir, lamp_regio
                                                        out_dir, vfs_dir, aid, lamp_region),
                          lambda res: {"n": int(res[1])},
                          lambda path, extra: (path, int(extra.get("n", 0))))
+
+
+def grass_cards_tile(aid, lat, lon, zoom, tx, ty, out_dir, vfs_dir, tex=None):
+    """earthd.Server.build_grass_card_tile here (the far buildings' pool): grasscards.build over road tile square
+    (tx, ty), coloured from the photo on disk (tex: the imagery chain settings, as far_tile's; None or a photo tile not
+    on disk: the fallback colour). (vfs path of its JSON, card count), or None when its land cover is not cached yet
+    (asked again on a later pose)."""
+    import grasscards
+    import imagery as imagerymod
+    import roads as roadsmod
+    if getattr(_s, "surface", None) is None:
+        return None
+    frame = geodesy.EnuFrame(lat, lon)
+    x0, y0, x1, _ = roadsmod.tile_bbox(tx, ty)
+    size = x1 - x0
+    mask, complete = surfacemod.grass_mask_ex(frame, x0, y0, size, grasscards.MASK_PX, _s.surface)
+    if not complete:
+        return None
+    if mask is None:
+        return grasscards.empty_tile(out_dir, vfs_dir, aid, tx, ty)
+    photo = None
+    if tex is not None:
+        try:
+            photo, _ = _imagery(tex).render(frame, x0, y0, size, grasscards.PHOTO_PX)
+        except imagerymod.ImageryError:
+            photo = None
+    mesh = grasscards.build(frame, x0, y0, size, mask,
+                            lambda la, lo: ground(frame, la, lo, _s.dem.sample(la, lo, zoom)), photo)
+    if mesh is None:
+        return grasscards.empty_tile(out_dir, vfs_dir, aid, tx, ty)
+    return grasscards.write_tile(mesh, out_dir, vfs_dir, aid, tx, ty, x0, y0)
 
 
 def skyline_tile(aid, lat, lon, zoom, ux, uy, out_dir, vfs_dir, lamp_region=None):

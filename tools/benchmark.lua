@@ -8,7 +8,7 @@
 --   progress()        the loading state: anchor, far-field stats, server backlog, the tile under the
 --                     car (exact or not), the player
 --   setTime(cfg)      the sky to manual and the TimeOfDay to cfg {time, year, month, day, utcOffset},
---                     the clock stopped (play = false)
+--                     the clock at a crawl (play, B.FROZEN_DAY_S: stopped, the engine left the sun where it was)
 --   setWeather(cfg)   the weather to manual and a fixed sky: cloud coverage, cirrus, fog for cfg.visM
 --   view(cfg)         the free camera at cfg {e, n | lat, lon; alt | agl; dir {x, y, z}; fov}
 --   perfStart()       a fresh beamngEarth_perfmon window (loaded if needed); perfRead() reads it
@@ -31,6 +31,7 @@ B.RAY_LEN = 15000
 B.CLOUD_NAME = 'bngEarthClouds'
 B.FOG_HEIGHT = 1000      -- fogAtmosphereHeight of the clear-sky preset (weather.lua FOG_HEIGHT)
 B.TOD_KEYS = { 'time', 'play', 'dayLength', 'year', 'month', 'day', 'utcOffset' }
+B.FROZEN_DAY_S = 1e7     -- s a day while a fixed time is set: half a second of clock a minute
 
 local function toJson(v)
   local je = rawget(_G, 'jsonEncode')
@@ -164,8 +165,27 @@ function B.info()
   local cl, li = cloudLayer(), levelInfo()
   if cl then saved.weather.cloud = { coverage = tonumber(cl.coverage), cirrusCoverage = tonumber(cl.cirrusCoverage) } end
   if li then saved.weather.fog = { fogDensity = tonumber(li.fogDensity), fogAtmosphereHeight = tonumber(li.fogAtmosphereHeight) } end
+  local ui = ext('ui_visibility')
+  if ui and ui.getCef then saved.ui = { cef = ui.getCef(), imgui = ui.getImgui and ui.getImgui() } end
   out.saved = saved
   return toJson(out)
+end
+
+-- The HUD (the game's UI and the imgui windows: the free camera's key help, the speedometer, our credits line) shown or
+-- hidden for the shots, as the game's toggleUi action (Alt+U) does; restore() puts back what info() saved.
+function B.hud(visible)
+  local ui = ext('ui_visibility')
+  if not (ui and ui.set) then return toJson({ ok = false, error = 'no ui_visibility' }) end
+  ui.set(visible and true or false)
+  return toJson({ ok = true, visible = ui.get and ui.get() })
+end
+
+local function restoreUi(u)
+  local ui = ext('ui_visibility')
+  if not ui then return false end
+  if u.cef ~= nil and ui.setCef then ui.setCef(u.cef) end
+  if u.imgui ~= nil and ui.setImgui then ui.setImgui(u.imgui) end
+  return true
 end
 
 function B.zeroInputs()
@@ -228,8 +248,10 @@ function B.setTime(cfg)
   if not tod then return toJson({ ok = false, error = 'no TimeOfDay' }) end
   local sky = ext('beamngEarth_sky')
   if sky and sky.setMode then sky.setMode('manual') end
+  -- (the clock runs, at a crawl: with play false the engine kept the sun where it was, so a night hour set from a
+  -- morning drew a daylight sky while core_environment said night, 2026-10-28)
   writeTod(tod, { time = cfg.time, year = cfg.year, month = cfg.month, day = cfg.day, utcOffset = cfg.utcOffset,
-    play = false })
+    play = true, dayLength = B.FROZEN_DAY_S })
   postApply(tod)
   return toJson({ ok = true, sky = sky and sky.status and sky.status() or nil })
 end
@@ -430,10 +452,10 @@ local function restoreWeather(w)
   return w.mode
 end
 
--- parts: which to restore ({ cam = true, sky = true, weather = true, perfmon = true }; nil = all)
+-- parts: which to restore ({ cam = true, sky = true, weather = true, perfmon = true, ui = true }; nil = all)
 function B.restore(saved, parts)
   saved = decode(saved)
-  parts = parts and decode(parts) or { cam = true, sky = true, weather = true, perfmon = true }
+  parts = parts and decode(parts) or { cam = true, sky = true, weather = true, perfmon = true, ui = true }
   local out, errors = {}, {}
   local function step(name, fn, arg)
     if not parts[name] or arg == nil then return end
@@ -446,6 +468,7 @@ function B.restore(saved, parts)
     if not loaded and ext('beamngEarth_perfmon') then extensions.unload('beamngEarth_perfmon') end
     return loaded
   end, saved.perfmonLoaded)
+  step('ui', restoreUi, saved.ui)
   -- the camera last, and always (also without a saved camera: the game camera)
   if parts.cam then step('cam', restoreCamera, saved.cam or { free = false }) end
   out.errors = errors

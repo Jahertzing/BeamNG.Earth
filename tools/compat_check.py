@@ -120,10 +120,10 @@ def main():
     check(res, not mine, "terrain texture cache keys (terraincache.py)",
           (f"our photos all from the cache ({len(packed)} of the game's own textures packed once)" if not mine else
            f"{len(mine)} of our base photos re-encoded by the game: the cache key changed (a freeze per block move)"))
-    # (detail_ground.dds, detail_grass*.dds: "only RGB formats are supported!" is logged and the texture loads anyway,
-    # since 2026-10-10)
+    # (detail_ground.dds, detail_grass*.dds, grasscard_*.dds: "only RGB formats are supported!" is logged and the
+    # texture loads anyway, since 2026-10-10)
     errs = [ln for ln in text.splitlines() if "|E|" in ln and "beamngEarth" in ln
-            and "detail_ground.dds" not in ln and "detail_grass" not in ln]
+            and "detail_ground.dds" not in ln and "detail_grass" not in ln and "grasscard_" not in ln]
     check(res, not errs, "mod errors in the log", "none" if not errs else f"{len(errs)}, first: {errs[0][:140]}")
     # a shape's material that no loaded materials file maps draws orange "NO TEXTURE" (0.40 moved tro_tree_1's vines
     # into a materials file of their own; trees.lua MATERIALS lists the files). Only shapes loaded this session show.

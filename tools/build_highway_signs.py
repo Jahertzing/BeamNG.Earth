@@ -61,10 +61,10 @@ def _context():
         return ssl.create_default_context()
 
 
-def fetch(bbox, endpoints=ENDPOINTS, timeout=900, maxsize=1 << 30):
+def fetch(bbox, endpoints=ENDPOINTS, timeout=900, maxsize=1 << 30, query=QUERY):
     """Overpass' JSON answer for the bbox (south, west, north, east), trying each endpoint in turn."""
     s, w, n, e = bbox
-    body = urllib.parse.urlencode({"data": QUERY.format(s=s, w=w, n=n, e=e, timeout=timeout,
+    body = urllib.parse.urlencode({"data": query.format(s=s, w=w, n=n, e=e, timeout=timeout,
                                                         maxsize=maxsize)}).encode()
     last = None
     for url in endpoints:
@@ -84,13 +84,13 @@ def fetch(bbox, endpoints=ENDPOINTS, timeout=900, maxsize=1 << 30):
     raise SystemExit(f"Overpass failed: {last}")
 
 
-def fetch_strips(bbox, name, strip_deg, endpoints=ENDPOINTS):
+def fetch_strips(bbox, name, strip_deg, endpoints=ENDPOINTS, query=QUERY):
     """fetch over the bbox in strips of latitude strip_deg high, each strip's answer cached; one answer of every
     strip's elements (a way crossing strips comes whole from each: once), its timestamp the oldest strip's."""
     s, w, n, e = bbox
     k = max(1, int(-(-(n - s) // strip_deg)))
     if k == 1:
-        return fetch(bbox, endpoints)
+        return fetch(bbox, endpoints, query=query)
     os.makedirs(CACHE_DIR, exist_ok=True)
     seen, elements, stamps = set(), [], []
     for i in range(k):
@@ -102,7 +102,7 @@ def fetch_strips(bbox, name, strip_deg, endpoints=ENDPOINTS):
             print(f"  strip {i + 1}/{k} {sb}: cached")
         else:
             print(f"  strip {i + 1}/{k} {sb}")
-            data = fetch(sb, endpoints, timeout=300, maxsize=512 << 20)
+            data = fetch(sb, endpoints, timeout=300, maxsize=512 << 20, query=query)
             with gzip.open(cache + ".tmp", "wt", encoding="utf-8") as f:
                 json.dump(data, f)
             os.replace(cache + ".tmp", cache)
