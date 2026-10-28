@@ -1,0 +1,28 @@
+{
+  "version": 1,
+  "about": "The drive's landmarks (server/landmarks.py). buildings: matched by OSM id (osm, Overture's src_record without its version: a building or a building part) or by a point its footprint holds (at; part: true matches a building part). An OSM-matched building keeps its OSM outline and parts over DRCOG's roofprints; give it an 'at' (its centroid) too, which names the map cells it is cached in. set: attributes over the map's (height, min_height, roof_shape, roof_height, roof_look, facade_look, lantern [r, h], stadium, canopy, seat_rgb, class). drop: leave the footprint out (a placed piece stands for it). pieces: shapes placed by latitude and longitude (kind dome, spire, star; base_m over the ground there). Ids and centroids from OpenStreetMap (Overpass, 2026-10-28).",
+  "buildings": [
+    {"name": "Colorado State Capitol", "osm": ["w34008043"], "at": [39.739241, -104.984862],
+     "set": {"facade_look": "bne_granite"}},
+    {"name": "Colorado State Capitol dome", "osm": ["w530613583"],
+     "set": {"roof_height": 13.0}},
+    {"name": "Denver Union Station", "osm": ["w25650822"], "at": [39.753183, -105.000203],
+     "set": {"facade_look": "bne_sandstone"}},
+    {"name": "Empower Field at Mile High", "osm": ["r4423254"], "at": [39.743951, -105.020107], "set": {}},
+    {"name": "Coors Field", "osm": ["r4423251"], "at": [39.756032, -104.994095], "set": {}},
+    {"name": "Ball Arena", "osm": ["w25312645"], "at": [39.748696, -105.007578], "set": {}},
+    {"name": "Daniels & Fisher Tower", "osm": ["w36729544"], "at": [39.748102, -104.995688],
+     "set": {"facade_look": "bne_brick_tan"}},
+    {"name": "Republic Plaza", "osm": ["w52959755"], "at": [39.743496, -104.988647],
+     "set": {"facade_look": "bne_granite"}},
+    {"name": "Wells Fargo Center", "osm": ["w53085815"], "at": [39.743567, -104.985449], "set": {}},
+    {"name": "Denver City and County Building", "osm": ["r4661432"], "at": [39.739241, -104.991019],
+     "set": {"facade_look": "bne_granite"}},
+    {"name": "Cathedral Basilica of the Immaculate Conception", "osm": ["w91933848"],
+     "at": [39.740405, -104.981981], "set": {}}
+  ],
+  "pieces": [
+    {"name": "Castle Rock Star", "kind": "star", "at": [39.378817, -104.856786], "size_m": 15.0, "lift_m": 2.0,
+     "yaw_deg": 90.0}
+  ]
+}

@@ -77,8 +77,10 @@ MARBLE = "bne_bld_marble"   # cut white marble (the stock m_marble_cut): Baltimo
 BRICK_WALL = "bne_bld_brick"    # plain red brick (the stock brick_plain): a garage's skin
 CONCRETE = "bne_bridge_concrete"  # plain concrete (tunnel.materials.json): a precast garage's skin
 SKY_WALL = "bne_bld_sky"    # the skyline's walls: plain (vertex colours), their windows lit at night (_sky_mesh)
+GOLD_LEAF = "bne_bld_gold"  # smooth metal in its vertex colour (landmarks.py: the Capitol's gold dome), floodlit at night
+GLOW = "bne_bld_glow"       # lit at night only (nightlights.lua; landmarks.py: the Castle Rock Star)
 MATERIALS = (FACADE, SHOP, OFFICE, ROOF_FLAT, ROOF_SLATE, ROOF_SHINGLE, SIDING, STUCCO, ROOF_METAL, PANEL, METALWALL,
-             STONE, MARBLE, BRICK_WALL, CONCRETE, SKY_WALL)
+             STONE, MARBLE, BRICK_WALL, CONCRETE, SKY_WALL, GOLD_LEAF, GLOW)
 LOOKS = {
     "bne_bridge_steel": (METALWALL, (0.50, 0.52, 0.54)),
     "bne_marble": (MARBLE, (1.0, 1.0, 1.0)),
@@ -91,6 +93,10 @@ LOOKS = {
     "bne_bld_fac_blue": (FACADE, (0.80, 0.87, 0.96)), "bne_bld_fac_green": (FACADE, (0.84, 0.92, 0.82)),
     "bne_bld_fac_rose": (FACADE, (0.99, 0.86, 0.82)), "bne_bld_fac_yellow": (FACADE, (1.0, 0.95, 0.72)),
     SHOP: (SHOP, (1.0, 1.0, 1.0)), OFFICE: (OFFICE, (1.0, 1.0, 1.0)), SIDING: (SIDING, (0.93, 0.92, 0.88)),
+    # the landmarks' (landmarks.py): gold leaf, verdigris copper, a lit tube, grey granite
+    "bne_gold": (GOLD_LEAF, (1.0, 0.77, 0.34)), "bne_copper": (ROOF_METAL, (0.52, 0.74, 0.64)),
+    "bne_glow": (GLOW, (1.0, 0.95, 0.82)), "bne_granite": (STONE, (0.80, 0.80, 0.80)),
+    "bne_sandstone": (STONE, (0.96, 0.86, 0.70)),
 }
 ROOF_TINTS = {               # per roof material: the colours a building's roof takes (hashed)
     ROOF_FLAT: ((0.85, 0.85, 0.85), (0.62, 0.62, 0.64), (0.95, 0.93, 0.88), (0.45, 0.45, 0.46), (0.75, 0.70, 0.64)),
@@ -139,6 +145,15 @@ SIGN_SHOP_M = (6.0, 11.0)   # one shop's width (hashed in this range)
 BARN_REDS = 2               # the last siding tints are barn red (barns only)
 US_WALL_TINTS = {STUCCO: 5}  # the first tints of these kinds are the US's (later ones: regional paints)
 JITTER = 0.06               # a building's colour varies this much (one factor, hashed)
+
+
+def tint_look(material, rgb):
+    """The LOOKS name of a material in a colour (r, g, b in 0..1), made when first asked (landmarks.py: a stadium's
+    seats in the table's colour)."""
+    rgb = tuple(round(float(v), 3) for v in rgb)
+    name = f"{material}|rgb{rgb[0]},{rgb[1]},{rgb[2]}"
+    LOOKS.setdefault(name, (material, rgb))
+    return name
 
 
 class _Looks:
@@ -260,7 +275,8 @@ def oriented_box(p):
 class Spec:
     """What is built for one footprint (decided by plan())."""
     __slots__ = ("ring", "floors", "floor_h", "height", "roof", "roof_mat", "facade", "band", "shop", "plain", "min_h", "wall", "door", "windows", "front", "steeple", "stoop",
-                 "sign", "porch", "cls", "seed", "deck", "pitch", "portal", "gring", "skel", "drive")
+                 "sign", "porch", "cls", "seed", "deck", "pitch", "portal", "gring", "skel", "drive",
+                 "rise", "lantern", "stands", "club", "canopy")      # (the last: landmarks.py's curved roofs, bowls)
 
     def __init__(self, **kw):
         for k in self.__slots__:
@@ -462,6 +478,17 @@ def plan(ring, attrs, neighbours=0, lat=None, lon=None, look=None, town=False, d
                     roof_mat=ROOF_FLAT, facade=f"{STEEL}|{pt}" if pt else STEEL, band=None, shop=False, plain=True,
                     seed=seed, min_h=0.0,
                     wall=None, windows=False, steeple=False, porch=False, cls=cls, deck=False, pitch=None)
+    import landmarks
+    rg_ = (attrs.get("roof_shape") or "").lower()
+    if landmarks.is_bowl(cls, area, rg_, attrs):
+        # an open-bowl stadium (landmarks.stadium): its field open, the stands raked down to it
+        look = attrs.get("facade_look") or "bne_precast"
+        return Spec(ring=ring, floors=1, floor_h=h or landmarks.STADIUM_H, height=h or landmarks.STADIUM_H,
+                    roof="flat", roof_mat=attrs.get("roof_look") or f"{ROOF_METAL}|0", facade=look, band=None,
+                    shop=False, plain=True, seed=seed, min_h=0.0, wall=None, windows=False, steeple=False,
+                    porch=False, cls="stadium_bowl", deck=False, pitch=None,
+                    stands=tint_look(PANEL, attrs.get("seat_rgb") or landmarks.SEAT_RGB),
+                    club=f"{OFFICE}|4", canopy=bool(attrs.get("canopy")))
     floor_h = FLOOR_M
     if industrial:
         floor_h = 4.5
@@ -492,7 +519,10 @@ def plan(ring, attrs, neighbours=0, lat=None, lon=None, look=None, town=False, d
         else:
             nf = 2 + int(seed * 3)
     roof_given = (attrs.get("roof_shape") or "").lower()
-    if roof_given in ("gabled", "hipped", "flat"):
+    curved = landmarks.curved_shape(roof_given, attrs, area, hl, hw)
+    if curved:
+        roof = curved                               # a dome, an onion, a spire (landmarks.curved_roof)
+    elif roof_given in ("gabled", "hipped", "flat"):
         roof = roof_given
     elif roof_given in ("pyramidal", "half-hipped", "mansard", "gambrel"):
         roof = "hipped"
@@ -526,10 +556,13 @@ def plan(ring, attrs, neighbours=0, lat=None, lon=None, look=None, town=False, d
     # houses came out flat-topped boxes a storey too tall (fix/house-heights, 2026-10-28; Jeff's report)
     skel = None
     wide = hw < 2.0 or hw > (18.0 if barn else 20.0 if church else 14.0)
-    if roof != "flat" and not church and not wide and box_fill >= SKEL_MIN_FILL:
+    if roof != "flat" and not curved and not church and not wide and box_fill >= SKEL_MIN_FILL:
         skel = skeleton_of(ring, roof)
     flattened = False
-    if roof != "flat" and not skel and (box_fill < (0.6 if church else BOX_FILL) or wide):
+    if curved == "barrel" and box_fill < BOX_FILL:     # (a vault on its oriented box: a near-rectangular outline)
+        roof, curved = "flat", None
+        flattened = True
+    if roof != "flat" and not curved and not skel and (box_fill < (0.6 if church else BOX_FILL) or wide):
         roof, flattened = "flat", True
     # a city tower's ground floor is shops or a lobby (Midtown, 2026-10-14: most towers have no class, and their
     # curtain wall came down to the pavement)
@@ -546,6 +579,8 @@ def plan(ring, attrs, neighbours=0, lat=None, lon=None, look=None, town=False, d
         tp = math.tan(math.radians(style.pitch or PITCH.get(roof, PITCH["hipped"])))
         if attrs.get("roof_height") and np.isfinite(attrs["roof_height"]) and roof != "flat":
             h = max(2.5, h - float(attrs["roof_height"]))
+        elif curved:
+            h = max(2.5, h - landmarks.default_rise(curved, area, hw))     # (the mapped height is the top's)
         elif roof != "flat":
             # the mapped height is the ridge's: the walls stop the drawn roof's rise under it (a skeleton roof's
             # ridge is its outline's innermost point, lower than the oriented box's half width on an L or a T)
@@ -663,6 +698,15 @@ def plan(ring, attrs, neighbours=0, lat=None, lon=None, look=None, town=False, d
     else:       # the region's pitched roofs (the US: slate or shingle by the seed, their first four tints)
         mat, tints = style.roofs[min(int(seed * len(style.roofs)), len(style.roofs) - 1)]
         roof_mat = f"{mat}|{tints[int(_hash01(seed, 'roof') * len(tints))]}"
+    rise = None
+    if curved:      # a curved roof: its mapped look (gold, copper), else grey metal; its rise
+        roof_mat = landmarks.look_of(attrs) or f"{ROOF_METAL}|{int(_hash01(seed, 'roof') * 2)}"
+        rh_ = attrs.get("roof_height")
+        rise = float(rh_) if rh_ is not None and np.isfinite(rh_) and rh_ > 0 else landmarks.default_rise(curved, area, hw)
+    if attrs.get("facade_look") in LOOKS:           # the landmark table's facade (the Capitol's granite)
+        facade, plain, wall = attrs["facade_look"], False, attrs["facade_look"]
+    if attrs.get("roof_look") in LOOKS:
+        roof_mat = attrs["roof_look"]
     if (barn or shed) and not stone_hut:    # plain walls tinted: barns the region's barn red or wood, sheds the siding colours
         tints = WALL_TINTS[SIDING]
         if barn and _hash01(seed, "barn") < style.barn_red:
@@ -680,8 +724,9 @@ def plan(ring, attrs, neighbours=0, lat=None, lon=None, look=None, town=False, d
         porch = area >= 0.9 * 4 * hl * hw
     return Spec(ring=ring, floors=nf, floor_h=floor_h, height=h, roof=roof, roof_mat=roof_mat, facade=facade,
                 band=band, shop=shop and not shed and nf >= 1, plain=plain, seed=seed, min_h=0.0, wall=wall,
-                windows=windows, steeple=church and area < 2500, porch=porch, cls=cls,
-                deck=garage and roof == "flat", pitch=style.pitch, skel=skel if roof != "flat" else None)
+                windows=windows, steeple=church and area < 2500 and not curved, porch=porch, cls=cls,
+                deck=garage and roof == "flat", pitch=style.pitch, skel=skel if roof != "flat" else None, rise=rise,
+                lantern=tuple(attrs["lantern"]) if attrs.get("lantern") else None)
 
 
 class Mesh:
@@ -986,8 +1031,8 @@ def drawn_ring(spec):
     they stood off a box wall at an angle, or inside it, only the door's frame showing: Stelvio pass, the user's
     reports 2026-10-17)."""
     ring = spec.ring
-    if spec.roof != "flat" and roof_skeleton(spec) is None:
-        c, u, hl, hw = oriented_box(ring)
+    if spec.roof not in ("flat", "dome", "onion", "cone") and roof_skeleton(spec) is None:   # (a curved roof's
+        c, u, hl, hw = oriented_box(ring)                                                   # walls: the outline)
         v = np.array([-u[1], u[0]])
         ring = np.array([c - u * hl - v * hw, c + u * hl - v * hw, c + u * hl + v * hw, c - u * hl + v * hw])
     return ring
@@ -1151,6 +1196,10 @@ def _skeleton_roof(m, spec, sk, z_eave, mat_idx):
 
 
 def _roof(m, spec, ring, z_eave, mat_idx):
+    if spec.roof in ("dome", "onion", "cone", "barrel"):
+        import landmarks
+        landmarks.curved_roof(m, spec, ring, z_eave, mat_idx)
+        return
     rm = mat_idx[spec.roof_mat]
     if spec.roof == "flat":
         pts = [(p[0], p[1], z_eave) for p in ring]
@@ -1519,6 +1568,10 @@ def build(specs_and_ground, lite=False, kit=True):
         if spec.cls in BRIDGE_CLASSES:
             _steel_frame(m, spec, gmin, mat_idx[spec.facade if spec.facade in LOOKS else STEEL], lite)
             continue
+        if spec.cls == "stadium_bowl":
+            import landmarks
+            landmarks.stadium(m, spec, gmin, gmax, mat_idx.__getitem__, lite, gmin - (SKIRT_LITE_M if lite else SKIRT_M))
+            continue
         ring = drawn_ring(spec)
         mh = spec.min_h or 0.0
         if spec.deck and not lite and _parking_deck(m, spec, gmin, gmax, mat_idx):
@@ -1604,6 +1657,10 @@ def collision_mesh(specs_and_ground):
             continue
         if deck_plan(spec, gmin, gmax) is not None:
             _parking_deck(m, spec, gmin, gmax, _Looks(spec.seed))
+            continue
+        if spec.cls == "stadium_bowl":          # its walls and stands as drawn (the field open)
+            import landmarks
+            landmarks.stadium(m, spec, gmin, gmax, lambda _n: tok, lite=True, z0=gmin - FOUNDATION_M)
             continue
         ring = np.asarray(drawn_ring(spec), np.float64)       # (the walls as drawn: the outline or its box)
         if _area2(ring) < 0:
@@ -2185,6 +2242,9 @@ def _parts_tops(f):
     return tops
 
 
+PART_ATTRS = ("roof_shape", "roof_height", "roof_color", "facade_color", "src_record")
+
+
 class _PartsOf:
     """The building parts of a tile's cells by building id, each [(ring in the anchor frame, _part_heights)], made
     when asked for: a tile needs those of its own buildings, and the toll booths (booths), not all the cells' parts
@@ -2195,6 +2255,7 @@ class _PartsOf:
         self.frame = frame
         self.layers = [f for f in part_layers if f is not None and len(f.kind)]
         self.memo = {}
+        self.attr_memo = {}
 
     def _part(self, f, i):
         pp = f.parts(i)
@@ -2208,7 +2269,7 @@ class _PartsOf:
 
     def get(self, bid, default=None):
         if bid not in self.memo:
-            out, seen = [], set()
+            out, attrs, seen = [], [], set()
             for f in self.layers:
                 for i in _parts_index(f).get(bid, ()):
                     pid = f.ids[i]
@@ -2218,9 +2279,16 @@ class _PartsOf:
                     p = self._part(f, i)
                     if p is not None:
                         out.append(p)
+                        attrs.append({k: f.attrs[k][i] for k in PART_ATTRS if k in f.attrs})
             self.memo[bid] = out or None
+            self.attr_memo[bid] = attrs
         got = self.memo[bid]
         return default if got is None else got
+
+    def attrs(self, bid):
+        """The parts' own attributes (PART_ATTRS), in get()'s order."""
+        self.get(bid)
+        return self.attr_memo.get(bid, [])
 
     def booths(self, lo, hi):
         """The parts (ring, _part_heights) whose top (own height + bottom) is within [lo, hi], of any building."""
@@ -2260,6 +2328,9 @@ def tile_buildings(frame, x0, y0, x1, y1, layers, elev, water=None, part_layers=
     footprint m²): only buildings at least that tall or that large (the skyline tiles: skyline_tile), tested before
     any other work on a building."""
     parts_of = _PartsOf(frame, part_layers)     # building id -> [(ring in the anchor frame, (own height, bottom))]
+    import landmarks
+    lm_osm = landmarks.by_osm()                 # the landmark table (landmarks.json): by OSM id, by a point
+    lm_pts = landmarks.points_in_tile(frame, x0, y0, x1, y1, margin=LANDMARK_MARGIN_M)
     seen = set()
     rings, attrs, looks, mins = [], [], [], []
     for f in layers:
@@ -2300,7 +2371,16 @@ def tile_buildings(frame, x0, y0, x1, y1, layers, elev, water=None, part_layers=
                 if h_ < min_size[0] and abs(float(np.dot(e[:-1], n[1:]) - np.dot(e[1:], n[:-1]))) / 2 < min_size[1]:
                     continue
             at = {k: (a[k][i] if k in a else None) for k in
-                  ("class", "height", "num_floors", "min_height", "roof_shape", "roof_height", "name", "facade_material")}
+                  ("class", "height", "num_floors", "min_height", "roof_shape", "roof_height", "name", "facade_material",
+                   "roof_color")}
+            lm = lm_osm.get(landmarks.osm_key(a["src_record"][i])) if lm_osm and "src_record" in a else None
+            if lm is None and lm_pts:
+                ring_ = np.stack([e - x0, n - y0], 1)
+                lm = next((en for en, p in lm_pts if _inside(ring_, p)), None)
+            if lm is not None:
+                if lm.get("drop"):
+                    continue                    # (a footprint the landmark's placed pieces stand in for)
+                at = landmarks.apply(at, lm)
             hh_ = at.get("height")
             if hh_ is not None and np.isfinite(hh_) and 0 < hh_ < FLAT_FOOTPRINT_M and not parts_of.get(str(key)):
                 continue                # a mapped area, not a building (the Golden Gate toll plaza's 0.01 m footprint
@@ -2314,15 +2394,33 @@ def tile_buildings(frame, x0, y0, x1, y1, layers, elev, water=None, part_layers=
                 fill = float(bh) if bh is not None and np.isfinite(bh) and bh > 0 else \
                     min(h[0] + h[1] for _, h in bparts if h is not None)
                 top = max([fill] + [h[0] + h[1] for _, h in bparts if h is not None])
-                for pring, hh in bparts:
+                for (pring, hh), pa in zip(bparts, parts_of.attrs(str(key))):
                     ph, pmh = hh if hh is not None else (fill, 0.0)
                     if ph + pmh < FLAT_FOOTPRINT_M:
                         continue        # (a part taking a flat area's height: FLAT_FOOTPRINT_M)
                     r = clean_ring(pring - np.array([x0, y0]))
                     if r is None or _area2(r) / 2 < 4.0:
                         continue
+                    # a part keeps its own curved roof (a dome on its drum: landmarks.py); the rest are flat
+                    plm = lm_osm.get(landmarks.osm_key(pa.get("src_record"))) if lm_osm else None
+                    if plm is None and lm_pts:
+                        plm = next((en for en, p in lm_pts if en.get("part") and _inside(r, p)), None)
+                    pat = {"roof_shape": str(pa.get("roof_shape") or ""), "roof_height": pa.get("roof_height"),
+                           "roof_color": str(pa.get("roof_color") or "")}
+                    if plm is not None:
+                        if plm.get("drop"):
+                            continue
+                        pat = landmarks.apply(pat, plm)
+                        ph = float(pat.get("height") or ph) - float(pat.get("min_height") or pmh)
+                        pmh = float(pat.get("min_height") if pat.get("min_height") is not None else pmh)
+                    keep = pat["roof_shape"].lower() in landmarks.SHAPES or pat["roof_shape"].lower() == "pyramidal"
                     rings.append(r)
-                    attrs.append({"class": at["class"], "height": ph, "num_floors": None, "roof_shape": "flat",
+                    attrs.append({"class": at["class"], "height": ph, "num_floors": None,
+                                  "roof_shape": pat["roof_shape"] if keep else "flat",
+                                  "roof_height": pat.get("roof_height") if keep else None,
+                                  "roof_color": pat.get("roof_color"), "roof_look": pat.get("roof_look"),
+                                  "facade_look": pat.get("facade_look") or at.get("facade_look"),
+                                  "lantern": pat.get("lantern"),
                                   "building_height": top, "facade_material": at.get("facade_material"),
                                   "bridge_part": _on_support(r, supports) if str(at.get("facade_material") or "")
                                   .lower() in STEEL_MATERIALS else None,
@@ -2440,6 +2538,8 @@ def tile_buildings(frame, x0, y0, x1, y1, layers, elev, water=None, part_layers=
 # West Coast USA's toll booth instead (trees.lua group "tollbooth": the island, its booth and kerbs in one shape, 22 m
 # long along its local y), placed along the island (toll_booth_rows); the island and its booth parts are not built.
 FLAT_FOOTPRINT_M = 0.1     # m: a footprint mapped lower than this is an area (a plaza), not drawn
+LANDMARK_MARGIN_M = 400.0  # m: a landmark's point this far off the tile can be in one of its buildings (a building is
+                           # the tile's by its centroid; a stadium's point may lie in the next tile)
 G_TOLLBOOTH = "tollbooth"
 TOLLBOOTH_H = 4.96          # m: the stock shape's height (s_toll_booth_center)
 TOLL_ISLAND_MAX_H = 1.0     # m: an island is a "building" no taller than this ...
@@ -2554,6 +2654,8 @@ def collider_boxes(items, x0, y0):
         if deck_plan(spec, gmin, gmax) is not None:     # an open parking deck: driven into on purpose
             continue
         if spec.cls in BRIDGE_CLASSES:                  # a bridge's frame: driven through between its legs
+            continue
+        if spec.cls == "stadium_bowl":                  # an open bowl: its field is driven on, its stands solid
             continue
         r = spec.ring
         out.append([round(float(r[:, 0].min() + x0), 2), round(float(r[:, 1].min() + y0), 2),
@@ -2909,6 +3011,16 @@ def road_tile(frame, tx, ty, md, ground, lines=None, props=None, items=None):
     if props is not None and lines:
         props.extend(doors(items, lines, x0, y0))
     meshes = build_parts(items, with_lod=True, max_parts=4)      # (roads.BLD_PARTS_MAX)
+    import landmarks
+    pieces = landmarks.pieces_mesh(frame, x0, y0, x1, y1, ground, _Looks(0.5))
+    if pieces is not None:      # the landmark table's placed pieces (the Capitol's dome, the Castle Rock Star)
+        lite = landmarks.pieces_mesh(frame, x0, y0, x1, y1, ground, _Looks(0.5), lite=True)
+        if meshes and len(meshes[-1][0]) + len(pieces[0]) <= MAX_MESH_VERTS:
+            last = meshes[-1]
+            lod = _concat([last[6], lite]) if last[6] is not None and lite is not None else (last[6] or lite)
+            meshes[-1] = _concat([last[:6], pieces]) + (lod,)
+        else:
+            meshes.append(pieces + (lite,))
     if not meshes:
         return None
     return meshes, collider_boxes(items, x0, y0), collision_mesh(items)
@@ -2933,6 +3045,10 @@ def far_tile(frame, tx, ty, md, ground, out_dir, vfs_dir, aid, lamp_region=None)
                            ml_roads_xy=road_lines(frame, [c.layers.get("roads") for c in cds], x0, y0),
                            ways_xy=way_lines(frame, [c.layers.get("roads") for c in cds], x0, y0, size=x1 - x0))
     mesh = build(items, lite=True)
+    import landmarks
+    pieces = landmarks.pieces_mesh(frame, x0, y0, x1, y1, ground, _Looks(0.5), lite=True)
+    if pieces is not None:
+        mesh = pieces if mesh is None else _concat([mesh, pieces])
     data = {"v": 1}
     lamps = far_lamps(frame, [c.layers.get("roads") for c in cds], x0, y0, x1 - x0,
                       built_squares(items, 0.0, 0.0, x1 - x0), ground, lamp_region)

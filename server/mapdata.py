@@ -318,6 +318,10 @@ class MapData:
             import drcog
             if drcog.covers(key.bounds()):  # (--drcog on: the region's roofprints in, kept under their own name)
                 name = f"{name}.{drcog.TAG}"
+                import landmarks
+                lm = landmarks.protect_tag(key.bounds())
+                if lm:                      # (a landmark kept over the roofprints: landmarks.json's ids in it)
+                    name = f"{name}.{lm}"
         if layer == "buildings" and self.lidar() is not None:
             import lidarheights
             name = f"{name}.{lidarheights.TAG}"     # (--lidar-heights on: 3DEP heights in, kept under their own name)
