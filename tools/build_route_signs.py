@@ -38,9 +38,14 @@ out body geom qt;
 rel["boundary"="administrative"]["admin_level"="8"]({s},{w},{n},{e});
 out body geom qt;
 """
+# the consolidated city-counties (Denver, Broomfield): their boundaries are admin_level 6, the whole state's at once
+COUNTY_CITIES_QUERY = """[out:json][timeout:{timeout}][maxsize:{maxsize}];
+rel["boundary"="administrative"]["admin_level"="6"]["name"~"^(City and County of )?(Denver|Broomfield)( County)?$"]({s},{w},{n},{e});
+out body geom qt;
+"""
 WAY_KEEP = ("highway", "ref", "oneway", "maxspeed", "lanes", "name", "junction", "bridge", "tunnel")
 NODE_KEEP = ("highway", "distance", "ref", "name", "ele", "mountain_pass", "place", "population", "railway")
-REL_KEEP = ("name", "border_type", "admin_level", "official_name", "place")
+REL_KEEP = ("name", "border_type", "admin_level", "official_name", "place", "population")
 SIMPLIFY_M = 6.0        # a boundary ring's Douglas-Peucker tolerance
 
 
@@ -175,7 +180,11 @@ def main():
               f"OSM {d.get('stamp', '?')}: {summary(d)}")
         return
     print(f"Overpass: numbered routes, mile markers, passes and towns in {bbox}")
-    d = compact(bhs.fetch_strips(bbox, name + "-routes", a.strip_deg, query=QUERY), name, bbox)
+    data = bhs.fetch_strips(bbox, name + "-routes", a.strip_deg, query=QUERY)
+    extra = bhs.fetch(bbox, timeout=300, maxsize=256 << 20, query=COUNTY_CITIES_QUERY)
+    seen = {(e["type"], e["id"]) for e in data["elements"]}
+    data["elements"] += [e for e in extra.get("elements", []) if (e["type"], e["id"]) not in seen]
+    d = compact(data, name, bbox)
     bhs.write(path, d)
     print(f"{path}: {len(d['ways'])} ways, {len(d['nodes'])} nodes, {len(d['towns'])} towns "
           f"({os.path.getsize(path) / 1e6:.1f} MB)")

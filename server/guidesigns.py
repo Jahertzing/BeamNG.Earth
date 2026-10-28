@@ -1119,10 +1119,49 @@ class Plans:
                         return True
         return False
 
+    def _cache_path(self):
+        """The planned grid's pickle in the server's cache (revisit.CACHE_DIR), named by the region files (name, size,
+        time) and this code: a statewide plan takes ~15 s, every worker process wants it."""
+        import hashlib
+        import revisit
+        if not revisit.CACHE_DIR:
+            return None
+        h = hashlib.sha1(str(PLAN_V).encode())
+        for d in self.dirs:
+            if os.path.isdir(d):
+                for n in sorted(os.listdir(d)):
+                    if n.endswith(".json.gz"):
+                        st = os.stat(os.path.join(d, n))
+                        h.update(f"{d}|{n}|{st.st_size}|{int(st.st_mtime)}".encode())
+        for mod in ("guidesigns.py", "routesigns.py"):
+            with open(os.path.join(HERE, mod), "rb") as f:
+                h.update(f.read())
+        return os.path.join(revisit.CACHE_DIR, "hwysigns", f"plan-{h.hexdigest()[:16]}.pkl")
+
     def grid(self):
         with self._lock:
             if self._grid is None:
-                self._grid = self._load()
+                import pickle
+                try:
+                    path = self._cache_path()
+                except Exception:
+                    path = None
+                if path and os.path.exists(path):
+                    try:
+                        with open(path, "rb") as f:
+                            self._grid = pickle.load(f)
+                    except Exception:
+                        self._grid = None
+                if self._grid is None:
+                    self._grid = self._load()
+                    if path:
+                        try:
+                            os.makedirs(os.path.dirname(path), exist_ok=True)
+                            with open(path + f".{os.getpid()}.tmp", "wb") as f:
+                                pickle.dump(self._grid, f, protocol=pickle.HIGHEST_PROTOCOL)
+                            os.replace(path + f".{os.getpid()}.tmp", path)
+                        except OSError:
+                            pass
             return self._grid
 
     def near(self, lat0, lon0, lat1, lon1):
@@ -1546,11 +1585,17 @@ def street_signs(mesh, col, roads, box, names, ground=None, avoid=(), left_hand=
     return n
 
 
-MAST_ARM_Z = 6.0                # m over the boom's foot: its mast arm's underside (s_trafficlight_boom_sn)
-MAST_SIGN_AT = (2.2, 4.4)       # m out along the arm from the pole: where the sign may hang (between the pole and
-                                # the first head)
+MAST_ARM = ((0.3, 4.75), (3.7, 6.0), (6.0, 6.1))  # the stock boom's (s_trafficlight_boom_sn) mast arm: its
+                                # underside's height over the foot (m) at m out from the pole (rising to 3.7 m out)
+MAST_SIGN_AT = (1.5, 4.95)      # m out along the arm where a sign may hang (its overhead head from 5.1 m)
 MAST_CAP = 0.20                 # its lettering (8")
 MAST_ARM_AXIS = -1.0            # the arm reaches along the boom's local x this way (-1: over the road from the kerb)
+
+
+def _arm_z(u):
+    """The mast arm's underside over the boom's foot, u m out from its pole."""
+    xs, zs = zip(*MAST_ARM)
+    return float(np.interp(u, xs, zs))
 
 
 def mast_arm_signs(mesh, roads, box, names, booms, left_hand=False):
@@ -1587,16 +1632,17 @@ def mast_arm_signs(mesh, roads, box, names, booms, left_hand=False):
             continue
         cross.sort(key=lambda c: (c[2][1].cls not in STREET_MAJOR, -c[0], c[1]))
         face, (W, H) = blade_face(cross[0][1], MAST_CAP)
-        if W > MAST_SIGN_AT[1] - MAST_SIGN_AT[0] + 1.0:
+        if W > MAST_SIGN_AT[1] - MAST_SIGN_AT[0]:
             continue                # (too long a name for the arm's free span)
-        out = MAST_SIGN_AT[0] + W / 2
+        out = MAST_SIGN_AT[1] - W / 2                           # (as far out as the head lets: the level part)
         mid = np.array([x, y]) + R * (MAST_ARM_AXIS * out)
-        zb = z + MAST_ARM_Z - 0.05 - H
-        o = mid - trav * 0.18                                   # (in front of the arm, toward the drivers)
+        zb = z + _arm_z(out - W / 2) - 0.04 - H                 # (its top under the arm's lowest point over it)
+        o = mid - trav * 0.18                                   # (in front of the arm: the heads' side, the drivers')
         draw_face(mesh, face, (o[0], o[1], zb), _v3(R), -_v3(trav))
-        for u in (-W * 0.3, W * 0.3):                          # (its two hangers to the arm)
+        for u in (-W * 0.3, W * 0.3):                          # (its two hangers up to the arm)
             h = mid + R * u - trav * 0.1
-            mesh.box((h[0], h[1], zb + H * 0.5), (h[0], h[1], z + MAST_ARM_Z + 0.05), 0.015, 0.015, M_STEEL)
+            zt = z + _arm_z(out + MAST_ARM_AXIS * u) + 0.05
+            mesh.box((h[0], h[1], zb + H * 0.5), (h[0], h[1], zt), 0.015, 0.015, M_STEEL)
         n += 1
     return n
 

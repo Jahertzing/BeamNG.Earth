@@ -158,6 +158,21 @@ class Files(unittest.TestCase):
             self.assertFalse([i for i in got if i["k"] == "rmile"])
 
 
+    def test_plan_cached(self):
+        import revisit
+        keep = revisit.CACHE_DIR
+        with tempfile.TemporaryDirectory() as d, tempfile.TemporaryDirectory() as c:
+            with gzip.open(os.path.join(d, "a.json.gz"), "wt") as f:
+                json.dump(_routes(), f)
+            revisit.CACHE_DIR = c
+            try:
+                n = len(gs.Plans((d,)).near(39.70, -105.30, 40.0, -105.10))
+                self.assertTrue(os.listdir(os.path.join(c, "hwysigns")))
+                self.assertEqual(len(gs.Plans((d,)).near(39.70, -105.30, 40.0, -105.10)), n)
+            finally:
+                revisit.CACHE_DIR = keep
+
+
 class Tile(unittest.TestCase):
     """CO 93 as a two-lane road (10 m) through a tile north of the junction, in the frame of 39.85, -105.2."""
 
@@ -230,9 +245,10 @@ class MastArms(unittest.TestCase):
         P = np.asarray(mesh.P)
         text = np.array([P[t[0]] for t, m in zip(mesh.T, mesh.M) if m == gs.M_TEXT])
         self.assertTrue(len(text))
-        self.assertGreater(text[:, 2].min(), 0.15 + gs.MAST_ARM_Z - 0.6)
-        self.assertLess(text[:, 2].max(), 0.15 + gs.MAST_ARM_Z)
-        self.assertLess(text[:, 0].max(), 106.0 - gs.MAST_SIGN_AT[0] + 0.1)     # out along the arm, over the road
+        self.assertGreater(text[:, 2].min(), 0.15 + 4.9)                    # under the arm, clear of the traffic
+        self.assertLess(text[:, 2].max(), 0.15 + gs._arm_z(text[:, 0].max() * -1 + 106.0))
+        self.assertLess(text[:, 0].max(), 106.0 - gs.MAST_SIGN_AT[0])          # out along the arm, over the road
+        self.assertGreater(text[:, 0].min(), 106.0 - gs.MAST_SIGN_AT[1])       # short of its head
         self.assertLess(abs(text[:, 1].mean() - 90.0), 0.5)
         t = [t for t, m in zip(mesh.T, mesh.M) if m == gs.M_TEXT]
         nrm = [np.cross(P[b] - P[a], P[c] - P[a]) for a, b, c in t]

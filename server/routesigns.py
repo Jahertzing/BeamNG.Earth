@@ -130,14 +130,31 @@ class Route:
         kx = math.cos(math.radians(float(E[:, 0].mean()))) * 111_195.0
         xy = np.column_stack([E[:, 1] * kx, E[:, 0] * 111_195.0])
         cs = np.array([comp[n] for n in ends])
-        for i, n in enumerate(ends):
-            d = np.hypot(*(xy - xy[i]).T)
-            for c in set(cs.tolist()) - {cs[i]}:
-                m = np.where(cs == c, d, np.inf)
-                j = int(np.argmin(m))
-                if m[j] <= GAP_M:
-                    self.adj[n].append((ends[j], -1, float(m[j]) * 1.15))
-                    self.adj[ends[j]].append((n, -1, float(m[j]) * 1.15))
+        D = np.hypot(xy[:, None, 0] - xy[None, :, 0], xy[:, None, 1] - xy[None, :, 1])
+        D[cs[:, None] == cs[None, :]] = np.inf
+        # every piece within GAP_M of another joined to it; then the rest joined end to end, nearest first (a
+        # Kruskal tree over the pieces: a route's concurrency with a road mapped without its ref, US 6 along I-70)
+        parent = list(range(k))
+
+        def root(c):
+            while parent[c] != c:
+                parent[c] = parent[parent[c]]
+                c = parent[c]
+            return c
+        order = np.argsort(D, axis=None)
+        for flat in order:
+            i, j = divmod(int(flat), len(ends))
+            d = float(D[i, j])
+            if not math.isfinite(d):
+                break
+            if i > j:
+                continue
+            ri, rj = root(cs[i]), root(cs[j])
+            if ri == rj and d > GAP_M:
+                continue
+            parent[ri] = rj
+            self.adj[ends[i]].append((ends[j], -1, d * 1.15))
+            self.adj[ends[j]].append((ends[i], -1, d * 1.15))
 
     def _dijkstra(self, start):
         dist = {start: 0.0}
@@ -361,14 +378,18 @@ def _walk_back(rt, n, v, reach):
 
 
 def _dedupe(items, kind, within, key):
+    """items of kind kept within m apart for the same key and way of travel (the first kept)."""
     out, kept = [], {}
+    cell = within / 111_195.0
     for it in items:
         if it["k"] == kind:
             k = key(it)
             p = (it["lat"], it["lon"])
-            if any(gs._dist(p, q) < within and abs(gs._turn(b, it["brg"])) < 45 for q, b in kept.get(k, ())):
+            ci, cj = int(p[0] // cell), int(p[1] // cell)
+            near = [q for di in (-1, 0, 1) for dj in (-1, 0, 1) for q in kept.get((k, ci + di, cj + dj), ())]
+            if any(gs._dist(p, q) < within and abs(gs._turn(b, it["brg"])) < 45 for q, b in near):
                 continue
-            kept.setdefault(k, []).append((p, it["brg"]))
+            kept.setdefault((k, ci, cj), []).append((p, it["brg"]))
         out.append(it)
     return out
 
@@ -383,6 +404,8 @@ def passes(data, ways, coord):
     for w in ways:
         for i, n in enumerate(w["nodes"]):
             at.setdefault(n, []).append((w, i))
+    P = np.array([p for w in ways for p in w["geom"]])
+    W = [(w, i) for w in ways for i in range(len(w["geom"]))]
     items = []
     for pn in pas:
         hits = at.get(pn["id"], ())
@@ -390,14 +413,11 @@ def passes(data, ways, coord):
         if hits:
             best = (0.0, hits[0][0], hits[0][1])
         else:                       # (a pass mapped beside its road)
-            for w in ways:
-                g = w["geom"]
-                if not (min(p[0] for p in g) - 0.002 <= pn["lat"] <= max(p[0] for p in g) + 0.002):
-                    continue
-                for i, p in enumerate(g):
-                    d = gs._dist(p, (pn["lat"], pn["lon"]))
-                    if d < PASS_SNAP_M and (best is None or d < best[0]):
-                        best = (d, w, i)
+            d = np.hypot((P[:, 0] - pn["lat"]) * 111_195.0,
+                         (P[:, 1] - pn["lon"]) * 111_195.0 * math.cos(math.radians(pn["lat"])))
+            j = int(np.argmin(d))
+            if d[j] < PASS_SNAP_M:
+                best = (float(d[j]), *W[j])
         if best is None:
             continue
         _, w, i = best
@@ -425,15 +445,29 @@ def _signed_area(xy):
 
 
 def town_label(tags, places):
-    """CITY LIMIT / TOWN LIMIT by the boundary's border_type, else its place node's place."""
+    """CITY LIMIT / TOWN LIMIT by the boundary's border_type; else a big one (OpenStreetMap's place tags go by size:
+    Thornton's "town") a city; else by its place tag (the boundary's, its place node's)."""
     bt = (tags.get("border_type") or "").lower()
     if "town" in bt or "village" in bt:
         return "TOWN LIMIT"
-    if "city" in bt:
+    if "city" in bt or "county" in bt:
         return "CITY LIMIT"
-    pl = places.get(tags.get("name", "").lower(), {}).get("place")
+    node = places.get(town_name(tags).lower(), {})
+    try:
+        if int(re.sub(r"[^0-9]", "", str(node.get("population") or "")) or 0) >= CITY_POP:
+            return "CITY LIMIT"
+    except ValueError:
+        pass
+    pl = tags.get("place") or node.get("place")
     return "TOWN LIMIT" if pl in ("town", "village") else "CITY LIMIT"
 
+
+def town_name(tags):
+    """A boundary's name on its sign ("City and County of Denver": Denver)."""
+    return re.sub(r"^(city and county|city|town|county) of\s+", "", tags.get("name", ""), flags=re.I).strip()
+
+
+CITY_POP = 25000            # a municipality this big with no border_type: a city
 
 CELL_DEG = 0.005
 
@@ -450,7 +484,8 @@ def city_limits(data, ways, coord):
         t = n.get("tags", {})
         if t.get("place") and t.get("name"):
             places.setdefault(t["name"].lower(), {"place": t["place"], "ft": _ft(t.get("ele")),
-                                                  "lat": n["lat"], "lon": n["lon"]})
+                                                  "population": t.get("population"), "lat": n["lat"],
+                                                  "lon": n["lon"]})
     lat0 = float(np.mean([w["geom"][0][0] for w in ways]))
     kx = math.cos(math.radians(lat0)) * 111_195.0
     # the towns' ring edges, oriented with the town on their left, in a grid of CELL_DEG
@@ -512,7 +547,7 @@ def city_limits(data, ways, coord):
         if any(gs._dist(p, q) < CITY_AGAIN_M and abs(gs._turn(bb, brg)) < 60 for q, bb in kept.get(ti, ())):
             continue
         kept.setdefault(ti, []).append((p, brg))
-        name = tw["tags"].get("name", "")
+        name = town_name(tw["tags"])
         pl = places.get(name.lower(), {})
         out.append({"k": "city", "lat": p[0], "lon": p[1], "brg": brg, "name": name,
                     "label": town_label(tw["tags"], places), "ft": pl.get("ft"),
