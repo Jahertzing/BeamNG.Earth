@@ -346,7 +346,7 @@ def end_blend(s, z, z0, z1, at_start, at_end):
 def surface_for(md, dem):
     """The Surface of a server process (its MapData md and DEM dem: the raw ground at grading.PROFILE_ZOOM, one zoom in
     every process so every one makes the same decks), or None (BNE_DECK_LIDAR=off, no map data or DEM)."""
-    if not ON or md is None or dem is None:
+    if not ON or md is None or dem is None or getattr(md, "raw_dir", None) is None or getattr(md, "fetcher", None) is None:
         return None
     import grading
     dsm = md.__dict__.get("_deck_dsm")
