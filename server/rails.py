@@ -133,6 +133,7 @@ def tile_chunks(frame, tx, ty, cells):
     box = roads.tile_bbox(tx, ty)
     reach = max(t[0] for t in TRACK.values()) + MARGIN_M
     carriageways, tracks, seen = {}, [], set()
+    road_hw = {}                    # fid -> its widest half width over the cells' copies (railways.crossings)
     llb = _lonlat_box(frame, box, reach + 20.0)
     for feats in cells:
         if feats is None or len(feats) == 0 or "subtype" not in feats.attrs:
@@ -144,6 +145,11 @@ def tile_chunks(frame, tx, ty, cells):
         for i in range(len(feats)):
             fid = str(feats.ids[i])
             if fid in seen:
+                if fid in road_hw:
+                    if specs is None:
+                        specs = roads.road_specs(feats)
+                    if specs[i] is not None:
+                        road_hw[fid] = max(road_hw[fid], specs[i].width / 2)
                 continue
             # the lines railways.py builds as a 3D track (mpsteppe's PR #287; railways.drawn, worn ones too): only where
             # they cross a carriageway (its street track across the road, which railways.py leaves to the road),
@@ -168,10 +174,12 @@ def tile_chunks(frame, tx, ty, cells):
                     continue
                 if kind is None:
                     carriageways[(fid, k)] = (xy, specs[i].width / 2)
+                    road_hw[fid] = specs[i].width / 2
                 else:
                     tracks.append((kind, xy, meshed))
     if not tracks:
         return []
+    carriageways = {key: (xy, max(hw, road_hw.get(key[0], hw))) for key, (xy, hw) in carriageways.items()}
 
     def on_road(pts):
         return roads._on_carriageways(pts, carriageways, -ON_ROAD_INSET_M)
