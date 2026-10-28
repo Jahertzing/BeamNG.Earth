@@ -27,4 +27,16 @@ core_environment = { getLightState = function() return { isNight = true } end }
 T.check(nl.isNight() == true, 'night from the stock environment')
 core_environment = nil
 T.check(nl.isNight() == nil, 'no environment (the menu): unknown')
+-- the stadiums' evenings and the Castle Rock star's season
+T.check(nl.evening(19.5) and not nl.evening(23.5) and not nl.evening(2.0), 'stadium lights: dusk to 23:00 only')
+T.check(not nl.starSeason(2026, 11, 20) and nl.starSeason(2026, 11, 21), 'the star: from the Saturday before Thanksgiving (2026-11-26)')
+T.check(nl.starSeason(2026, 12, 31) and nl.starSeason(2027, 1, 25) and not nl.starSeason(2027, 1, 26), '... to the Stock Show')
+T.check(not nl.starSeason(2026, 10, 28) and not nl.starSeason(nil, 1, 1), 'not in October, not without a date')
+T.check(nl.starSeason(2025, 11, 22) and not nl.starSeason(2025, 11, 21), '2025: Thanksgiving 11-27, Starlighting 11-22')
+
+local ng = require('beamngEarth/nightglow')
+local r1, h1 = ng.glowSize(1)
+local r7 = ng.glowSize(7)
+T.check(r1 > r7 and h1 >= ng.GLOW_H_MIN_M, 'a big city glows wider than a town')
+T.check(ng.glowSize(99) == ng.GLOW_R[ng.GLOW_RANK_MAX], 'ranks past the last: the last size')
 T.done('test_nightlights')

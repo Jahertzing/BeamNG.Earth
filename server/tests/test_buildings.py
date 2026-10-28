@@ -866,6 +866,48 @@ class FarLampTest(unittest.TestCase):
         self.assertGreater(float(np.ptp(UV[:, 0])), 0.1, "spread along the walls")
 
 
+class StadiumLightTest(unittest.TestCase):
+    def test_stadium_gets_floodlight_banks(self):
+        """A stadium's stands get floodlight banks (STADIUM_LIGHT) round the rim, on the detailed and the skyline
+        mesh; an office block of the same size, none."""
+        ring = rect(0, 0, 200, 150)
+        s = bld.plan(ring, {"class": "stadium", "height": 30.0}, 0, 39.74, -104.99)
+        m = bld.Mesh()
+        bld.stadium_lights(m, s, bld.drawn_ring(s), 30.0, bld._Looks(s.seed))
+        P, UV, T, M, C = m.arrays()
+        lamp = bld.MATERIALS.index(bld.STADIUM_LIGHT)
+        self.assertGreaterEqual(int(np.sum(M == lamp)) // 12, 4, "at least four banks (12 triangles a box)")
+        self.assertGreater(float(P[:, 2].min()), 29.9, "over the eave")
+        s.ring = np.asarray(s.ring, np.float64)
+        P, UV, T, M, mats, C = bld._sky_mesh([(s, 0.0, 0.0)])
+        self.assertIn(bld.STADIUM_LIGHT, {mats[k] for k in M})
+        o = bld.plan(ring, {"class": "office", "height": 30.0}, 0, 39.74, -104.99)
+        m = bld.Mesh()
+        bld.stadium_lights(m, o, bld.drawn_ring(o), 30.0, bld._Looks(o.seed))
+        self.assertEqual(m.n, 0)
+
+
+class NightShiftTest(unittest.TestCase):
+    def test_floors_start_at_different_bays(self):
+        """A tower's floors of an equal-bay band start a hashed whole number of bays along (the night maps light the
+        same cells of a band: every floor lit the same columns), so its lit windows are not stripes up the wall."""
+        s = bld.plan(rect(0, 0, 30, 20), {"class": "office", "height": 60.0}, 0, 39.74, -104.99)
+        s.band, s.plain, s.wall, s.shop, s.door = bld.BAND_OFFICE, False, None, False, None
+        m = bld.Mesh()
+        bld._walls(m, s, bld.drawn_ring(s), 0.0, s.height, bld._Looks(s.seed))
+        P, UV, T, M, C = m.arrays()
+        bpt, us = s.band[1], {}
+        for k in range(0, len(P), 4):
+            z = round(float(P[k:k + 4, 2].min()), 2)
+            u0 = float(UV[k:k + 4, 0].min())
+            self.assertAlmostEqual(u0 * bpt, round(u0 * bpt), places=6)      # whole bays: the windows stay put
+            us.setdefault(z, set()).add(round(u0 * bpt) % bpt)
+        self.assertGreater(len({min(v) for v in us.values()}), 1)
+        # the sash band (hand-picked good bays) and a plain house are not touched
+        s.band = bld.BAND_SASH
+        uv = [0.0] * 8
+        self.assertIs(bld._night_shift(s, [0.0] * 12, uv, [0], s.height), uv)
+
 
 if __name__ == "__main__":
     unittest.main()

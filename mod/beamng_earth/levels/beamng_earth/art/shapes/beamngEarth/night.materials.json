@@ -1,0 +1,95 @@
+{
+  "bne_stadium_light": {
+    "name": "bne_stadium_light",
+    "mapTo": "bne_stadium_light",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "67c29f5e-77ce-5d3a-9847-7af785ed05fb",
+    "Stages": [
+      {
+        "baseColorFactor": [
+          0.78,
+          0.79,
+          0.8,
+          1.0
+        ],
+        "metallicFactor": 0.6,
+        "roughnessFactor": 0.35,
+        "vertColor": true,
+        "emissiveFactor": [
+          0,
+          0,
+          0
+        ]
+      },
+      {},
+      {},
+      {}
+    ],
+    "castShadows": false,
+    "translucent": false
+  },
+  "bne_star_bulb": {
+    "name": "bne_star_bulb",
+    "mapTo": "bne_star_bulb",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "8ade1829-8acd-5a74-9dd0-68aa38620670",
+    "Stages": [
+      {
+        "baseColorFactor": [
+          0.9,
+          0.9,
+          0.88,
+          1.0
+        ],
+        "metallicFactor": 0,
+        "roughnessFactor": 0.3,
+        "emissiveFactor": [
+          0,
+          0,
+          0
+        ]
+      },
+      {},
+      {},
+      {}
+    ],
+    "castShadows": false,
+    "doubleSided": true,
+    "translucent": false
+  },
+  "bne_city_glow": {
+    "name": "bne_city_glow",
+    "mapTo": "bne_city_glow",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "e60835c2-14a8-564b-ad68-fa64cc1f27af",
+    "Stages": [
+      {
+        "baseColorFactor": [
+          0,
+          0,
+          0,
+          1.0
+        ],
+        "metallicFactor": 0,
+        "roughnessFactor": 1,
+        "emissiveMap": "/levels/beamng_earth/art/shapes/beamngEarth/bne_city_glow_e.png",
+        "emissiveFactor": [
+          0,
+          0,
+          0
+        ]
+      },
+      {},
+      {},
+      {}
+    ],
+    "castShadows": false,
+    "doubleSided": true,
+    "translucent": true,
+    "translucentBlendOp": "Add",
+    "translucentZWrite": false
+  }
+}
