@@ -100,6 +100,7 @@ import grading as gradingmod  # noqa: E402
 import roadmesh as roadmeshmod  # noqa: E402
 import roadwidth as roadwidthmod  # noqa: E402
 import revisit as revisitmod  # noqa: E402
+import blockcache  # noqa: E402
 import mapdata as mapdatamod  # noqa: E402
 import dem as demmod  # noqa: E402
 import mapcells  # noqa: E402
@@ -575,6 +576,8 @@ class Server:
         self.near_visual = near_visual
         # the near tiles' asphalt layer (mesh mode: the tiles are the ground seen; surface.road_mask)
         self.road_masks = roadsmod.ROADS_IN_GROUND and near_visual not in BLOCK_DRAWN
+        # the ground tiles' grass layer (mesh mode, with surfaces: surface.grass_mask)
+        self.grass_masks = near_visual not in BLOCK_DRAWN
         if tex is None and cells == 32:
             tex = (tex_near, tex_near, tex_far)         # the v1.3.1 rule: the two finest levels are near
         # Every layout-dependent rule reads self.layout (terrain mode: frozen at 32 cells)
@@ -1554,10 +1557,41 @@ class Server:
     def make_heightmap(self, anchor, cx, cy, progress, lane=LANE_REQUEST, queued_at=None):
         """Worker thread: build and write one 1024² terrain. The follow / prefetch blocks (no progress
         callback) build in the block process when there is one; the anchor's first block here, so its
-        DEM download reports progress."""
+        DEM download reports progress. A block built in this anchor's place before (heights, surface masks, .ter
+        and base photo) comes from the revisit cache (blockcache.py)."""
         t0 = time.perf_counter()
         if queued_at is not None and t0 - queued_at > 0.2:
             log.debug("terrain %s waited %.2f s for a heightmap worker", (anchor.id, cx, cy), t0 - queued_at)
+        bk = self._block_key(anchor, cx, cy)
+        info = blockcache.load(self, anchor, cx, cy, bk)
+        if info is not None:
+            fb = anchor.first_base
+            if fb is not None and fb[0] == (cx, cy):    # (the provisional block's photo: not needed now)
+                anchor.first_base = None
+            info["seconds"] = time.perf_counter() - t0
+            return info
+        f0 = revisitmod.faults()
+        info = self._make_heightmap_built(anchor, cx, cy, progress, lane, t0)
+        blockcache.store(self, anchor, cx, cy, bk, info, f0)
+        return info
+
+    def _block_key(self, anchor, cx, cy):
+        """The revisit cache's key of a block built here: the anchor's place, the block and every setting that
+        changes its heights, surface or base photo."""
+        im = self.imagery
+        photo = None
+        if self.near_visual == "detail" and im is not None:
+            photo = (tuple(s.name for s in im.chain), self.tone, im.leaf_on, im.season_mode, BASE_PX, BASE_AO,
+                     self.deshadow is not None, self.colormatch is not None,
+                     bool(self.buildings and self.mapdata is not None), roadsmod.ROADS_IN_GROUND)
+        return revisitmod.key(
+            "block", round(float(anchor.lat), 7), round(float(anchor.lon), 7), float(cx), float(cy),
+            self.layout.block, anchor.hm_zoom, float(self.anchor_q(anchor)), self.near_visual, photo,
+            self.mapdata.versions() if self.mapdata is not None else None, self.surface is not None,
+            self.road_widths is not None, self.grading, self.sea is not None, self.airports is not None,
+            repr(self.block_fuel_pads(anchor, cx, cy, self.layout.block)))
+
+    def _make_heightmap_built(self, anchor, cx, cy, progress, lane, t0):
         q = self.anchor_q(anchor)
         fb, base = anchor.first_base, None
         if fb is not None and fb[0] == (cx, cy):        # the provisional first block's photo (make_provisional)
@@ -2083,7 +2117,7 @@ class Server:
         engine's .cdae cache of it (DAE tiles)."""
         stem = os.path.splitext(name)[0]
         out = [os.path.join(self.out_dir, name), os.path.join(self.out_dir, stem + ".dds"),
-               os.path.join(self.out_dir, stem + "_road.dds")]
+               os.path.join(self.out_dir, stem + "_road.dds"), os.path.join(self.out_dir, stem + "_grass.dds")]
         out += [os.path.join(self.out_dir, f"{stem}_r{r}.dds") for r in range(1, rev + 1)]
         if texture is not None and os.path.join(self.out_dir, texture) not in out:
             out.append(os.path.join(self.out_dir, texture))
@@ -2255,6 +2289,7 @@ class Server:
         pending = set() if self.colormatch is not None or self.deshadow is not None else None
         if done is not None:
             texture, tex_bytes, used = done
+            self.write_grass_mask(anchor, tile, self.tex_size(lvl), texture)
             material = self.matslots.take(ck)
             self.degraded.discard(ck)
             self.imagery_worker += 1
@@ -2272,6 +2307,7 @@ class Server:
                                         blobs["mask.dds"])
                     self.write_file(os.path.join(self.out_dir, texture), blobs["tex.dds"])
                     tex_bytes, used = int(extra["tex_bytes"]), extra["used"]
+                    self.write_grass_mask(anchor, tile, px, texture)
                 else:
                     f0 = revisitmod.faults()
                     rgb, used = self.imagery.render(anchor.frame, *imagerymod.gutter_square(x0, y0, tile.size, px),
@@ -2279,6 +2315,7 @@ class Server:
                     rgb = self.rock_faces(anchor, tile, px, rgb, built.grid)
                     rgb = self.road_faces(anchor, tile, px, rgb)
                     self.write_road_mask(anchor, tile, px, texture)
+                    self.write_grass_mask(anchor, tile, px, texture)
                     tex_bytes = imagerymod.write_dds(os.path.join(self.out_dir, texture), rgb)
                     self.keep_texture(tk, texture, tex_bytes, used, pending, f0)
                 material = self.matslots.take(ck)
@@ -2394,6 +2431,22 @@ class Server:
                                      np.repeat(mask[..., None], 3, axis=2))
         except Exception as e:          # the tile without its asphalt layer
             log.debug("road mask of %s: %s", tile.key, e)
+
+    def write_grass_mask(self, anchor, tile, px, texture):
+        """The tile's grass mask beside its texture (self.grass_masks: mesh mode; surface.grass_mask over the photo's
+        square with its gutter, px the texture's edge), written before the tile is sent (the mod looks for it when it
+        sets the texture). A re-rendered texture (_r<n>) shares it: the land cover did not change."""
+        if not self.grass_masks or self.surface is None or tile.level > surfacemod.GRASS_MASK_MAX_LEVEL:
+            return
+        try:
+            x0, y0, _, _ = tile.bbox
+            mask = surfacemod.grass_mask(anchor.frame, *imagerymod.gutter_square(x0, y0, tile.size, px),
+                                         surfacemod.GRASS_MASK_PX, self.surface, self.road_widths)
+            if mask is not None:
+                imagerymod.write_dds(os.path.join(self.out_dir, surfacemod.grass_mask_name(texture)),
+                                     np.repeat(mask[..., None], 3, axis=2))
+        except Exception as e:          # the tile without its grass layer
+            log.debug("grass mask of %s: %s", tile.key, e)
 
     def retexture(self, anchor, tile, prev):
         """Worker thread: render a stale tile's texture again (its colour-match regions are ready now)
@@ -2957,16 +3010,16 @@ class Connection:
         files.request(want)
 
     async def route(self, msg):
-        """{"id", "lat0", "lon0", "lat1", "lon1"} -> route_result {"id", "points": [[lat, lon]...], "dist", "dur",
-        "elev": [[dist_m, elev_m], ...]?, "error"?}. Also (re)starts this route's corridor prefetch (route_download,
-        routeahead.py)."""
+        """{"id", "lat0", "lon0", "lat1", "lon1", "bearing"?, "via": [[lat, lon], ...]?, "avoid": "toll"?} ->
+        route_result {"id", "points": [[lat, lon]...], "dist", "dur", "elev": [[dist_m, elev_m], ...]?, "error"?}.
+        Also (re)starts this route's corridor prefetch (route_download, routeahead.py)."""
         self.route_dl_version += 1
         version = self.route_dl_version
         out = {"type": "route_result", "id": msg.get("id"), "points": [], "dist": 0.0, "dur": 0.0}
         try:
             r = await asyncio.get_running_loop().run_in_executor(
                 self.s.ui_pool, routingmod.plan, float(msg["lat0"]), float(msg["lon0"]), float(msg["lat1"]),
-                float(msg["lon1"]), self.s.net, msg.get("bearing"))
+                float(msg["lon1"]), self.s.net, msg.get("bearing"), msg.get("via"), msg.get("avoid"))
             out.update(r)
         except Exception as e:          # offline, no route, rate limited: the mod falls back to steering
             out["error"] = f"{type(e).__name__}: {e}"[:200]
@@ -2976,8 +3029,10 @@ class Connection:
                     self.s.ui_pool, self._route_elevation, out["points"])
             except Exception as e:
                 log.debug("route elevation: %s: %s", type(e).__name__, e)
-        log.info("route %d (%s, %s -> %s, %s): %d points, %.1f km%s", int(msg.get("id") or 0), msg.get("lat0"),
-                 msg.get("lon0"), msg.get("lat1"), msg.get("lon1"), len(out["points"]), out["dist"] / 1000,
+        log.info("route %d (%s, %s -> %s, %s%s): %d points, %.1f km%s", int(msg.get("id") or 0), msg.get("lat0"),
+                 msg.get("lon0"), msg.get("lat1"), msg.get("lon1"),
+                 f", {len(routingmod.clean_via(msg.get('via')))} via" if msg.get("via") else "", len(out["points"]),
+                 out["dist"] / 1000,
                  (" (" + out["error"] + ")") if "error" in out else "")
         self.send(out)
         self.route_download(version, out["points"])
@@ -5044,9 +5099,10 @@ def main():
                     help="the Denver region's DRCOG 2024 planimetrics (drcog.py): its stereo-compiled roofprints with "
                          "their heights in place of the Overture footprints they match, its edges of pavement for the "
                          "road widths (CC BY 3.0, credited); off = Overture's footprints everywhere")
-    ap.add_argument("--lidar-heights", choices=("on", "off"), default="off",
+    ap.add_argument("--lidar-heights", choices=("on", "off"), default="on",
                     help="US building heights from USGS 3DEP lidar (lidarheights.py: the Planetary Computer's height-"
-                         "above-ground rasters) where the map has none or a machine-learned one; public domain")
+                         "above-ground rasters) where the map has none or a machine-learned one; public domain; "
+                         "on by default (the settings page's switch), no effect outside the US")
     ap.add_argument("--gas-stations", choices=("on", "off"), default="off",
                     help="gas stations with refuelling at real stations (gasstations.py; Overture places, needs "
                          "--roads on): West Coast USA's pumps and canopies, the stock refuel prompt")

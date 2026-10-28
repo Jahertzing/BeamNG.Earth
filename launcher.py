@@ -211,9 +211,11 @@ def run_server(argv):
 
 def setting_flags(user_dir):
     """Server options from the mod's settings page (its settings file in the game's user folder): --drcog on / off
-    (the setting "drcog", default on: DRCOG's planimetrics change nothing outside the Denver region)."""
+    (the setting "drcog", default on: DRCOG's planimetrics change nothing outside the Denver region) and
+    --lidar-heights on / off (the setting "lidarHeights", default on: nothing changes outside the US)."""
     import bmplaunch
-    return ["--drcog", "on" if bmplaunch.mod_setting(user_dir, "drcog", True) is not False else "off"]
+    return ["--drcog", "on" if bmplaunch.mod_setting(user_dir, "drcog", True) is not False else "off",
+            "--lidar-heights", "on" if bmplaunch.mod_setting(user_dir, "lidarHeights", True) is not False else "off"]
 
 
 def start_server(user_dir, extra, log_path):

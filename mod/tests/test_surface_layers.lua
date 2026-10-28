@@ -185,9 +185,14 @@ do
     local fNear, kNear = gc.reachFor(d, 'near')
     local fNorm, kNorm = gc.reachFor(d, 'normal')
     local fFar, kFar = gc.reachFor(d, 'far')
-    T.check(kNear == 1 and kNorm >= 1 and kFar > kNorm, n .. ': element factor grows with the reach')
-    T.check(fFar.radius > fNorm.radius and fNorm.radius >= fNear.radius, n .. ': radius grows with the reach')
-    T.check(fFar.dissolveRadius == nil or fFar.dissolveRadius < fFar.radius, n .. ': dissolve inside the radius')
+    local fMax, kMax = gc.reachFor(d, 'max')
+    T.check(kNear == 1 and kNorm >= 1 and kFar > kNorm and kMax > kFar, n .. ': element factor grows with the reach')
+    T.check(fMax.radius > fFar.radius and fFar.radius > fNorm.radius and fNorm.radius >= fNear.radius,
+      n .. ': radius grows with the reach')
+    T.check(fMax.radius <= 300, n .. ': max stays on the 512² block ahead of the player (~250-300 m)')
+    for _, f in ipairs({ fFar, fMax }) do
+      T.check(f.dissolveRadius == nil or f.dissolveRadius < f.radius, n .. ': dissolve inside the radius')
+    end
   end
   local d0 = { reach = { near = { 50, 30 }, normal = { 100, 60 } }, fields = { gridSize = 4 } }
   local f0, k0 = gc.reachFor(d0, 'far')

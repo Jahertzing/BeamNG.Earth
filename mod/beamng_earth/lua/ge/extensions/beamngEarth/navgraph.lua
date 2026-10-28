@@ -50,9 +50,10 @@ M.JUMP_M = 30           -- a car this much farther than at the last check was re
 -- At speed a car respawned behind the camera is never seen again: on a motorway every car ahead reached the block's
 -- edge within ~30 s and reappeared behind the player, who drove alone (GitHub #353, Albany to New York). Faster than
 -- AHEAD_MS, a respawned car goes ahead along the player's way instead, AHEAD_M (min, max) on, short of the block's
--- edge guard (a car popping in 100+ m ahead at motorway speed is hardly seen; in town it still goes behind).
+-- edge guard (in town it still goes behind). 150 m on: at 100 m one popped in where the player saw it on an open
+-- Interstate, and 350 m keeps it near enough to be caught up with or to pass (I-25, 2026-10-28).
 M.AHEAD_MS = 20         -- (45 mph)
-M.AHEAD_M = { 100, 200 }
+M.AHEAD_M = { 150, 350 }
 -- (gameplay_walk: 0.40's traffic.lua calls gameplay_walk.addVehicleToBlacklist when it activates its cars, and this
 -- level had none loaded: the cars spawned and never drove, 2026-10-19)
 M.EXTENSIONS = { 'core_multiSpawn', 'gameplay_traffic', 'gameplay_walk' }
@@ -467,8 +468,34 @@ end
 
 -- The player's traffic choice (the user, 2026-10-14: "if a player has them on then yes, if not then no"): the
 -- level-start configurator's (Disabled / Parked only / Normal / Police; freeroam's spawningOptionsHelper), taken at
--- mission start by M.takeChoice. Off by default; the radial menu's traffic entries work at any time as on stock maps.
+-- mission start by M.takeChoice. The radial menu's traffic entries work at any time as on stock maps.
 M.choice = { traffic = false, parked = false, police = false, trafficAmount = -1, parkedAmount = -1 }
+
+-- With no choice made there (freeroam's own default, "fromSetting", which spawns none) the AI traffic setting
+-- decides (settings.lua aiTraffic: the pause menu's BeamNG.Earth page): off, light, normal (the game's own amount for
+-- this PC) or busy, as a share of the game's amount. Normal by default: the drive from Frederick to Castle Rock had
+-- an empty I-25 unless traffic was picked at every level start (the user, 2026-10-28: "make I-25 feel alive").
+M.MODE = 'normal'
+M.MODES = { off = 0, light = 0.5, normal = 1, busy = 1.5 }
+M.LIGHT_MIN = 3
+M.BUSY_MAX = 24         -- every traffic car is a full physics car: a cap on the CPU it takes
+M.BUSY_MORE = 4         -- busy is at least this many more than normal
+
+function M.setMode(v)
+  if M.MODES[v] then M.MODE = v end
+  return M.MODE
+end
+
+-- Pure: the number of cars for gameplay_traffic.setupTraffic in traffic mode `mode`, given the game's own amount
+-- `auto` (gameplay_traffic.getIdealSpawnAmount; nil unknown): 0 none, -1 the game's own (with its extra pooled cars).
+function M.modeAmount(mode, auto)
+  local f = M.MODES[mode]
+  if not f or f <= 0 then return 0 end
+  if f == 1 or not auto or auto < 1 then return -1 end
+  local n = math.floor(auto * f + 0.5)
+  if f < 1 then return math.min(auto, math.max(M.LIGHT_MIN, n)) end
+  return math.min(M.BUSY_MAX, math.max(auto + M.BUSY_MORE, n))
+end
 
 -- Pure on its argument: the choice in freeroam's spawning options `o`, which are then set to disabled: freeroam would
 -- spawn at camera-ready, before our first road graph is in the map; we start them once it is.
@@ -491,10 +518,13 @@ function M.takeChoice(o)
     M.choice = { traffic = false, parked = false, police = false, trafficAmount = -1, parkedAmount = -1 }
     return M.choice
   end
-  M.choice = { traffic = o.trafficMode == 'enabled', parked = o.trafficParked == 'enabled',
+  local fromSetting = o.trafficMode ~= 'enabled' and o.trafficMode ~= 'disabled'
+  M.choice = { traffic = o.trafficMode == 'enabled' or (fromSetting and (M.MODES[M.MODE] or 0) > 0),
+               parked = o.trafficParked == 'enabled',
                police = o.trafficPolice == 'enabled', trafficAmount = tonumber(o.trafficAmount) or -1,
                -- (0.40 renamed trafficParkedAmount to trafficParkingAmount)
-               parkedAmount = tonumber(o.trafficParkingAmount or o.trafficParkedAmount) or -1 }
+               parkedAmount = tonumber(o.trafficParkingAmount or o.trafficParkedAmount) or -1,
+               mode = fromSetting and M.MODE or nil }
   -- (as stock freeroam: with traffic and parked cars both chosen, Options > Gameplay's parked vehicles setting off
   -- means none; GitHub #320 / #145: parked cars came with the setting off)
   local st = rawget(_G, 'settings')
@@ -502,9 +532,9 @@ function M.takeChoice(o)
     M.choice.parked = false
   end
   if log then
-    log('I', 'beamngEarth', string.format('traffic choice: traffic %s, parked %s, police %s (freeroam %s / %s)',
+    log('I', 'beamngEarth', string.format('traffic choice: traffic %s, parked %s, police %s (freeroam %s / %s%s)',
       tostring(M.choice.traffic), tostring(M.choice.parked), tostring(M.choice.police), tostring(o.trafficMode),
-      tostring(o.trafficParked)))
+      tostring(o.trafficParked), M.choice.mode and (', AI traffic setting ' .. M.choice.mode) or ''))
   end
   heldOpts = { o, { o.trafficMode, o.trafficParked, o.trafficPolice } }
   o.trafficMode, o.trafficParked, o.trafficPolice = 'disabled', 'disabled', 'disabled'
@@ -517,8 +547,17 @@ local function startTraffic()
   local c = M.choice
   local gt = c.traffic and trafficSystem() or nil
   if gt and gt.getState() ~= 'on' then
-    local ok, err = pcall(gt.setupTraffic, c.trafficAmount ~= 0 and c.trafficAmount or -1, { police = c.police })
-    if not ok then log('W', 'beamngEarth', 'navgraph: setupTraffic: ' .. tostring(err)) end
+    local amount = c.trafficAmount ~= 0 and c.trafficAmount or -1
+    if c.mode then
+      local okA, auto = pcall(gt.getIdealSpawnAmount, nil, true)
+      amount = M.modeAmount(c.mode, okA and tonumber(auto) or nil)
+      log('I', 'beamngEarth', string.format('AI traffic %s: %s cars (the game\'s own amount here: %s)', c.mode,
+        amount < 0 and 'the game\'s' or tostring(amount), tostring(okA and auto or '?')))
+    end
+    if amount ~= 0 then
+      local ok, err = pcall(gt.setupTraffic, amount, { police = c.police })
+      if not ok then log('W', 'beamngEarth', 'navgraph: setupTraffic: ' .. tostring(err)) end
+    end
   end
 end
 
@@ -640,6 +679,54 @@ function M.update(aid, b, gov)
       end
     end
   end
+end
+
+-- Pure-ish (xf: a geodesy Transform): graph g in the new frame of a rebase, as a new table for anchor aid: its nodes,
+-- its signals' stop points, directions and heads (signal approaches {node, x, y, z, dx, dy, phase, hx, hy, hz,
+-- heading deg}), the rest shared.
+function M.moved(g, xf, aid)
+  local nodes = {}
+  for name, n in pairs(g.nodes) do
+    local x, y, z = xf:apply(n[1], n[2], n[3])
+    nodes[name] = { x, y, z, n[4] }
+  end
+  local rx, ry = xf:rotate(1, 0, 0)
+  local turn = math.deg(math.atan2(ry, rx))      -- (counter-clockwise; a head's heading turns clockwise)
+  local signals = {}
+  for i, j in ipairs(g.signals or {}) do
+    local app = {}
+    for k, a in ipairs(type(j.app) == 'table' and j.app or {}) do
+      local b = { unpack(a) }
+      if a[2] then b[2], b[3], b[4] = xf:apply(a[2], a[3], a[4]) end
+      if a[5] then
+        local dx, dy = xf:rotate(a[5], a[6], 0)
+        local l = math.sqrt(dx * dx + dy * dy)
+        if l > 1e-9 then b[5], b[6] = dx / l, dy / l end
+      end
+      if a[8] then b[8], b[9], b[10] = xf:apply(a[8], a[9], a[10]) end
+      if a[11] then b[11] = a[11] - turn end
+      app[k] = b
+    end
+    local c = {}
+    for key, v in pairs(j) do c[key] = v end
+    c.app = app
+    signals[i] = c
+  end
+  return { anchor = aid, serial = g.serial, nodes = nodes, edges = g.edges, signals = signals, rules = g.rules }
+end
+
+-- The world origin moved (core.lua finishRebase, xf old frame -> new, aid the new anchor): the graph moves with it and
+-- goes into the map again at once. Until then the map held the old frame's roads ~15 km off, and the new anchor's
+-- own graph comes only after half its road tiles (earthd nav_may_start): the traffic's paths and respawns pointed into
+-- the void after every rebase on a long drive (I-25, 2026-10-28).
+function M.transform(xf, aid)
+  if not graph or not xf then return false end
+  graph = M.moved(graph, xf, aid)
+  for _, c in ipairs(cuts) do c[1], c[2] = xf:apply(c[1], c[2], 0) end
+  for _, s in pairs(seenAt) do s[1], s[2] = xf:apply(s[1], s[2], 0) end
+  pendingSignals, prep = nil, nil
+  dirty, lastApply = true, -math.huge
+  return true
 end
 
 -- onNavgraphReloaded (core forwards the hook): someone else rebuilt the map; ours again next frame.

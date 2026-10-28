@@ -324,7 +324,8 @@ class MapData:
                     name = f"{name}.{lm}"
         if layer == "buildings" and self.lidar() is not None:
             import lidarheights
-            name = f"{name}.{lidarheights.TAG}"     # (--lidar-heights on: 3DEP heights in, kept under their own name)
+            if lidarheights.covers(key.bounds()):   # (--lidar-heights on: 3DEP heights in, kept under their own name)
+                name = f"{name}.{lidarheights.TAG}"
         if layer == "roads":
             tag = self.regional().covering(key.bounds())
             if tag is not None:         # a cell inside a regional OSM table: built with its tags, kept under its tag
@@ -403,7 +404,9 @@ class MapData:
         staging.replace_cached(tmp, path)
 
     def _build(self, key, layer, kind):
-        """(content arrays, provenance record or None) of one layer, from the sources."""
+        """(content arrays, provenance record or None) of one layer, from the sources. arrays["transient"]: built
+        without an optional source that failed (the lidar heights): used, not stored (layer_arrays)."""
+        transient = False
         if layer in VECTOR_LAYERS:
             # the roads' OpenStreetMap tags are read alongside Overture's (each half a fresh cell's wait)
             osm = self._osm_pool().submit(self._osm_cell, key, kind) if layer == "roads" else None
@@ -415,15 +418,18 @@ class MapData:
                     if n:                   # (credited with the cell's datasets: credits.FEATURES)
                         sources = dict(sources)
                         sources[(drcog.DATASET, drcog.LICENSE)] = n
-            if layer == "buildings" and self.lidar() is not None and len(feats):
-                import lidarheights
+            import lidarheights
+            if layer == "buildings" and self.lidar() is not None and len(feats) and lidarheights.covers(key.bounds()):
                 try:
                     feats, n = lidarheights.apply(feats, self.lidar().heights(feats, key, kind))
                 except DEFERRED:
-                    raise
-                except Exception as e:      # (outside 3DEP, the service down: the heights as they were)
-                    log.warning("mapdata: lidar heights of %s: %s: %s", key, type(e).__name__, e)
-                    n = 0
+                    if kind not in ("demand", "urgent"):
+                        raise                   # (a prefetch: built later, as the OSM tags)
+                    log.warning("mapdata: lidar heights of %s: the host is busy (%s); not kept", key, kind)
+                    n, transient = 0, True
+                except Exception as e:      # (the service down: the heights as they were, this time only)
+                    log.warning("mapdata: lidar heights of %s: %s: %s; not kept", key, type(e).__name__, e)
+                    n, transient = 0, isinstance(e, (OSError, ValueError))
                 if n:                       # (credited with the cell's datasets: credits.FEATURES)
                     sources = dict(sources)
                     sources[(lidarheights.DATASET, lidarheights.LICENSE)] = n
@@ -452,6 +458,8 @@ class MapData:
             arrays = _layer_arrays(r)
             prov = dict(CANOPY, files=r.files) if r is not None else None
         arrays["provenance"] = np.array(json.dumps(prov, sort_keys=True))
+        if transient:
+            arrays["transient"] = np.array(True)
         return arrays
 
     def _osm_pool(self):
@@ -496,7 +504,40 @@ class MapData:
         return feats
 
     def layer_arrays(self, key, layer, kind="demand"):
-        """(arrays, hit) of one cell's layer: from the cache, or built and cached."""
+        """(arrays, hit) of one cell's layer: from the cache, or built and cached. A roads layer in the DRCOG region
+        comes with the cell's edges of pavement at hand (_edges_ahead)."""
+        got = self._layer_arrays(key, layer, kind)
+        if layer == "roads":
+            self._edges_ahead(_key(key), kind)
+        return got
+
+    def _edges_ahead(self, key, kind):
+        """The cell's DRCOG edges of pavement fetched (drcog.Drcog.edges: on disk after), once per cell per process,
+        when the source is on: the road widths ask for them first where the ground photo paints its roads, and a
+        cell's first fetch there (2-3.5 s, the paged ArcGIS query) held up its block's photo (fix/road-paint-perf,
+        2026-10-28: Denver's base photos took 14-19 s, nearly all of it the roads). Never fails the roads: the widths
+        fetch them themselves as before when they are not here."""
+        dc = self.drcog()
+        if dc is None:
+            return
+        import drcog
+        if not drcog.covers(key.bounds()):
+            return
+        with self._lock:
+            had = getattr(self, "_edges_had", None)
+            if had is None:
+                had = self._edges_had = set()
+            if key in had:
+                return
+        try:
+            dc.edges(key, kind)
+        except Exception as e:      # (deferred or failed: the widths ask again, as before)
+            log.debug("mapdata: drcog edges of %s ahead: %s: %s", key, type(e).__name__, e)
+            return
+        with self._lock:
+            had.add(key)
+
+    def _layer_arrays(self, key, layer, kind="demand"):
         if layer not in ALL_LAYERS:
             raise ValueError(f"unknown map layer {layer!r}; choose from {', '.join(ALL_LAYERS)}")
         key = _key(key)
@@ -514,7 +555,8 @@ class MapData:
                 return self._mirrored(key, layer, path, arrays), True
             try:
                 arrays = self._build(key, layer, kind)
-                self._store(path, arrays)
+                if arrays.pop("transient", None) is None:       # (an optional source failed: next time again)
+                    self._store(path, arrays)
             finally:
                 if mine:
                     xproc.release(path + ".lock")

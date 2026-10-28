@@ -12,21 +12,43 @@ import math
 
 import netfetch
 
-OSRM_URL = "https://routing.openstreetmap.de/routed-car/route/v1/driving/{lon0:.6f},{lat0:.6f};{lon1:.6f},{lat1:.6f}" \
-           "?overview=full&geometries=geojson&steps=false"
+OSRM_URL = "https://routing.openstreetmap.de/routed-car/route/v1/driving/{coords}?overview=full&geometries=geojson&steps=false"
 SIMPLIFY_M = 4.0
 MAX_POINTS = 6000
 ATTRIBUTION = "Routing: OSRM (FOSSGIS), data (c) OpenStreetMap contributors (ODbL)"
 
 
 BEARING_RANGE = 60          # degrees either side of the car's heading the start may take
+MAX_VIA = 8                 # waypoints a route may pass through on the way (The Drive: Union Station)
+# road classes a route may leave out (OSRM's car profile: exclude=toll|motorway|ferry); The Drive's "straight down
+# I-25" asks to leave out the toll roads (routing.openstreetmap.de answers 400 InvalidValue to any exclude, so plan
+# routes without it; its plain Frederick to Castle Rock route stays on I-25, tools/thedrive_check.py)
+EXCLUDE = ("toll", "motorway", "ferry")
 
 
-def url(lat0, lon0, lat1, lon1, bearing=None):
-    """bearing: the car's heading (compass degrees): the route starts on a road the car can follow that way."""
-    u = OSRM_URL.format(lat0=float(lat0), lon0=float(lon0), lat1=float(lat1), lon1=float(lon1))
-    if bearing is not None:
-        u += f"&bearings={int(bearing) % 360},{BEARING_RANGE};"
+def clean_via(via):
+    """The waypoints of a route request as [(lat, lon)]: valid pairs only, at most MAX_VIA. Pure."""
+    out = []
+    for p in via or []:
+        try:
+            lat, lon = float(p[0]), float(p[1])
+        except (TypeError, ValueError, IndexError, KeyError):
+            continue
+        if -90 <= lat <= 90 and -180 <= lon <= 180:
+            out.append((lat, lon))
+    return out[:MAX_VIA]
+
+
+def url(lat0, lon0, lat1, lon1, bearing=None, via=None, exclude=None):
+    """bearing: the car's heading (compass degrees): the route starts on a road the car can follow that way.
+    via: [(lat, lon)] the route passes through in order between the start and the end. exclude: a road class
+    (EXCLUDE) the route keeps off."""
+    pts = [(lat0, lon0)] + clean_via(via) + [(lat1, lon1)]
+    u = OSRM_URL.format(coords=";".join(f"{float(lon):.6f},{float(lat):.6f}" for lat, lon in pts))
+    if bearing is not None:            # one entry per coordinate, only the start's set
+        u += f"&bearings={int(bearing) % 360},{BEARING_RANGE}" + ";" * (len(pts) - 1)
+    if exclude in EXCLUDE:
+        u += f"&exclude={exclude}"
     return u
 
 
@@ -118,14 +140,27 @@ def parse(data):
             "dur": float(r.get("duration") or 0)}
 
 
-def plan(lat0, lon0, lat1, lon1, net=None, bearing=None):
-    """The road route from (lat0, lon0) to (lat1, lon1) (blocking), starting the way bearing points if it can (else
-    without it). Raises netfetch.FetchError or ValueError."""
+def plan(lat0, lon0, lat1, lon1, net=None, bearing=None, via=None, exclude=None):
+    """The road route from (lat0, lon0) to (lat1, lon1) (blocking), through the via points in order, keeping off the
+    exclude road class if the router can (else without), starting the way bearing points if it can (else without it).
+    Raises netfetch.FetchError or ValueError."""
     net = net if net is not None else netfetch.default_fetcher()
+    if exclude in EXCLUDE:
+        try:
+            return _plan(lat0, lon0, lat1, lon1, net, bearing, via, exclude)
+        except (ValueError, netfetch.FetchFailed) as e:    # (a router without that class: 400 InvalidValue)
+            if isinstance(e, netfetch.FetchFailed) and e.status != 400:
+                raise
+    return _plan(lat0, lon0, lat1, lon1, net, bearing, via, None)
+
+
+def _plan(lat0, lon0, lat1, lon1, net, bearing, via, exclude):
     if bearing is not None:
         try:
-            return parse(json.loads(net.get(url(lat0, lon0, lat1, lon1, bearing), kind="demand").body.decode("utf-8")))
+            return parse(json.loads(net.get(url(lat0, lon0, lat1, lon1, bearing, via, exclude), kind="demand")
+                                    .body.decode("utf-8")))
         except (ValueError, netfetch.FetchFailed) as e:   # no road that way near the start (OSRM: 400 NoSegment,
             if isinstance(e, netfetch.FetchFailed) and e.status != 400:      # a car across a field): any direction
                 raise
-    return parse(json.loads(net.get(url(lat0, lon0, lat1, lon1), kind="demand").body.decode("utf-8")))
+    return parse(json.loads(net.get(url(lat0, lon0, lat1, lon1, via=via, exclude=exclude), kind="demand")
+                            .body.decode("utf-8")))

@@ -149,9 +149,15 @@ local function loadingPart(status, line)
   return line or nil
 end
 
+-- A text shown first on the location line (The Drive's clock, thedrive.lua), '' / nil for none.
+local lead = nil
+function M.setLead(text) lead = (text ~= nil and text ~= '') and tostring(text) or nil end
+
 -- The bar's location line now (the UI app's too: hudapps.lua), '' when there is nothing to say.
 function M.text(status, line)
-  return M.compose(loc, nil, M.SHOW_FPS and fps or nil)
+  local t = M.compose(loc, nil, M.SHOW_FPS and fps or nil)
+  if lead then return t ~= '' and (lead .. M.SEP .. t) or lead end
+  return t
 end
 
 -- The loading line under it (the user, 2026-10-23: "make loading on a separate line"), '' when none.

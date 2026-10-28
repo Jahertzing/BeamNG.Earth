@@ -56,6 +56,7 @@ IMAGERY = {
     "md6in": "State of Maryland, MD iMAP / DoIT",
     "naipusda": "USDA NAIP",
     "naip": "USDA NAIP via USGS The National Map",
+    "co_naip2023": "USDA NAIP 2023 via Microsoft Planetary Computer",
     "usgs": "USGS The National Map",
     "eox2023": "EOxCloudless https://cloudless.eox.at by EOX IT Services GmbH "
                "(Contains modified Copernicus Sentinel data 2023)",
@@ -75,6 +76,7 @@ WEATHER_ID = "wx:open-meteo"
 # The full wordings above stay the attribution of record: hello.attribution (the settings page) and CREDITS.md.
 SHORT = {
     "img:md6in": "MD iMAP", "img:naipusda": "USDA NAIP", "img:naip": "USDA NAIP", "img:usgs": "USGS",
+    "img:co_naip2023": "USDA NAIP 2023 (Planetary Computer)",
     "img:eox2023": "EOX Sentinel-2 cloudless 2023 (Copernicus)",
     "img:eox2016": "EOX Sentinel-2 cloudless 2016 (Copernicus)",
     "img:ct2023": "CT ECO", "img:ma2025": "MassGIS", "img:dc2025": "DC OCTO", "img:indiana": "Indiana IGIO",

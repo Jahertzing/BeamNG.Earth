@@ -2,6 +2,20 @@
 
 What changed in each release of BeamNG.Earth, newest first.
 
+## Unreleased (fork)
+
+### New
+- **The Drive**: one key, Stream Deck button or settings-page button for a timed drive from Old Town Frederick to
+  downtown Castle Rock, either through downtown Denver past Union Station (Ctrl+Alt+D) or straight down I-25
+  (Ctrl+Alt+I; no E-470 or other toll roads). It puts the car in Frederick, sets
+  the GPS and the time of day (golden hour by default: 45 minutes before today's real sunset, so it gets dark on the
+  way; or midday, night, or as it is), and starts the clock when the car first moves. The status bar shows the clock,
+  you get a split at Union Station, and the best times per route are kept. Optional autodrive (the setting, or
+  Ctrl+Alt+A on any GPS route). Ctrl+Alt+G and Ctrl+Alt+N set golden hour or night any time.
+- **GPS waypoints and avoided roads**: the GPS route can pass through waypoints in order and keep off toll roads (the
+  server's route request takes `via` and `avoid`). `tools/thedrive_check.py` checks both Drive routes against the
+  live router.
+
 ## 1.7.0 beta (2026-10-27)
 
 > **Join the TGForever Discord, [discord.gg/tgf](https://discord.gg/tgf), to chat, get help, report bugs or help

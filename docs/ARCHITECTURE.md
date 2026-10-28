@@ -956,6 +956,17 @@ three days of testing: dem 741 MB / 7.5k files, imagery 1.4 GB / 35k, deshadow 7
   The earlier cuts (GPU placement with a one-frame sunk-block refresh) blanked the grass for 2-4
   frames and regrew it over ~10 frames per move. CPU placement's normal-driving cost is tracked by
   the benchmark.
+- Grass past the 3D grass (2026-10-28; the user: "im looking miles ahead so like 200m is NOTHING"). GroundCover
+  only places on the physics block (its layer map; the 512² block reaches ~250 m ahead at worst), so the settings
+  page's "Max" grass distance stops at 300 m. Beyond, the ground tiles carry it: the server writes a grass mask
+  beside each textured tile up to L3 (`surface.grass_mask`: WorldCover grassland / moss full, shrubland, cropland
+  and the floor between trees partly, built-up land at lawns(), roads and pads cut out, 128 px, soft-edged;
+  `far_<a>_<key>_grass.dds`, shared by the texture's revisions), and `satmat.lua` gives the material a layer of
+  the same photo with our procedural grass detail and detail normal maps on UV1 (`tools/make_grass_textures.py`:
+  one 32 m repeat holding tufts, clumps and patches, so each mip level carries the scale that fits its distance),
+  shown through the mask, under the asphalt layer. Mean 0.5 grey: the photo's colour stays. A tile built before
+  its land cover was cached goes without (no mask rather than a hole). The settings page's "Grass in the distant
+  ground" turns it off for the tiles loaded after.
 - Optional preload library `tools/gcpatch` (Linux, 0.39.4 only, README there): at game start it
   changes the handler's `and esi, 0x0E` to `and esi, 0` in memory (after checking its first 54
   bytes), so block imports and moves free no grass at all. BeamNG's Lua FFI refuses C function
@@ -1564,7 +1575,7 @@ The user: "make the world look alive ... look like a professionally made map".
   conflicts with (layer file `buildings.drcog2024`); the measured road widths come from the edges of pavement
   first (the nearest edge line either side, median of 3 samples). CC BY 3.0, credited as a map dataset.
   Frederick's cell: 1,848 Overture footprints -> 3,475 roofprints + 12 kept, heights 76 % -> 100 %; 1.6 MB, 4 s.
-- **Lidar heights** (`server/lidarheights.py`, `--lidar-heights on`, off by default; 2026-10-28): in the US, a
+- **Lidar heights** (`server/lidarheights.py`, `--lidar-heights on`, on by default since 2026-10-28: the settings page's "Building heights from USGS lidar"; US cells only): in the US, a
   building whose height is missing or machine-learned takes the median of the USGS 3DEP height-above-ground
   inside its footprint (spikes over 1.5 x median + 4 m dropped): the Planetary Computer's `3dep-lidar-hag`
   rasters (LERC COGs) read as its tile service's z16 PNGs (0-127.5 m, 0.5 m steps, ~8 KB a tile, 16 a map

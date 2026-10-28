@@ -86,6 +86,54 @@ class KitTest(unittest.TestCase):
         door = P[T[M == siding]].reshape(-1, 3)
         self.assertAlmostEqual(float(door[:, 2].max()), fk.GARAGE_H, places=6)
 
+    def test_trims_on_the_native_windows_and_none_in_the_garage_door(self):
+        # upstream 1.7.0's walls are native (earthfast.building_walls): its window quads (material 2) must be exactly
+        # house_window_slots' (where the trims go), with the ones over the garage door left out (they stood in its
+        # plane before, both WIN_OUT_M out)
+        checked = dropped = 0
+        for k in range(40):
+            spec = house(k, w=14.0)
+            if not spec.wall or spec.windows is False:
+                continue
+            road = (np.array([(k * 30.0 - 50.0, -12.0), (k * 30.0 + 80.0, -12.0)]), 4.0)
+            bld.doors([(spec, 0.0, 0.0)], [road], 0.0, 0.0, [])
+            if not spec.drive:
+                continue
+            ring = bld.drawn_ring(spec)
+            z_eave = spec.height
+            m = bld.Mesh()
+            bld._walls(m, spec, ring, -1.0, z_eave, bld._Looks(spec.seed))
+            P, UV, T, M, C = m.arrays()
+            uv = UV.reshape(-1, 4, 2)                                 # (_walls makes quads only)
+            win = np.isclose(uv[:, 0, 0], bld.WIN_UV[0]) & np.isclose(uv[:, 2, 0], bld.WIN_UV[1])                 & np.isclose(uv[:, 0, 1], bld.WIN_UV[2]) & np.isclose(uv[:, 2, 1], bld.WIN_UV[3])
+            q = P.reshape(-1, 4, 3)[win]
+            native = sorted((round(float(x), 6), round(float(y), 6), round(float(z), 6))
+                            for x, y, z in np.c_[q[:, :, :2].mean(1), q[:, :, 2].min(1)])
+            slots = []
+            for i in range(len(ring)):
+                w = fk._wall(ring, i)
+                if w is not None:
+                    a, d, out, L = w
+                    slots += [(round(float(c[0]), 6), round(float(c[1]), 6), round(float(zf), 6))
+                              for c, zf in bld.house_window_slots(spec, a, d, out, L, z_eave, i)]
+            self.assertEqual(native, sorted(slots), "the trims sit on the native windows")
+            edge, _ = spec.drive
+            a, d, out, L = fk._wall(ring, edge)
+            s0, s1 = fk.garage_span(spec, edge, L)
+            base = z_eave - spec.floors * spec.floor_h
+            for x, y, zf in native:
+                s = (x - a[0]) * d[0] + (y - a[1]) * d[1]
+                on = abs((x - a[0]) * d[1] - (y - a[1]) * d[0] - bld.WIN_OUT_M) < 1e-3
+                if on and zf < base + fk.GARAGE_H:
+                    self.assertTrue(s + bld.WIN_W / 2 <= s0 or s - bld.WIN_W / 2 >= s1, "no window in the garage door")
+            nb = int(L // bld.HOUSE_BAY_M)
+            dropped += (nb - (nb % 2)) - sum(1 for x, y, zf in native
+                                             if abs(zf - (base + bld.WIN_SILL)) < 1e-6
+                                             and abs((x - a[0]) * d[1] - (y - a[1]) * d[0] - bld.WIN_OUT_M) < 1e-3)
+            checked += 1
+        self.assertGreater(checked, 3)
+        self.assertGreater(dropped, 0, "some windows were over a garage door")
+
     def test_balconies_on_apartments(self):
         found = 0
         for k in range(30):

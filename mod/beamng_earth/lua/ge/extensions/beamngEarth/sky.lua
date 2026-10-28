@@ -173,6 +173,55 @@ function M.sync()
   return true
 end
 
+-- Pure: the local sunrise and sunset (hours, 0-24 on the clock of utcOffset) on date y-mo-d at (lat, lon), or nil
+-- for a polar day or night. NOAA's general solar position formulas (gml.noaa.gov/grad/solcalc/solareqns.PDF), the
+-- sun's centre 0.833 degrees below the horizon (refraction); good to a minute or two.
+function M.sunTimes(y, mo, d, lat, lon, utcOffset)
+  local cum = { 0, 31, 59, 90, 120, 151, 181, 212, 243, 273, 304, 334 }
+  local leap = (y % 4 == 0 and y % 100 ~= 0) or y % 400 == 0
+  local n = cum[mo] + d + ((leap and mo > 2) and 1 or 0)
+  local g = 2 * math.pi / (leap and 366 or 365) * (n - 1)
+  local eq = 229.18 * (0.000075 + 0.001868 * math.cos(g) - 0.032077 * math.sin(g) - 0.014615 * math.cos(2 * g)
+    - 0.040849 * math.sin(2 * g))
+  local decl = 0.006918 - 0.399912 * math.cos(g) + 0.070257 * math.sin(g) - 0.006758 * math.cos(2 * g)
+    + 0.000907 * math.sin(2 * g) - 0.002697 * math.cos(3 * g) + 0.00148 * math.sin(3 * g)
+  local phi = math.rad(lat)
+  local c = math.cos(math.rad(90.833)) / (math.cos(phi) * math.cos(decl)) - math.tan(phi) * math.tan(decl)
+  if c < -1 or c > 1 then return nil end
+  local ha = math.deg(math.acos(c))
+  local rise = (720 - 4 * (lon + ha) - eq) / 60 + utcOffset
+  local set = (720 - 4 * (lon - ha) - eq) / 60 + utcOffset
+  return rise % 24, set % 24
+end
+
+-- The clock set to `hours` local time today at the player's place (The Drive's golden hour or night, thedrive.lua),
+-- running on at real speed from there. Switches the sky to Manual, saved as the setting as a change in the pause menu
+-- is (choose Real time in the settings to go back). Returns the hours set, or nil without a TimeOfDay.
+function M.setLocalHour(hours)
+  local tod = getTod()
+  hours = tonumber(hours)
+  if not tod or not hours then return nil end
+  if mode ~= 'manual' then
+    M.setMode('manual')
+    local st = rawget(_G, 'beamngEarth_settings')
+    if st and st.set then pcall(st.set, 'skyMode', 'manual') end
+  end
+  local f = M.todFields(os.time(), tonumber(tod.latitude) or 0, tonumber(tod.longitude) or 0, realTz)
+  tod.year, tod.month, tod.day = f.year, f.month, f.day
+  tod.utcOffset = f.utcOffset
+  tod.time = (hours / 24 - 0.5) % 1.0
+  tod.dayLength = M.REAL_DAY_S
+  tod.play = true
+  return hours % 24
+end
+
+-- Pure: today's (epoch's) sunset at (lat, lon) in local hours, or nil (polar).
+function M.sunsetToday(epoch, lat, lon)
+  local f = M.todFields(epoch, lat, lon, realTz)
+  local _, set = M.sunTimes(f.year, f.month, f.day, lat, lon, f.utcOffset)
+  return set
+end
+
 -- A BeamMP server's clock (see serverClock above; nil: the real one again). Synced at once.
 function M.setServerClock(c)
   if type(c) == 'table' and tonumber(c.hours) then

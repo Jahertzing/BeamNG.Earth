@@ -1,5 +1,8 @@
 """Building heights from the USGS 3D Elevation Program's lidar (US), for the buildings whose height is missing or
-machine-learned (optional: --lidar-heights on, BNE_LIDAR_HEIGHTS=1 in every server process; 2026-10-28).
+machine-learned (--lidar-heights on, the default since 2026-10-28, BNE_LIDAR_HEIGHTS=1 in every server process; the
+settings page's "Building heights from USGS lidar" switch, setting lidarHeights, turns it off). Only cells meeting
+COVERAGE (the US: 3DEP's extent) ask for it: elsewhere the buildings layer is the one it was, no request, its cached
+file kept.
 
 Overture gives a height to ~75 % of a US town's buildings, most of them Microsoft's machine-learned estimates; the rest
 get predicted storeys (buildings.plan). 3DEP flew most of the US at 2-20 points a square metre, public domain. Microsoft's
@@ -48,10 +51,19 @@ MIN_PIXELS = 3
 MIN_HEIGHT_M = 2.5
 ML_SOURCES = ("Microsoft ML Buildings", "Google Open Buildings", "Esri Community Maps", "")
 DATASET, LICENSE = "USGS 3DEP Lidar", "public domain"
+# 3DEP's extent, roughly (lon0, lat0, lon1, lat1): the lower 48, Alaska, Hawaii, Puerto Rico and the Virgin Islands
+COVERAGE = ((-125.0, 24.4, -66.9, 49.5), (-180.0, 51.0, -129.0, 71.5), (-160.5, 18.8, -154.7, 22.3),
+            (-67.3, 17.6, -64.5, 18.6))
 
 
 def enabled():
     return os.environ.get(ENV) == "1"
+
+
+def covers(bounds):
+    """Does a cell's (lon0, lat0, lon1, lat1) meet COVERAGE?"""
+    lon0, lat0, lon1, lat1 = bounds
+    return any(lon0 <= x1 and lon1 >= x0 and lat0 <= y1 and lat1 >= y0 for x0, y0, x1, y1 in COVERAGE)
 
 
 def _contains(b, x, y):

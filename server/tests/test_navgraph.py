@@ -71,6 +71,47 @@ class GraphTest(unittest.TestCase):
         ramp = roads.Spec(roads.LINK_M[1], "paved", False, "motorway", True)
         self.assertEqual(navgraph._lanes(navgraph.driving_width(ramp), True), (1, 0), "a ramp: one lane (GitHub #107)")
 
+    def test_osm_lanes_on_the_painted_lanes(self):
+        # I-25 (2026-10-28): OpenStreetMap's three to five lanes a way, rural and urban; the AI's lanes as wide as the
+        # painted ones (roads.lane_layout), not squeezed into the class rule's 7.4 m / 11 m
+        for urban, n in ((False, 3), (True, 4), (True, 5), (False, 2)):
+            w = roads.carriageway("motorway", "paved", urban, None, True, n)
+            sp = roads.Spec(w, "paved", urban, "motorway", True, lanes=n)
+            dw = navgraph.driving_width(sp)
+            self.assertAlmostEqual(dw, n * roads.LANE_W["motorway"], places=6, msg=(urban, n))
+            self.assertEqual(navgraph._lanes(dw, True, sp.lanes), (n, 0))
+            lay = roads.lane_layout(sp)
+            self.assertAlmostEqual(dw, lay["hi"] - lay["lo"], places=6, msg="the width the lane lines are painted on")
+        # a city street's lanes from OpenStreetMap: the parking lanes stay outside the AI's
+        st = roads.Spec(roads.carriageway("residential", "paved", True, None, False, 2), "paved", True, "residential",
+                        False, lanes=2)
+        self.assertAlmostEqual(navgraph.driving_width(st), 2 * roads.LANE_W_DEFAULT, places=6)
+        # no lane count: the class rule as before (a rural Interstate's two lanes)
+        plain = roads.Spec(roads.carriageway("motorway", "paved", False, None, True), "paved", False, "motorway", True)
+        self.assertAlmostEqual(navgraph.driving_width(plain), roads.MOTORWAY_RURAL_M, places=6)
+
+    def test_motorway_flow_over_the_limit(self):
+        f = features([[(0, 0), (400, 0)], [(0, 50), (400, 50)]], ["motorway", "residential"])
+        f.rules["connectors"] = rules([(0, "A", 0.0, 0.0), (0, "B", 1.0, 1.0), (1, "C", 0.0, 0.0), (1, "D", 1.0, 1.0)])
+        f.rules["oneway"] = rules([(0, 1.0)], "float")
+        f.rules["max_speed_kmh"] = rules([], "float")
+        f.rules["subclass"] = rules([])
+        us = navgraph.build(FRAME, [f], flat, (0.0, 0.0))
+        eu = navgraph.build(FRAME, [f], flat, (0.0, 0.0), mph=False)
+        mw = [e[5] for e in us["edges"] if e[2]]
+        res = [e[5] for e in us["edges"] if not e[2]]
+        self.assertTrue(mw and res)
+        for v in mw:
+            self.assertAlmostEqual(v, (65 + navgraph.FLOW_MPH["motorway"]) * navgraph.MPH, places=2,
+                                   msg="mph countries: the motorway's traffic flows over the posted 65")
+        for v in res:
+            self.assertAlmostEqual(v, 25 * navgraph.MPH, places=2, msg="streets: the limit")
+        for e in eu["edges"]:
+            if e[2]:
+                self.assertAlmostEqual(e[5], 120 / 3.6, places=2, msg="km/h countries: the limit")
+        self.assertAlmostEqual(navgraph.road_mph(f, 0, roads.Spec(11.0, "paved", False, "motorway", True)), 65.0,
+                               msg="the speed signs keep the posted limit")
+
     def test_nodes_on_the_curve_of_the_earth(self):
         """10 km from the anchor the ground drawn lies ~7.8 m under the flat plane (the anchor frame's up): the nodes
         too, not at the raw height (the AI's nodes and traffic lights stood over the ground, PR #112's finding)."""

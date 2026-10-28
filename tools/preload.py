@@ -59,29 +59,42 @@ import mapcells  # noqa: E402
 import mapdata as mapdatamod  # noqa: E402
 import netfetch  # noqa: E402
 import overture  # noqa: E402
+import pmtiles as pmtilesmod  # noqa: E402
 import regions as regmod  # noqa: E402
+import staging  # noqa: E402
 
 FREDERICK = (40.0992, -104.9372)
+# Mapterhorn's PMTiles archives (its data-access page: planet.pmtiles to z12, one per z6 tile for z13+, read by range):
+# the same tile bytes as tiles.mapterhorn.com (checked 2026-10-28), ~60 tiles a request instead of one
+MAPTERHORN_PMTILES = "https://download.mapterhorn.com/"
 SERVER_PORT = 47613             # earthd --port's default
 GB = 1e9
 # Rough sizes and times for the estimate: bytes downloaded and written to the cache per request, and seconds per
 # request one at a time (a host runs min(max_conc, workers) at once, within its rate). Calibrated on the 20 km
-# Frederick pre-load (Jeff's PC, 2026-10-28, 29.6 min): Mapterhorn at its 50/s rate (4,209 tiles in 82 s; 173 KB a
-# tile on disk), the town's exports at its 4/s rate (4,595 in 1,150 s; 16 children of ~15 KB: 240 KB a parent), map
+# Frederick pre-load (Jeff's PC, 2026-10-28, 29.6 min): Mapterhorn at its 50/s rate (4,209 tiles in 82 s), the town's exports at its 4/s rate (4,595 in 1,150 s; 16 children of ~15 KB: 240 KB a parent), map
 # cells 2.5 s each on 4 threads (410 in 250 s); the counties' 1024 px exports 260-490 KB, 0.4-1.7 s (probes)
 EST = {
-    "dem": (55e3, 173e3, 0.15),
+    "dem": (75e3, 75e3, 0.15),                  # (the Front Range's tiles: 2.87 GB / 38,357 in the archives)
     "xyz": (30e3, 30e3, 0.1),
-    "export": (380e3, 240e3, 0.9),
-    "export_slow": (300e3, 16 * 45e3, 6.0),     # USGS's NAIP exportImage (summer, busier JPEGs): 2.7-14 s
+    "export": (380e3, 240e3, 1.3),               # the Front Range run: 1.4-1.7/s a county at 2 at once (Douglas 0.7)
+    "export_slow": (300e3, 16 * 45e3, 15.0),    # USGS's NAIP exportImage: ~15 s each in the Front Range run
     # a cell's layer files (~1.3 MB) and the Overture / OSM / canopy range blocks it reads (shared with its neighbours:
     # 112 MB for the first 6 cells of a 1 km test, ~3.8 MB a cell over the real cache's 1.55 GB of map data)
-    "cell": (3.0e6, 3.5e6, 2.5),
+    "cell": (1.3e6, 2.2e6, 1.5),
 }
+# a 4 km test (2026-10-28): 26 cells shared 135 MB of range blocks (the first 6 had taken 112 MB): ~1.2 MB more a
+# cell, ~0.9 MB of layer files, 1.4 s a cell a thread; the Frederick run's 2.5 s had its first blocks to fetch
+EST["sky"] = (150e3, 100e3, 1.0)        # a skyline cell's few layers (the tall filter runs in the fetch plan)
+EST["edges"] = (1.2e6, 240e3, 2.0)      # a cell's edges: GeoJSON pages (~5x the npz); 236 KB a cell in Jeff's cache
+# hosts slower than the export estimate (the live Front Range run, 2026-10-28: seconds a request at 2 at once x 2)
+EST_HOST_SEC = {"apps.douglas.co.us": 3.6}
+ROADS_SHARE = 0.3               # a roads-only cell's share of a full one's bytes and time
+RANGE_BPS = 12e6                # bytes/s of one range request from download.mapterhorn.com (2026-10-28: 8 MB in 0.7 s)
 # The z14 cells' layers: all but the skyline's tall ones (skyline.py builds those per z12 cell)
 CELL_LAYERS = tuple(ly for ly in mapdatamod.ALL_LAYERS if not ly.startswith(("tall_", "tower")))
+ROAD_LAYERS = ("roads", "connectors")          # a tier with mapdata "roads"
 SLOW_HOSTS = {"imagery.nationalmap.gov", "apps.geo.fpac.usda.gov"}
-WORKERS = {"dem": 16, "xyz": 8, "cell": 4}
+WORKERS = {"dem": 16, "xyz": 8, "cell": 8}     # cells: local CPU (the S3 hosts' policy caps the requests)
 MID_PAD = 0.25                  # the DEM's z15-z13 reach this share of far_km round the region
 PROBE_Z, PROBE_PX = 13, 64      # coverage: one 64 px export per z13 tile, 16 px per z15 parent
 PROBE_SHARE = 0.05              # a z15 parent with this share of texels neither white nor black has data
@@ -141,43 +154,107 @@ def route_region(net, a, b, width_km, tier, far_km):
 
 # --- the plan (no network) -------------------------------------------------------------------------------------------
 def plan_dem(region, fine_zoom=None):
-    """DEM keys (z, x, y) with their priority: the coarse rings first (few; the horizon), then the fine zoom with the
-    z12 tiles the ground filter reads, by tier and nearest the home point."""
+    """DEM keys (z, x, y) with their priority: the coarse rings first (few; the horizon), then each tier's finest zoom
+    over its parts (default the block's, dem.FINE_ZOOM; a low tier: e.g. z13) with the z12 tiles the ground filter
+    reads, and the zooms between z13 and it a little round them; by tier and nearest the home point."""
     fz = fine_zoom if fine_zoom is not None else demmod.zoom_for(region.home[0], 1.25, demmod.FINE_ZOOM)
+
+    def dz(v):
+        return fz if v is None else min(int(v), fz)
     far, mid = region.far_m, MID_PAD * region.far_m
     keys = {}
-    for z, pad in ((10, 2 * far), (11, far), (12, far)) + tuple((z, mid) for z in range(13, fz)):
+    for z, pad in ((10, 2 * far), (11, far), (12, far)):
         for x, y in region.ordered(z, region.tiles(z, pad)):
             keys.setdefault((z, x, y), 0)
-    fine = region.tiles(fz)
-    for x, y in region.ordered(fz, fine):
-        if demmod.Dem.ground_filter and fz > demmod.GLOBAL_ZOOM:
-            sh = fz - demmod.GLOBAL_ZOOM
-            keys.setdefault((demmod.GLOBAL_ZOOM, x >> sh, y >> sh), fine[(x, y)])
-        keys.setdefault((fz, x, y), fine[(x, y)])
+    for z in range(13, fz):                  # the middle rings round the parts that go finer than them
+        t = region.tiles(z, mid, where=region.where("dem", lambda v, z=z: dz(v) > z))
+        for x, y in region.ordered(z, t):
+            keys.setdefault((z, x, y), 0)
+    for z in sorted({dz(region.opt(p.tier, "dem")) for p in region.parts}, reverse=True):
+        fine = region.tiles(z, where=region.where("dem", lambda v, z=z: dz(v) == z))
+        for x, y in region.ordered(z, fine):
+            if demmod.Dem.ground_filter and z > demmod.GLOBAL_ZOOM:
+                sh = z - demmod.GLOBAL_ZOOM
+                keys.setdefault((demmod.GLOBAL_ZOOM, x >> sh, y >> sh), fine[(x, y)])
+            keys.setdefault((z, x, y), fine[(x, y)])
     return list(keys.items())
 
 
 def plan_xyz(region, names=("usgs",), skip=()):
-    """[(source, [((source, z, x, y), priority)])]: z16-z15 over the region, z14-z12 over far_km round it."""
+    """[(source, [((source, z, x, y), priority)])]: each tier's USGS zooms over its parts (default z16-z15), z14-z12
+    over far_km round the region."""
     out = []
     for name in names:
         if name in skip:
             continue
         src = imagerymod.SOURCES[name]
         keys = []
-        for z, pad in ((14, region.far_m), (13, region.far_m), (12, region.far_m), (15, 0.0), (16, 0.0)):
+        seen = set()
+        rings = [(z, region.far_m, None) for z in (12, 13, 14)] + \
+                [(z, 0.0, region.where("usgs", lambda v, z=z: z in v)) for z in (14, 15, 16)]
+        for z, pad, where in rings:
             if src.min_zoom <= z <= src.max_zoom:
-                t = region.tiles(z, pad)
-                keys += [((src, z, x, y), t[(x, y)]) for x, y in region.ordered(z, t)
-                         if imagerymod.in_bounds(src, z, x, y)]
+                t = region.tiles(z, pad, where=where)
+                for x, y in region.ordered(z, t):
+                    k = (src, z, x, y)
+                    if k not in seen and imagerymod.in_bounds(*k):
+                        seen.add(k)
+                        keys.append((k, t[(x, y)]))
         out.append((src, keys))
     return out
 
 
 def plan_cells(region):
-    t = region.tiles(mapcells.ZOOM)
-    return [(mapcells.CellKey(mapcells.ZOOM, x, y), t[(x, y)]) for x, y in region.ordered(mapcells.ZOOM, t)]
+    """[(cell, priority, layers)]: the z14 cells of the parts whose tier has map data, every layer (CELL_LAYERS) where
+    one of them asks for all, else the roads (ROAD_LAYERS)."""
+    full = region.tiles(mapcells.ZOOM, where=region.where("mapdata", lambda v: v is True))
+    roads = region.tiles(mapcells.ZOOM, where=region.where("mapdata", lambda v: v == "roads"))
+    t = dict(roads)
+    for k, p in full.items():
+        t[k] = min(p, t.get(k, 99))
+    return [(mapcells.CellKey(mapcells.ZOOM, x, y), t[(x, y)], CELL_LAYERS if (x, y) in full else ROAD_LAYERS)
+            for x, y in region.ordered(mapcells.ZOOM, t)]
+
+def plan_edges(region):
+    """[(cell, priority)]: DRCOG's edges of pavement, per z14 cell of the parts with map data inside DRCOG's area
+    (the road tiles measure their widths from them: drcog.Drcog.widths, by the cell of a road's middle)."""
+    import drcog
+    return [(c, p) for c, p, _ in plan_cells(region) if drcog.covers(c.bounds())]
+
+
+def plan_colormatch(region):
+    """[((source, z, x, y), priority)]: the colour match's Sentinel-2 reference (colormatch.REFS[0], at its GRID_Z) over
+    the USGS tiles it corrects round the parts one drives (a tier with map data): their far ring and a ring of tiles
+    round it (its HALO). (A low tier's far-ring area elsewhere: fetched in game if ever seen.)"""
+    import colormatch
+    src = imagerymod.SOURCES[colormatch.REFS[0]]
+    z = colormatch.GRID_Z
+    t = region.tiles(z, region.far_m + 2 * regmod.tile_m(region.home[0], z),
+                     where=region.where("mapdata", lambda v: bool(v)))
+    return [((src, z, x, y), t[(x, y)]) for x, y in region.ordered(z, t) if imagerymod.in_bounds(src, z, x, y)]
+
+
+def plan_skyline(region):
+    """[(cell, priority, layers)]: the skyline's (skyline.py) per z12 cell round the parts with map data: the towers
+    within its SEND_M, the tall buildings within TALL_M; and the mid ring's buildings per z14 cell within MID_SEND_M
+    (the cells the map-data plan has already are left out)."""
+    import skyline
+    drive = region.where("mapdata", lambda v: v is True)
+    out = []
+    tall = region.tiles(skyline.ZOOM, skyline.TALL_M, where=drive)
+    towers = region.tiles(skyline.ZOOM, skyline.SEND_M, where=drive)
+    for x, y in region.ordered(skyline.ZOOM, towers):
+        key = mapcells.CellKey(skyline.ZOOM, x, y)
+        out.append((key, towers[(x, y)], tuple(v for v in skyline.LAYERS["towers"] if v)))
+        if (x, y) in tall:
+            out.append((key, tall[(x, y)], tuple(v for v in skyline.LAYERS["tall"] if v)))
+    near = {(c.x, c.y) for c, _, ly in plan_cells(region) if ly is CELL_LAYERS}
+    mid = region.tiles(skyline.MID_ZOOM, skyline.MID_SEND_M, where=drive)
+    for x, y in region.ordered(skyline.MID_ZOOM, mid):
+        if (x, y) not in near:
+            out.append((mapcells.CellKey(skyline.MID_ZOOM, x, y), mid[(x, y)] + 1,
+                        tuple(v for v in skyline.LAYERS["mid"] if v)))
+    return out
 
 
 def export_sources(chain, skip=()):
@@ -197,10 +274,9 @@ def plan_exports(region, chain, coverage=None, skip=()):
     srcs = export_sources(chain, skip)
     coverage = coverage or {}
     out = []
-    z18_tiers = {t for t, v in region.tiers.items() if isinstance(v, dict) and v.get("z18")}
-    for z, where in ((17, None), (18, lambda p: p.tier in z18_tiers)):
+    for z in (17, 18):
         k = 2                                       # export=2: a parent of 4 x 4 tiles
-        par = region.tiles(z - k, where=where)
+        par = region.tiles(z - k, where=region.where("exports", lambda v, z=z: z in v))
         for px, py in region.ordered(z - k, par):
             key = (z, px << k, py << k)
             cands = []
@@ -222,9 +298,10 @@ def plan_exports(region, chain, coverage=None, skip=()):
 
 
 # --- the hosts -------------------------------------------------------------------------------------------------------
-def probe_url(src, region):
+def probe_url(src, region, net=None, cache_dir=None):
     """A small request of src near the region (its home, else the middle of where the region meets its box): a 64 px
-    export of a z13 tile, or a z10 tile."""
+    export of a z13 tile (a source with a resolver: its template, which may register it: netfetch.FetchError), or a
+    z10 tile."""
     la, lo = region.home
     if src.bounds and not (src.bounds[0] <= la <= src.bounds[2] and src.bounds[1] <= lo <= src.bounds[3]):
         s, w, n, e = region.bounds
@@ -232,29 +309,37 @@ def probe_url(src, region):
         la, lo = (max(s, bs) + min(n, bn)) / 2, (max(w, bw) + min(e, be)) / 2
     if src.export:
         x, y = (int(v) for v in mapcells.tile_xy(la, lo, PROBE_Z))
-        mb = imagerymod.mercator_bbox(PROBE_Z, x, y)
-        return src.url.format(bbox=",".join(f"{v:.3f}" for v in mb), bbox4326=imagerymod.lat_lon_bbox(mb),
-                              size=PROBE_PX)
+        return imagerymod.export_url(src, PROBE_Z, x, y, PROBE_PX, net, imagery_dir(cache_dir))
     x, y = (int(v) for v in mapcells.tile_xy(la, lo, 10))
     return src.url.format(z=10, x=x, y=y, ty=(1 << 10) - 1 - y)
 
 
-def check_hosts(net, region, chain, only, skip=()):
+def imagery_dir(cache_dir):
+    return os.path.join(cache_dir, "imagery") if cache_dir else None
+
+
+def check_hosts(net, region, chain, only, skip=(), dem_source="tiles", cache_dir=None):
     """{name: (host, error)} of the sources whose host does not answer one small request (DNS, refused, timing out,
     server errors; a 404 is an answer), each host asked once, all at once: their keys are left out instead of failing
     one by one (USDA's NAIP host on Jeff's PC: 608 requests, every one failed). name "dem": Mapterhorn."""
     asked = {}                                      # host -> (url, [names])
+    failed = {}
     if "imagery" in only:
         s, w, n, e = region.bounds
         for src in export_sources(chain, skip):
             if src.bounds and (src.bounds[2] < s or src.bounds[0] > n or src.bounds[3] < w or src.bounds[1] > e):
                 continue
             h = netfetch.host_of(src.url)
-            asked.setdefault(h, (probe_url(src, region), []))[1].append(src.name)
+            try:
+                url = probe_url(src, region, net, cache_dir)
+            except netfetch.FetchError as e:     # (a resolver that cannot register its source)
+                failed[src.name] = (h, f"{type(e).__name__}: {e}"[:120])
+                continue
+            asked.setdefault(h, (url, []))[1].append(src.name)
         if "usgs" not in skip:
             u = imagerymod.SOURCES["usgs"]
             asked.setdefault(netfetch.host_of(u.url), (probe_url(u, region), []))[1].append("usgs")
-    if "dem" in only:
+    if "dem" in only and dem_source == "tiles":     # (the archives: their first read shows it)
         x, y = (int(v) for v in mapcells.tile_xy(*region.home, 10))
         u = demmod.MAPTERHORN["url"].format(z=10, x=x, y=y)
         asked.setdefault(netfetch.host_of(u), (u, []))[1].append("dem")
@@ -269,7 +354,7 @@ def check_hosts(net, region, chain, only, skip=()):
         except Exception as e:  # noqa: BLE001 (any failure: the host is left out this run)
             return host, names, f"{type(e).__name__}: {e}"[:120]
 
-    dead = {}
+    dead = dict(failed)
     if asked:
         with ThreadPoolExecutor(len(asked)) as ex:
             for host, names, err in ex.map(one, asked.items()):
@@ -316,20 +401,22 @@ def save_coverage(cache_dir, src, cov):
     os.replace(tmp, p)
 
 
-def probe_coverage(net, cache_dir, region, chain, skip=(), stop=None, write=True):
+def probe_coverage(net, cache_dir, region, chain, skip=(), stop=None, write=True, new_probes=True):
     """{source name: {(x15, y15): bool}} for the regional export sources whose box meets the region: what is not
     known yet is probed (PROBE_PX px exports of the z13 tiles, the host's own rate). Unknown parents (a failed
     probe) stay out (by the box)."""
     from PIL import Image
-    srcs = [s for s in export_sources(chain, skip) if s.bounds]
-    z13 = region.tiles(PROBE_Z)
+    # (a statewide source with a resolver, the Planetary Computer's NAIP: data in the whole state, a 404 past it; its
+    # probe would be one request per z13 tile of the state)
+    srcs = [s for s in export_sources(chain, skip) if s.bounds and not s.resolver]
+    z13 = region.tiles(PROBE_Z, where=region.where("exports", bool))     # (a tier without photos asks none)
     out = {}
 
     def one(src):
         cov = load_coverage(cache_dir, src)
         todo = [(x, y) for x, y in z13 if imagerymod.in_bounds(src, PROBE_Z, x, y)
                 and (x << 2, y << 2) not in cov]
-        if not todo:
+        if not todo or not new_probes:          # (--no-probe: what was probed before, by the box elsewhere)
             return src, cov, 0, 0
         failed = 0
         lock = threading.Lock()
@@ -339,10 +426,8 @@ def probe_coverage(net, cache_dir, region, chain, skip=(), stop=None, write=True
             if stop is not None and stop.is_set():
                 return
             x, y = t
-            mb = imagerymod.mercator_bbox(PROBE_Z, x, y)
-            url = src.url.format(bbox=",".join(f"{v:.3f}" for v in mb), bbox4326=imagerymod.lat_lon_bbox(mb),
-                                 size=PROBE_PX)
             try:
+                url = imagerymod.export_url(src, PROBE_Z, x, y, PROBE_PX, net, imagery_dir(cache_dir))
                 r = net.get(url, kind="demand")
                 rows = classify_probe(np.asarray(Image.open(io.BytesIO(r.body)).convert("RGB")))
             except netfetch.NotFound:
@@ -559,7 +644,9 @@ class Run:
 def run_all(net, img, dem, md, plan, manifest, only, over_budget=False, stop=None):
     """Fetch the plan: every host's lane at once. Returns the Run (its lanes' counts)."""
     run = Run(net, over_budget, stop)
-    if "dem" in only:
+    if "dem" in only and plan.get("dem_ranges") is not None:
+        dem_range_lane(run, dem, plan["dem_ranges"], manifest)
+    elif "dem" in only:
         host = netfetch.host_of(demmod.MAPTERHORN["url"])
 
         def dem_one(k, prio):
@@ -601,21 +688,167 @@ def run_all(net, img, dem, md, plan, manifest, only, over_budget=False, stop=Non
                     ln.put(prio, k)
         export_lanes(run, img, plan["exports"], manifest)
     if md is not None and "mapdata" in only:
-        def cell_one(key, prio):
-            t = tok("cell", key.z, key.x, key.y)
+        def cell_one(item, prio):
+            key, layers = item
+            t = cell_tok(key, layers)
             if t in manifest:
                 return False
-            todo = tuple(ly for ly in CELL_LAYERS if not md.has(key, ly))
+            todo = tuple(ly for ly in layers if not md.has(key, ly))
             if todo:
                 md.cell(key, layers=todo, kind="demand")
             manifest.add(t)
             return bool(todo)
         ln = run.lane("map cells", "overture", WORKERS["cell"], cell_one)
-        for key, prio in plan["cells"]:
-            if tok("cell", key.z, key.x, key.y) not in manifest:
-                ln.put(prio, key)
+        for key, prio, layers in plan["cells"]:
+            if cell_tok(key, layers) not in manifest:
+                ln.put(prio, (key, layers))
+        if plan.get("skyline"):
+            def sky_one(item, prio):
+                key, layers = item
+                t = tok("sky", key.z, key.x, key.y, *layers)
+                if t in manifest:
+                    return False
+                todo = tuple(ly for ly in layers if not md.has(key, ly))
+                if todo:
+                    md.cell(key, layers=todo, kind="demand")
+                manifest.add(t)
+                return bool(todo)
+            ln = run.lane("skyline cells", "overture", WORKERS["cell"], sky_one)
+            for key, prio, layers in plan["skyline"]:
+                if tok("sky", key.z, key.x, key.y, *layers) not in manifest:
+                    ln.put(prio, (key, layers))
+        if plan.get("edges") and md.drcog() is not None:
+            dc = md.drcog()
+
+            def edge_one(key, prio):
+                t = tok("edges", key.z, key.x, key.y)
+                if t in manifest:
+                    return False
+                if os.path.exists(edges_path(dc, key)):
+                    manifest.add(t)
+                    return False
+                if not run.budget_ok(run.lanes["DRCOG edges"]):
+                    return "deferred"
+                dc.edges(key, kind="demand")
+                manifest.add(t)
+                return True
+            import drcog
+            ln = run.lane("DRCOG edges", drcog.HOST, max(1, net.policy(drcog.HOST).max_conc or 1), edge_one)
+            for key, prio in plan["edges"]:
+                if tok("edges", key.z, key.x, key.y) not in manifest:
+                    ln.put(prio, key)
     run.go()
     return run
+
+
+def edges_path(dc, key):
+    """Where drcog.Drcog.edges keeps a cell's edges (its _cached layout)."""
+    return os.path.join(dc.dir, "edges", str(key.z), str(key.x), f"{key.y}.npz")
+
+
+def cell_tok(key, layers):
+    return tok("cell" if layers is CELL_LAYERS else "cellroads", key.z, key.x, key.y)
+
+
+# --- the DEM from Mapterhorn's PMTiles archives ----------------------------------------------------------------------
+def dem_archive(z, x, y):
+    """The Mapterhorn archive holding a tile: the planet's to z12, else the one of its z6 tile."""
+    name = "planet.pmtiles" if z <= demmod.GLOBAL_ZOOM else f"6-{x >> (z - 6)}-{y >> (z - 6)}.pmtiles"
+    return MAPTERHORN_PMTILES + name
+
+
+class RangeReader:
+    """read(offset, length) of one archive by Range requests through the fetcher (its host's policy and budget); a
+    206 with the right Content-Range, the archive's size the same every time (a new archive mid-run: an error)."""
+
+    def __init__(self, net, url):
+        self.net, self.url, self.size = net, url, None
+
+    def read(self, off, length):
+        r = self.net.get(self.url, kind="demand", headers={"Range": f"bytes={off}-{off + length - 1}"})
+        m = re.match(r"bytes (\d+)-(\d+)/(\d+|\*)", r.headers.get("content-range", ""))
+        if r.status != 206 or not m or int(m.group(1)) != off or len(r.body) != length:
+            raise netfetch.FetchFailed(f"bad range answer: HTTP {r.status}, {r.headers.get('content-range')!r}, "
+                                       f"{len(r.body)} bytes for {length}", self.url, netfetch.host_of(self.url))
+        if m.group(3) != "*":
+            if self.size is None:
+                self.size = int(m.group(3))
+            elif int(m.group(3)) != self.size:
+                raise netfetch.FetchFailed("the archive changed during the run", self.url, netfetch.host_of(self.url))
+        return r.body
+
+
+def plan_dem_ranges(net, keys):
+    """([(priority, (url, start, end, [(key, offset, length)], reader))], [keys not in their archive]) for DEM keys
+    [(key, priority)]: each archive's directories read (a few requests), its tiles merged into ranges
+    (pmtiles.plan_ranges: up to 8 MB, gaps under 256 KB)."""
+    by = {}
+    for k, prio in keys:
+        by.setdefault(dem_archive(*k), []).append((k, prio))
+    ranges, missing = [], []
+    for url, ks in by.items():
+        rd = RangeReader(net, url)
+        arc = pmtilesmod.Archive(rd.read)
+        ids = {pmtilesmod.zxy_to_id(*k): (k, p) for k, p in ks}
+        spans = arc.find(ids)
+        missing += [k for tid, (k, _) in ids.items() if tid not in spans]
+        for s, e, tids in pmtilesmod.plan_ranges(spans):
+            ranges.append((min(ids[t][1] for t in tids),
+                           (url, s, e, [(ids[t][0], spans[t][0], spans[t][1]) for t in tids], rd)))
+    return ranges, missing
+
+
+def write_dem_tile(dem, k, data):
+    """A Mapterhorn tile into the DEM cache, as dem.Dem._download writes one (the same bytes as its tile server's)."""
+    path = dem._path(demmod.MAPTERHORN, *k)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    tmp = f"{path}.{threading.get_ident()}.tmp"
+    with open(tmp, "wb") as f:
+        f.write(data)
+    staging.replace_cached(tmp, path)
+    dem.disk.wrote(path, len(data))
+
+
+def write_dem_miss(dem, k):
+    miss = os.path.join(dem.cache_dir, demmod.MAPTERHORN["name"], str(k[0]), str(k[1]), f"{k[2]}.404")
+    os.makedirs(os.path.dirname(miss), exist_ok=True)
+    open(miss, "wb").close()
+    dem.disk.wrote(miss, 0)
+
+
+def dem_range_lane(run, dem, dem_ranges, manifest):
+    """The DEM as range requests of Mapterhorn's archives: one lane (its host's requests at once), a range per item."""
+    ranges, missing = dem_ranges
+    for k in missing:                           # listed, but not in its archive: a 404 as the tile server's
+        if tok("dem", *k) not in manifest and not dem.has(*k):
+            write_dem_miss(dem, k)
+        manifest.add(tok("dem", *k))
+    host = netfetch.host_of(MAPTERHORN_PMTILES)
+
+    def one(item, prio):
+        url, s, e, entries, rd = item
+        todo = [(k, o, n) for k, o, n in entries if tok("dem", *k) not in manifest and not dem.has(*k)]
+        if not todo:
+            for k, _, _ in entries:
+                manifest.add(tok("dem", *k))
+            return False
+        if not run.budget_ok(run.lanes["dem (PMTiles)"]):
+            return "deferred"
+        body = rd.read(s, e - s)
+        for k, o, n in todo:
+            write_dem_tile(dem, k, body[o - s:o - s + n])
+        for k, _, _ in entries:
+            manifest.add(tok("dem", *k))
+        return True
+    ln = run.lane("dem (PMTiles)", host, max(1, run.net.policy(host).max_conc or 1), one)
+    for prio, item in ranges:
+        ln.put(prio, item)
+
+
+def fallthrough(src):
+    """A source whose failure passes its parents to the next source (USDA's NAIP down: USGS's): the national ones and
+    a resolver's (the Planetary Computer's); a county's failure is left for the next run instead."""
+    return not src.bounds or bool(src.resolver)
 
 
 def export_lanes(run, img, exports, manifest):
@@ -642,7 +875,7 @@ def export_lanes(run, img, exports, manifest):
         done, gaps = export_state(img, src, key)
         if not done:
             if not net.available(lane.host):
-                if not src.bounds:                  # a national source down: the next one
+                if fallthrough(src):                # a national source down: the next one
                     forward(item, prio)
                     return False
                 raise netfetch.HostUnavailable(f"{lane.host} is not answering", host=lane.host)
@@ -654,7 +887,7 @@ def export_lanes(run, img, exports, manifest):
             try:
                 img._download(src, z, x | last, y | last)
             except imagerymod.ImageryError:
-                if not src.bounds:
+                if fallthrough(src):
                     forward(item, prio)
                     return False
                 raise
@@ -691,22 +924,37 @@ def estimate(region, net, img, dem, md, plan, manifest, only, release, coverage=
 
     def row(name, host, needed, todo, est, workers):
         down, wrote, sec = est
+        rows_add(name, host, needed, todo, todo * down, todo * wrote, sec, workers)
+
+    def rows_add(name, host, needed, todo, down, wrote, sec, workers):
         rate = host_rate(net, host, workers, sec)
         p = net.policy(host)
         hours = todo / rate / 3600 if todo else 0.0
         budget = p.daily_hard if p.daily_budget is None else p.daily_budget
         days = math.ceil(todo / budget) if (budget and todo) else (1 if todo else 0)
-        rows.append(dict(name=name, host=host, needed=needed, todo=todo, down=todo * down, wrote=todo * wrote,
+        rows.append(dict(name=name, host=host, needed=needed, todo=todo, down=down, wrote=wrote,
                          hours=hours, days=days, budget=budget, rate=rate))
 
-    if "dem" in only:
+    if "dem" in only and plan.get("dem_ranges") is not None:
+        ranges, missing = plan["dem_ranges"]
+        todo = [(e - s, sum(n for k, _, n in ent if tok("dem", *k) not in manifest and not dem.has(*k)))
+                for _, (url, s, e, ent, rd) in ranges]
+        todo = [(b, w) for b, w in todo if w]
+        down = sum(b for b, _ in todo)
+        host = netfetch.host_of(MAPTERHORN_PMTILES)
+        sec = (down / len(todo) / RANGE_BPS + 0.15) if todo else 1.0
+        rows_add(f"DEM (Mapterhorn PMTiles, {len(plan['dem'])} tiles)", host, len(ranges), len(todo), down,
+                 sum(w for _, w in todo), sec, net.policy(host).max_conc or 1)
+    elif "dem" in only:
         todo = [k for k, _ in plan["dem"] if tok("dem", *k) not in manifest and not dem.has(*k)]
         row("DEM (Mapterhorn)", "tiles.mapterhorn.com", len(plan["dem"]), len(todo), EST["dem"], WORKERS["dem"])
     if "imagery" in only:
         for src, keys in plan["xyz"]:
             todo = [k for k, _ in keys if tok("xyz", src.name, *k[1:]) not in manifest
                     and not any(os.path.exists(p) for p in img._paths(*k))]
-            row(f"{src.name} z12-z16 (XYZ)", netfetch.host_of(src.url), len(keys), len(todo), EST["xyz"],
+            zs = sorted({k[1] for k, _ in keys})
+            row(f"{src.name} z{zs[0]}-z{zs[-1]} (XYZ)" if zs else src.name, netfetch.host_of(src.url), len(keys),
+                len(todo), EST["xyz"],
                 WORKERS["xyz"])
         per = {}
         for key, prio, cands in plan["exports"]:
@@ -720,16 +968,35 @@ def estimate(region, net, img, dem, md, plan, manifest, only, release, coverage=
         for name, d in per.items():
             host = netfetch.host_of(d["src"].url)
             slow = host in SLOW_HOSTS
+            down, wrote, sec = EST["export_slow" if slow else "export"]
             row(f"{name} z{'/z'.join(map(str, sorted(d['z'])))}" + (" (USDA, else USGS: no regional photo)" if not d["src"].bounds
                                                                      else ""),
-                host, d["n"], d["todo"], EST["export_slow" if slow else "export"],
+                host, d["n"], d["todo"], (down, wrote, EST_HOST_SEC.get(host, sec)),
                 max(1, net.policy(host).max_conc or 1))
     if md is not None and "mapdata" in only:
-        todo = [c for c, _ in plan["cells"] if tok("cell", c.z, c.x, c.y) not in manifest
-                and not all(md.has(c, ly) for ly in CELL_LAYERS)]
-        row(f"map cells z14 (Overture {release})", "overturemaps-us-west-2.s3.us-west-2.amazonaws.com",
-            len(plan["cells"]), len(todo), EST["cell"], WORKERS["cell"])
+        todo = [ly for c, _, ly in plan["cells"] if cell_tok(c, ly) not in manifest
+                and not all(md.has(c, x) for x in ly)]
+        full = sum(1 for ly in todo if ly is CELL_LAYERS)
+        part = (full + ROADS_SHARE * (len(todo) - full))      # roads-only cells as a share of a full one
+        down, wrote, sec = EST["cell"]
+        rows_add(f"map cells z14 (Overture {release})" + (f", {len(todo) - full} roads only" if len(todo) > full
+                                                           else ""),
+                 "overturemaps-us-west-2.s3.us-west-2.amazonaws.com", len(plan["cells"]), len(todo), part * down,
+                 part * wrote, sec * part / max(1, len(todo)), WORKERS["cell"])
 
+    if md is not None and plan.get("skyline"):
+        todo = [(c, ly) for c, _, ly in plan["skyline"] if tok("sky", c.z, c.x, c.y, *ly) not in manifest
+                and not all(md.has(c, x) for x in ly)]
+        rows_add("skyline cells (tall layers z12, mid ring z14)", "overturemaps-us-west-2.s3.us-west-2.amazonaws.com",
+                 len(plan["skyline"]), len(todo), len(todo) * EST["sky"][0], len(todo) * EST["sky"][1], EST["sky"][2],
+                 WORKERS["cell"])
+    if md is not None and plan.get("edges"):
+        import drcog
+        dc = drcog.Drcog(md.raw_dir, net)
+        todo = [c for c, _ in plan["edges"] if tok("edges", c.z, c.x, c.y) not in manifest
+                and not os.path.exists(edges_path(dc, c))]
+        row("DRCOG edges of pavement (z14 cells)", drcog.HOST, len(plan["edges"]), len(todo), EST["edges"],
+            net.policy(drcog.HOST).max_conc or 1)
     print(f"  {'':40s} {'needed':>7s} {'to fetch':>8s} {'MB down':>8s} {'MB disk':>8s} {'hours':>6s} {'req/s':>6s} "
           f"{'budget/day':>10s} {'days':>4s}")
     for r in rows:
@@ -745,10 +1012,14 @@ def estimate(region, net, img, dem, md, plan, manifest, only, release, coverage=
           f"{longest:6.1f}   (hosts in parallel: the slowest sets the time)")
     edge = edge_parents(plan["exports"], coverage) if coverage else 0
     if edge:
-        nat = [r for r in rows if "USGS" in r["name"]]
-        extra = edge * EST["export_slow"][2] / max(1, net.policy("imagery.nationalmap.gov").max_conc or 1) / 3600
-        print(f"  + up to {edge} z17 parents on a county's edge may need the next source too (the worst case, all of "
-              f"them to USGS's NAIP: +{extra:.1f} h{', ' + str(math.ceil((edge + (nat[0]['todo'] if nat else 0)) / 3000)) + ' days of its budget' if edge > 1500 else ''})")
+        # the next source of a county's parent: the state's NAIP 2023 where it is in the plan, else USGS's NAIP
+        nat = [r for r in rows if r["name"].startswith("co_naip2023")] or [r for r in rows if "USGS" in r["name"]]
+        if nat and nat[0]["name"].startswith("co_naip2023"):
+            extra, who = edge / nat[0]["rate"] / 3600, "the Planetary Computer's NAIP 2023"
+        else:
+            extra = edge * EST["export_slow"][2] / max(1, net.policy("imagery.nationalmap.gov").max_conc or 1) / 3600
+            who = "USGS's NAIP"
+        print(f"  + up to {edge} z17 parents on a county's edge may need the next source too ({who}: +{extra:.1f} h)")
         longest = max(longest, (nat[0]["hours"] if nat else 0.0) + extra)
     slow = max(rows, key=lambda r: r["hours"]) if rows else None
     if slow and slow["hours"] > 0:
@@ -835,11 +1106,25 @@ def main(argv=None):
                     help="the cache's cap (default: the one the mod set, else cache.DEFAULT_CAP_GB; 0 = unlimited)")
     ap.add_argument("--dry-run", action="store_true", help="print the plan and its size, fetch nothing (but the "
                                                            "coverage probe, a few hundred small images)")
-    ap.add_argument("--no-probe", action="store_true", help="no coverage probe: each regional source by its box")
+    ap.add_argument("--no-probe", action="store_true", help="no new coverage probes: the coverage probed before, "
+                                                           "elsewhere each regional source by its box")
     ap.add_argument("--over-budget", action="store_true", help="past a host's soft daily budget: on at half rate")
     ap.add_argument("--recheck", action="store_true", help="ignore the manifest (check every key on disk)")
+    ap.add_argument("--dem-source", choices=("pmtiles", "tiles"), default="pmtiles",
+                    help="the DEM by range requests of Mapterhorn's PMTiles archives (~60 tiles a request), or one "
+                         "request a tile from its tile server")
+    ap.add_argument("--no-host-check", action="store_true", help="no up-front request to each host")
     ap.add_argument("--drcog", choices=("on", "off"), default="on",
-                    help="DRCOG's roofprints in the buildings, as the server's --drcog (the settings page: default on)")
+                    help="DRCOG's roofprints in the buildings and its edges of pavement for the road widths, as the "
+                         "server's --drcog (the settings page: default on)")
+    ap.add_argument("--colormatch", choices=("on", "off"), default="on",
+                    help="the colour match's Sentinel-2 reference tiles (EOX z14), as the server's --colormatch s2 "
+                         "(its default with USGS in the chain)")
+    ap.add_argument("--skyline", choices=("on", "off"), default="on",
+                    help="the skyline's tall buildings and towers per z12 cell round the region, as the server's "
+                         "--skyline (default on)")
+    ap.add_argument("--lidar-heights", choices=("on", "off"), default="off",
+                    help="the 3DEP lidar building heights in the map cells, as the server's --lidar-heights")
     ap.add_argument("--allow-running", action="store_true",
                     help="run even while a world server listens on its port (its cache index may lose this run's)")
     a = ap.parse_args(argv)
@@ -857,6 +1142,7 @@ def main(argv=None):
         return 2
 
     os.environ["BNE_DRCOG"] = "1" if a.drcog == "on" else "0"   # (mapdata names a cell's buildings by it)
+    os.environ["BNE_LIDAR_HEIGHTS"] = "1" if a.lidar_heights == "on" else "0"   # (and builds their heights with it)
     # (a dry run keeps out of the day's request counts: a running server saves its own over them)
     net = netfetch.Fetcher(stats_dir=None if a.dry_run else os.path.join(cache_dir, "netstats"))
     if a.region:
@@ -891,21 +1177,34 @@ def main(argv=None):
           + (f"; manifest: {len(manifest.done)} keys done" if manifest.done else ""))
     stop = threading.Event()
     chain = [imagerymod.SOURCES[nm] for nm in imagerymod.DEFAULT_CHAIN]
-    dead = check_hosts(net, region, chain, only, skip)
+    dead = {} if a.no_host_check else check_hosts(net, region, chain, only, skip, a.dem_source, cache_dir)
     for name, (host, err) in dead.items():
         print(f"  ! left out: {name} ({host} does not answer: {err})", flush=True)
     skip |= set(dead) - {"dem"}
     if "dem" in dead:
         only.discard("dem")
     coverage = None
-    if "imagery" in only and not a.no_probe:
-        coverage = probe_coverage(net, cache_dir, region, chain, skip, stop)
+    if "imagery" in only:
+        coverage = probe_coverage(net, cache_dir, region, chain, skip, stop, new_probes=not a.no_probe)
     plan = {
         "dem": plan_dem(region) if "dem" in only else [],
         "xyz": plan_xyz(region, skip=skip) if "imagery" in only else [],
         "exports": plan_exports(region, chain, coverage, skip) if "imagery" in only else [],
         "cells": plan_cells(region) if md is not None else [],
+        "edges": plan_edges(region) if md is not None and a.drcog == "on" else [],
+        "skyline": plan_skyline(region) if md is not None and a.skyline == "on" else [],
     }
+    if "imagery" in only and a.colormatch == "on" and "usgs" not in skip:
+        plan["xyz"].append((imagerymod.SOURCES["eox2023"], plan_colormatch(region)))
+    if plan["dem"] and a.dem_source == "pmtiles":
+        todo = [(k, p) for k, p in plan["dem"] if tok("dem", *k) not in manifest and not dem.has(*k)]
+        t0 = time.monotonic()
+        try:
+            plan["dem_ranges"] = plan_dem_ranges(net, todo)
+            print(f"  DEM: {len(todo)} tiles to fetch in {len(plan['dem_ranges'][0])} range requests of Mapterhorn's "
+                  f"archives (their directories read in {time.monotonic() - t0:.0f} s)", flush=True)
+        except (netfetch.FetchError, pmtilesmod.PMTilesError) as e:
+            print(f"  ! Mapterhorn's archives cannot be read ({e}): one request a tile instead", flush=True)
     est = estimate(region, net, img, dem, md, plan, manifest, only, a.release, coverage)
     check_cap(cache_dir, a.cache_cap, est["wrote"], a.dry_run)
     if a.dry_run:

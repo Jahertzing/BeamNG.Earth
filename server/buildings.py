@@ -814,6 +814,35 @@ DOOR_GAP_M = 0.75           # m each side of a front door kept free of the groun
 WIN_OUT_M = 0.03            # m the window stands proud of its wall
 
 
+def _band_v(band, k):
+    """v range (bottom, top) of band k (0 = the image top) of a 4-band sheet; a hair inside it (the walls moved into
+    Rust with 1.7.0: still used by skyline.mesh)."""
+    eps = 1.5 / 1024
+    return 1.0 - (k + 1) / BANDS + eps, 1.0 - k / BANDS - eps
+
+
+def _plain_strip(m, pa, pb, za, zb, bays_per_tile, bay_w, v0, v1, mat, whole=False):
+    """The wall from pa to pb (za..zb) in slices of the band's plain strip between its first two windows, at the
+    sheet's own scale (a bay of the sheet = bay_w m). The wall behind a front door was one texel of the sheet
+    stretched over it, a blurred smear round every door (the user, 2026-10-17). whole (the lite mesh: far buildings,
+    a near tile's distant detail): one slice stretched over it (the plinths of buildings on a slope were ~78 % of a
+    far buildings tile's quads, ~1 m slices nobody sees from 600 m). The walls moved into Rust with 1.7.0; kept for
+    skyline.mesh."""
+    ax, ay, bx, by = float(pa[0]), float(pa[1]), float(pb[0]), float(pb[1])
+    dx, dy = bx - ax, by - ay
+    L = math.hypot(dx, dy)
+    if L < 1e-3:
+        return
+    c, h = 1.0 / bays_per_tile, 0.5 * PLAIN_STRIP / bays_per_tile
+    sw = max(0.1, PLAIN_STRIP * bay_w)                  # m one slice covers
+    n = 1 if whole else max(1, int(round(L / sw)))
+    uva, uvb, uvc, uvd = (c - h, v0), (c + h, v0), (c + h, v1), (c - h, v1)
+    for j in range(n):
+        t0, t1 = j / n, (j + 1) / n
+        qax, qay, qbx, qby = ax + dx * t0, ay + dy * t0, ax + dx * t1, ay + dy * t1
+        m.quad((qax, qay, za), (qbx, qby, za), (qbx, qby, zb), (qax, qay, zb), uva, uvb, uvc, uvd, mat)
+
+
 _WALL_CONSTS = None
 
 
@@ -864,9 +893,49 @@ def _walls(m, spec, ring, z0, z_eave, mat_idx, lite=False):
         bool(spec.shop), int(door[0]) if door else -1, float(door[1]) if door else 0.0, spec.roof == "flat",
         float(spec.seed) if isinstance(spec.seed, float) else 0.0, spec.windows is False,
         int(spec.front) if spec.front is not None else -1, bool(lite), _WALL_CONSTS)
+    if mid and spec.wall and spec.windows is not False and getattr(spec, "drive", None) and not lite:
+        P, UV, mid = _garage_windows_out(spec, ring, z_eave, P, UV, mid)
     if mid:
         m.quads(P, UV, mid, [mat_idx[spec.facade], mat_idx[SHOP] if (spec.shop or spec.wall) else None,
                              mat_idx["bne_bld_fac_white"] if spec.wall else None])
+
+
+def _garage_windows_out(spec, ring, z_eave, P, UV, mid):
+    """building_walls' quads without the ground floor's windows over the house's garage door (facadekit.garage_span,
+    with house_window_slots' 0.3 m margin): the native loop (upstream 1.7.0) lays the windows in every bay but the
+    front door's, and its API has no gap to pass; a window there stood in the garage door's plane (both WIN_OUT_M out:
+    z-fighting). Each window is one quad of material 2; the trims (facadekit.windows) round house_window_slots, the
+    same windows. (P, UV, mid) as given, less those quads."""
+    import facadekit
+    ring = np.asarray(ring, np.float64)[:, :2]
+    e = int(spec.drive[0])
+    if not 0 <= e < len(ring):
+        return P, UV, mid
+    a, b = ring[e], ring[(e + 1) % len(ring)]
+    L = float(math.hypot(*(b - a)))
+    gs = facadekit.garage_span(spec, e, L) if L > 1e-6 else None
+    if gs is None:
+        return P, UV, mid
+    d = (b - a) / L
+    M = (np.frombuffer(bytes(mid), np.uint8) if isinstance(mid, (bytes, bytearray)) else np.asarray(mid)).astype(np.int64)
+    w = np.flatnonzero(M == 2)
+    if not len(w):
+        return P, UV, mid
+    Q = np.asarray(P, np.float64).reshape(-1, 4, 3)[w]
+    c = Q[:, :, :2].mean(1) - a
+    s = c @ d
+    off = c[:, 0] * d[1] - c[:, 1] * d[0]                  # (out from the wall: WIN_OUT_M on this wall)
+    zf0 = z_eave - spec.floors * spec.floor_h + WIN_SILL
+    drop = ((np.abs(off - WIN_OUT_M) < 1e-3) & (s > -1e-6) & (s < L + 1e-6)
+            & (np.abs(Q[:, :, 2].min(1) - zf0) < 1e-6)
+            & (s + WIN_W / 2 > gs[0] - 0.3) & (s - WIN_W / 2 < gs[1] + 0.3))
+    if not drop.any():
+        return P, UV, mid
+    keep = np.ones(len(M), bool)
+    keep[w[drop]] = False
+    k = np.flatnonzero(keep)
+    return (np.asarray(P, np.float64).reshape(-1, 12)[k].ravel().tolist(),
+            np.asarray(UV, np.float64).reshape(-1, 8)[k].ravel().tolist(), M[k].tolist())
 
 
 PLAIN_STRIP = 0.3           # of a bay: the plain wall between two windows of a sheet's band (centred on a bay edge)
@@ -3231,8 +3300,9 @@ def _sky_mesh(items):
         windows = spec.windows is not False
         wall = (ms if windows else mi, _sky_colour(spec.facade, f))
         roof = (mi, _sky_colour(spec.roof_mat or ROOF_FLAT, f))
-        z0 = gmin - SKIRT_LITE_M
-        z1 = base_z(spec, gmin, gmax) + float(spec.min_h or 0.0) + float(spec.height or 0.0)
+        mh = float(spec.min_h or 0.0)
+        z0 = gmin - SKIRT_LITE_M if mh <= 0.5 else base_z(spec, gmin, gmax) + mh     # (a part over another: its own)
+        z1 = base_z(spec, gmin, gmax) + mh + float(spec.height or 0.0)
         if z1 <= z0 + 0.5:
             continue
         n = len(ring)
@@ -3252,6 +3322,8 @@ def _sky_mesh(items):
             else:
                 m.quad((a[0], a[1], z0), (b[0], b[1], z0), (b[0], b[1], z1), (a[0], a[1], z1), uv, uv, uv, uv, wall)
         m.poly([(p[0], p[1], z1) for p in ring], [uv] * n, roof)
+        if mh > 0.5:                                # (its underside)
+            m.poly([(p[0], p[1], z0) for p in ring[::-1]], [uv] * n, wall)
     if not m.n:
         return None
     P, UV, T, M, C = m.arrays()
