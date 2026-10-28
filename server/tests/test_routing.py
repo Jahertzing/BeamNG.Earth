@@ -1,4 +1,5 @@
 """routing: the GPS's whole-route planning (OSRM response handling, simplification)."""
+import json
 import sys
 import unittest
 import numpy as np
@@ -44,6 +45,50 @@ class RoutingTest(unittest.TestCase):
         self.assertTrue(u.startswith("https://routing.openstreetmap.de/"))
         self.assertNotIn("bearings", u)
         self.assertTrue(routing.url(39.28, -76.59, 38.9, -77.03, 370).endswith("&bearings=10,60;"))
+
+    def test_url_via(self):
+        # The Drive: Frederick -> Denver Union Station -> Castle Rock, the waypoint between the ends, in order
+        u = routing.url(40.1, -104.94, 39.37, -104.86, via=[[39.7527, -105.0], ("bad", 1), [95, 0]])
+        self.assertIn("-104.940000,40.100000;-105.000000,39.752700;-104.860000,39.370000?", u)
+        # one bearing per coordinate, only the start's set
+        self.assertTrue(routing.url(40.1, -104.94, 39.37, -104.86, 180, [[39.7527, -105.0]]).endswith(
+            "&bearings=180,60;;"))
+        self.assertEqual(len(routing.clean_via([[1, 2]] * 20)), routing.MAX_VIA)
+        self.assertEqual(routing.clean_via(None), [])
+
+    def test_url_exclude(self):
+        self.assertTrue(routing.url(40.1, -104.94, 39.37, -104.86, exclude="toll").endswith("&exclude=toll"))
+        self.assertNotIn("exclude", routing.url(40.1, -104.94, 39.37, -104.86, exclude="bogus"))
+
+    def test_plan_exclude_falls_back_without_it(self):
+        import netfetch
+        seen = []
+
+        class Net:
+            def get(self, u, kind=None):
+                seen.append(u)
+                if "exclude" in u:
+                    raise netfetch.FetchFailed(f"{u}: HTTP 400", u, status=400)
+                body = json.dumps({"code": "Ok", "routes": [{"distance": 9.0, "duration": 1.0, "geometry": {
+                    "coordinates": [[-104.94, 40.1], [-104.86, 39.37]]}}]}).encode()
+                return type("R", (), {"body": body})()
+        r = routing.plan(40.1, -104.94, 39.37, -104.86, Net(), None, None, "toll")
+        self.assertEqual(r["dist"], 9.0)
+        self.assertIn("exclude=toll", seen[0])
+        self.assertNotIn("exclude", seen[-1])
+
+    def test_plan_passes_the_via_on(self):
+        seen = []
+
+        class Net:
+            def get(self, u, kind=None):
+                seen.append(u)
+                body = json.dumps({"code": "Ok", "routes": [{"distance": 9.0, "duration": 1.0, "geometry": {
+                    "coordinates": [[-104.94, 40.1], [-105.0, 39.75], [-104.86, 39.37]]}}]}).encode()
+                return type("R", (), {"body": body})()
+        r = routing.plan(40.1, -104.94, 39.37, -104.86, Net(), 90, [[39.7527, -105.0]])
+        self.assertEqual(len(r["points"]), 3)
+        self.assertIn(";-105.000000,39.752700;", seen[0])
 
 
 if __name__ == "__main__":

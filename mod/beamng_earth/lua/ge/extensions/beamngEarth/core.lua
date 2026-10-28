@@ -1860,6 +1860,13 @@ local function onUpdate(dtReal, dtSim)
   local stg = rawget(_G, 'beamngEarth_settings')
   if stg and stg.redirectBigMap then stg.redirectBigMap(st.inOurLevel) end
   if st.inOurLevel then gps.update(st.anchor, st.player) end
+  do -- The Drive: Frederick to Castle Rock, timed (thedrive.lua; required here: the main chunk is at Lua's 200 locals)
+    local thedrive = require('beamngEarth/thedrive')
+    local okD, errD = pcall(thedrive.update, dtReal, dtSim, st.inOurLevel and st.player or nil,
+      function() return loadLine() ~= false end)
+    if not okD then log('W', 'beamngEarth', 'the drive: ' .. tostring(errD)) end
+    statusbar.setLead(thedrive.hudLine(thedrive.status()))
+  end
   seasonlook.update(st.inOurLevel, st.anchor and st.anchor.lat)
   t = mark('ui', t)
   local frameMs = frameMs0
@@ -2408,9 +2415,12 @@ function M.requestGeocode(id, q, lat, lon)
   net.send({ type = 'geocode', id = id, q = q, lat = lat, lon = lon })
   return true
 end
-function M.requestRoute(id, lat0, lon0, lat1, lon1, bearing)
+-- via (optional): {{lat, lon}...} the route passes through in order (gps.lua's waypoints); avoid (optional): a road
+-- class it keeps off ('toll')
+function M.requestRoute(id, lat0, lon0, lat1, lon1, bearing, via, avoid)
   if not net.isConnected() then return false end
-  net.send({ type = 'route', id = id, lat0 = lat0, lon0 = lon0, lat1 = lat1, lon1 = lon1, bearing = bearing })
+  net.send({ type = 'route', id = id, lat0 = lat0, lon0 = lon0, lat1 = lat1, lon1 = lon1, bearing = bearing, via = via,
+    avoid = avoid })
   return true
 end
 function M.takeRoute(id)

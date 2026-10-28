@@ -37,6 +37,10 @@ M.LEVEL_ID = 'beamng_earth'
 
 -- key -> { kind = 'number'|'bool'|'enum', default, min, max, values, label }. Order = ORDER.
 M.SCHEMA = {
+  -- The Drive (thedrive.lua): the time of day it starts at and whether the car drives itself
+  theDriveTime = { kind = 'enum', default = 'golden', values = { 'golden', 'midday', 'night', 'real' },
+    label = 'The Drive: time of day' },
+  theDriveAutodrive = { kind = 'bool', default = false, label = 'The Drive: autodrive' },
   rebaseDistance = { kind = 'number', default = rebase.DEFAULT_DISTANCE, min = rebase.MIN_DISTANCE,
     max = rebase.MAX_DISTANCE, label = 'Rebase distance (m)' },
   viewDistanceMode = { kind = 'enum', default = 'horizon', values = { 'fixed', 'horizon' }, label = 'View distance' },
@@ -82,7 +86,7 @@ M.SCHEMA = {
   -- not on the page: the newer version whose update notice the player dismissed (core.lua drawUpdateNotice)
   updateDismissed = { kind = 'string', default = '', maxLen = 40, label = 'Update notice dismissed (version)' },
 }
-M.ORDER = { 'rebaseDistance', 'viewDistanceMode', 'viewDistanceKm', 'hazeStrength', 'skyMode', 'clouds',
+M.ORDER = { 'theDriveTime', 'theDriveAutodrive', 'rebaseDistance', 'viewDistanceMode', 'viewDistanceKm', 'hazeStrength', 'skyMode', 'clouds',
   'weatherMode', 'realGravity', 'groundCover', 'groundCoverDensity', 'groundCoverDistance', 'rocks', 'roads', 'drcog',
   'dashboardSatellite', 'hudVisible', 'statusBar',
   'placeNamesOnline', 'creditsVisible', 'beammpOnLaunch',
@@ -383,6 +387,8 @@ function M.uiState()
   -- the cache folder and the BeamMP launcher (the server's app_paths), asked with the cache numbers
   if core and core.appPath and cachePolls % M.CACHE_POLL == 1 then core.appPath() end
   status.paths = core and core.appPathState and core.appPathState() or nil
+  local okD, drive = pcall(function() return require('beamngEarth/thedrive').records() end)
+  status.theDrive = okD and drive or nil       -- The Drive's best times per route
   local schema = {}
   for _, k in ipairs(M.ORDER) do
     local s = M.SCHEMA[k]
@@ -585,6 +591,21 @@ function M.uiMapGps(lat, lon, name)
   local gps = require('beamngEarth/gps')
   if lat == nil then gps.clear() return { ok = true } end
   return { ok = gps.setDestination(lat, lon, name) }
+end
+
+-- The Drive (thedrive.lua): the keys (actions/beamngEarth.json) start it at once; the page's buttons close the menu
+-- first. route: 'downtown' | 'i25'. uiTheDrive answers { ok, error, records }; uiTheDriveState { records, run }.
+function M.theDrive(route, opts)
+  return require('beamngEarth/thedrive').start(route, opts)
+end
+function M.uiTheDrive(route)
+  M.navigate('play')
+  local ok, err = require('beamngEarth/thedrive').start(route)
+  return { ok = ok and true or false, error = err, records = require('beamngEarth/thedrive').records() }
+end
+function M.uiTheDriveState()
+  local d = require('beamngEarth/thedrive')
+  return { records = d.records(), run = d.status() }
 end
 
 -- The map's GPS "Autodrive": the player's car drives itself along the route (gps.lua) / stops doing so.

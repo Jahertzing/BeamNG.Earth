@@ -2957,16 +2957,16 @@ class Connection:
         files.request(want)
 
     async def route(self, msg):
-        """{"id", "lat0", "lon0", "lat1", "lon1"} -> route_result {"id", "points": [[lat, lon]...], "dist", "dur",
-        "elev": [[dist_m, elev_m], ...]?, "error"?}. Also (re)starts this route's corridor prefetch (route_download,
-        routeahead.py)."""
+        """{"id", "lat0", "lon0", "lat1", "lon1", "bearing"?, "via": [[lat, lon], ...]?, "avoid": "toll"?} ->
+        route_result {"id", "points": [[lat, lon]...], "dist", "dur", "elev": [[dist_m, elev_m], ...]?, "error"?}.
+        Also (re)starts this route's corridor prefetch (route_download, routeahead.py)."""
         self.route_dl_version += 1
         version = self.route_dl_version
         out = {"type": "route_result", "id": msg.get("id"), "points": [], "dist": 0.0, "dur": 0.0}
         try:
             r = await asyncio.get_running_loop().run_in_executor(
                 self.s.ui_pool, routingmod.plan, float(msg["lat0"]), float(msg["lon0"]), float(msg["lat1"]),
-                float(msg["lon1"]), self.s.net, msg.get("bearing"))
+                float(msg["lon1"]), self.s.net, msg.get("bearing"), msg.get("via"), msg.get("avoid"))
             out.update(r)
         except Exception as e:          # offline, no route, rate limited: the mod falls back to steering
             out["error"] = f"{type(e).__name__}: {e}"[:200]
@@ -2976,8 +2976,10 @@ class Connection:
                     self.s.ui_pool, self._route_elevation, out["points"])
             except Exception as e:
                 log.debug("route elevation: %s: %s", type(e).__name__, e)
-        log.info("route %d (%s, %s -> %s, %s): %d points, %.1f km%s", int(msg.get("id") or 0), msg.get("lat0"),
-                 msg.get("lon0"), msg.get("lat1"), msg.get("lon1"), len(out["points"]), out["dist"] / 1000,
+        log.info("route %d (%s, %s -> %s, %s%s): %d points, %.1f km%s", int(msg.get("id") or 0), msg.get("lat0"),
+                 msg.get("lon0"), msg.get("lat1"), msg.get("lon1"),
+                 f", {len(routingmod.clean_via(msg.get('via')))} via" if msg.get("via") else "", len(out["points"]),
+                 out["dist"] / 1000,
                  (" (" + out["error"] + ")") if "error" in out else "")
         self.send(out)
         self.route_download(version, out["points"])

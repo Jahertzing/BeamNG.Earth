@@ -237,5 +237,20 @@ check(math.abs(sky.serverHours({ hours = 23, speed = 60, epoch = 1000 }, 1000 + 
 check(sky.setServerClock({ hours = 21, speed = 0 }) ~= nil and sky.serverClock().hours == 21, 'server clock set')
 check(sky.setServerClock(nil) == nil and sky.serverClock() == nil, 'cleared: the real clock again')
 
+-- sunrise / sunset (The Drive's golden hour), Denver's published times: midsummer 5:32 / 20:31 MDT, midwinter
+-- 7:18 / 16:39 MST
+local rise, set = sky.sunTimes(2026, 6, 21, 39.7392, -104.9903, -6)
+check(rise and near(rise, 5 + 32 / 60, 0.05) and near(set, 20 + 31 / 60, 0.05), 'Denver midsummer: ' .. tostring(set))
+rise, set = sky.sunTimes(2026, 12, 21, 39.7392, -104.9903, -7)
+check(rise and near(rise, 7 + 18 / 60, 0.05) and near(set, 16 + 39 / 60, 0.05), 'Denver midwinter: ' .. tostring(set))
+check(sky.sunTimes(2026, 6, 21, 80, 0, 0) == nil, 'a polar day: none')
+-- the clock set to a local hour: manual, today, running at real speed
+getCurrentLevelIdentifier = function() return 'beamng_earth' end
+sky.setMode('real')
+check(sky.setLocalHour(21.5) == 21.5, 'set to 21:30')
+check(sky.getMode() == 'manual' and near(tod.time, (21.5 / 24 - 0.5) % 1, 1e-9) and tod.play == true
+  and tod.dayLength == sky.REAL_DAY_S, 'manual, 21:30, the clock running')
+sky.setMode('real')
+
 print(string.format('test_sky: %d passed, %d failed', pass, fail))
 os.exit(fail == 0 and 0 or 1)
