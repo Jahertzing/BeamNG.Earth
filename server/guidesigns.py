@@ -296,14 +296,16 @@ def parse_ref(text):
     if m:
         card = m.group(1).upper()
         t = t[:m.start()].strip()
+    toll = bool(re.search(r"\btoll\b", t, re.I))            # ("E470 Toll", "Northwest Parkway Toll")
+    t = re.sub(r"\s*\b(toll|expr|express)\b\s*", " ", t, flags=re.I).strip()
     m = re.match(r"^([A-Za-z]+)[\s-]*([0-9]+[A-Za-z]?)$", t)
     if m:
         net = m.group(1).upper()
         if net in ("C", "SH", "CO", "COLO"):
             net = "CO"
-        if net == "E" and m.group(2) == "470":
-            net = "E"
         return net, m.group(2), card
+    if toll and t:                  # a toll road without a number: its name on the toll shield
+        return "TOLL", street_name(t), card
     return "", t, card
 
 
@@ -337,7 +339,7 @@ def shield(network, number, h=SHIELD_H):
         f.text_c("COLORADO", h * 0.075, w / 2, h * 0.655, "k", 4)
         f.text_c(num, h * (0.40 if len(num) <= 2 else 0.34), w / 2, h * 0.14, "w", 4)
     elif kind == "toll":
-        label = f"{network}-{num}" if network else num
+        label = num if not network or "TOLL" in network.upper() else f"{network}-{num}"
         w = max(h * 1.2, text_width(label, h * 0.32) + h * 0.3)
         f.poly(rounded_rect(0, 0, w, h, h * 0.08), WHITE, 1)
         f.poly(rounded_rect(h * 0.04, h * 0.04, w - h * 0.04, h - h * 0.04, h * 0.06), (0, 92, 150), 2)
@@ -775,7 +777,8 @@ class Net:
             if len(nodes) < 2 or len(nodes) != len(geom):
                 continue
             self.ways.append({"id": int(w["id"]), "tags": tags, "link": link, "nodes": nodes, "geom": geom,
-                              "refs": [parse_ref(r) for r in _split(tags.get("ref"))]})
+                              "refs": [] if re.search(r"\bEXPR", tags.get("ref", ""), re.I)     # (express lanes:
+                              else [parse_ref(r) for r in _split(tags.get("ref"))]})          # not the route's)
         self.at, self.starts, self.ends, self.coord = {}, {}, {}, {}
         for wi, w in enumerate(self.ways):
             for k, (n, p) in enumerate(zip(w["nodes"], w["geom"])):
@@ -818,6 +821,8 @@ class Net:
         tags = self.ways[wi]["tags"]
         sh = [parse_ref(r) for r in _split(tags.get("destination:ref"))]
         names = _split(tags.get("destination")) or _split(tags.get("destination:street"))
+        if not sh and not names and re.search(r"\bEXPR", tags.get("ref", ""), re.I):     # (I 25 EXPR: an express
+            sh, names = [parse_ref(r) for r in _split(tags["ref"])], ["Express Lanes"]  # lanes' entrance)
         if not sh and not names and depth > 0:
             for v in self.starts.get(self.ways[wi]["nodes"][-1], ()):
                 if self.ways[v]["link"]:
@@ -876,8 +881,16 @@ def plan(data):
                 (sh.append(r) if r[0] else names.append(t))
         if not names and not sh and tags.get("name"):
             names = [tags["name"]]
+        if any(re.search(r"\bEXPR", net.ways[v]["tags"].get("ref", ""), re.I) for v in links) and \
+                not any("xpress" in n for n in names):
+            names = ["Express Lanes"] + names
         ref = None if tags.get("noref") == "yes" else (tags.get("ref") or lw["tags"].get("junction:ref"))
         ref = _split(ref)[0] if ref else None
+        if not ref and not sh and not names:        # (nothing to sign: a service road, a ramp without tags)
+            items.append({"k": "gore", "lat": jn["lat"], "lon": jn["lon"], "brg": link_brg, "mbrg": main_brg,
+                          "ref": None, "left": left})
+            continue
+        svc = not ref and not sh and all(SERVICES.search(n) for n in names)
         thr = None
         if outs:
             ot = net.ways[outs[0][0]]
@@ -887,10 +900,12 @@ def plan(data):
                 tsh = _route_shields(ot["refs"], main_brg)
             thr = {"sh": [list(s) for s in tsh[:2]], "dst": tn[:2]}
         base = {"ref": ref, "sh": [list(s) for s in sh[:2]], "dst": names[:2], "left": left}
+        if svc:
+            base["svc"] = True
         # another exit between a sign and this one: that sign is left out (it would sign past the other exit)
         others = [d for d, _, n in up[1:] if n in exits]
         for d, kind in ((60.0, "exit_dir"), (MILE_M / 2, "adv_half"), (MILE_M, "adv_1")):
-            if any(o < d + 150.0 for o in others) and kind != "exit_dir":
+            if (svc or any(o < d + 150.0 for o in others)) and kind != "exit_dir":
                 continue
             p, b = _at(up, d)
             if p is None:
@@ -938,6 +953,10 @@ def plan(data):
     items = _dedupe(items, "speed", 500.0)
     items += mile_markers(net)
     return items
+
+
+SERVICES = re.compile(r"weigh|chain|scenic|overlook|rest area|visitor|port of entry|brake check|parking|view",
+                      re.I)          # exits to these: one sign beside the road, no advance signs
 
 
 def _dedupe(items, kind, within):
@@ -1605,7 +1624,7 @@ def tile(frame, roads, box, ground=None, urban=None, barriers=None, mph=True, le
             if m is None:
                 continue
             if k in ("exit_dir", "adv_1", "adv_half"):
-                up = k == "exit_dir" or m["spec"].urban or m["lanes"] >= 3
+                up = not it.get("svc") and (k == "exit_dir" or m["spec"].urban or m["lanes"] >= 3)
                 panels = _guide_panels(it, m, up)
                 if up:
                     overhead(mesh, col, m, panels, ground, left_hand)

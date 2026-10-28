@@ -65,6 +65,10 @@ class Lettering(unittest.TestCase):
         self.assertEqual(gs.parse_ref("E-470"), ("E", "470", ""))
         self.assertEqual(gs.parse_ref("SH 7"), ("CO", "7", ""))
         self.assertEqual(gs.route_kind("E", "470"), "toll")
+        self.assertEqual(gs.parse_ref("E470 Toll South"), ("E", "470", "SOUTH"))
+        self.assertEqual(gs.parse_ref("Northwest Parkway Toll West"), ("TOLL", "Northwest Pkwy", "WEST"))
+        self.assertEqual(gs.route_kind("TOLL", "Northwest Pkwy"), "toll")
+        self.assertEqual(gs.parse_ref("I 25 EXPR"), ("I", "25", ""))
 
     def test_cardinal(self):
         self.assertEqual(gs.cardinal("I", "25", 5.0), "NORTH")
@@ -117,6 +121,18 @@ class Plan(unittest.TestCase):
         a = [i for i in self.items if i["k"] == "adv_1"][0]
         self.assertAlmostEqual((_lat(3000) - a["lat"]) / DLAT_M, gs.MILE_M, delta=5.0)
         self.assertEqual(len(self.kinds("gore")), 2)
+
+    def test_services_and_bare_ramps(self):
+        net = _net()
+        net["ways"][1]["tags"] = {"highway": "motorway_link", "destination": "Weigh Station"}
+        net["junctions"][0]["tags"].pop("ref", None)
+        net["ways"][2]["tags"] = {"highway": "motorway_link"}
+        net["junctions"][1]["tags"]["noref"] = "yes"
+        items = gs.plan(net)
+        dirs = [i for i in items if i["k"] == "exit_dir"]
+        self.assertEqual([(i["dst"], i.get("svc")) for i in dirs], [(["Weigh Station"], True)])
+        self.assertFalse([i for i in items if i["k"].startswith("adv")])
+        self.assertEqual(len([i for i in items if i["k"] == "gore"]), 2)
 
     def test_entrance(self):
         r = self.kinds("reassure")
