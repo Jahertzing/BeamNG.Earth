@@ -95,7 +95,9 @@ VERSION = 2                     # pipeline version: bump when what a cell's laye
 # roads 7: src_ways, a segment's OSM ways and their shares of it (overture._WAYS): a segment from a route relation
 # joined to its own way, the turn lanes of a merged segment from the way at each end (osmtags.join_regional; Colfax and
 # CO-52 had no regional tags, 2026-10-28)
-LAYER_VERSIONS = {"roads": 7}
+# roads 8: osm_parts, a merged segment's ways' shares and lane counts (osmtags.join_parts: its pocket over its own way's
+# share, its lanes by part, roads.pocket_profiles)
+LAYER_VERSIONS = {"roads": 8}
                                 # (2: clipped polygon pieces `own`ed by their cell, exact cell edges,
                                 # the exact no-area test of clipped rings)
 VECTOR_LAYERS = ("roads", "connectors", "buildings", "water", "land_use", "infrastructure", "building_parts", "places",
@@ -533,6 +535,7 @@ class MapData:
         if ways:
             feats = mapgeom.concat(feats, osmtags.raceway_features(ways))
         osmtags.join(feats, tags)
+        osmtags.join_parts(feats, tags)
         return feats
 
     def layer_arrays(self, key, layer, kind="demand"):

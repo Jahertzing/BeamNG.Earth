@@ -87,6 +87,8 @@ def main():
     ap.add_argument("--at", default=None, help="lat,lon of one place (else PLACES)")
     ap.add_argument("--name", default="place")
     ap.add_argument("--half", type=float, default=200.0, help="m from the place to the picture's edge")
+    ap.add_argument("--before", choices=("off", "noparts"), default="off",
+                    help="the before picture: no pockets at all, or pockets without the merged ways' parts")
     ap.add_argument("--cache-dir", default=os.path.expanduser("~/.cache/beamng-earth"))
     a = ap.parse_args()
     import geodesy
@@ -106,8 +108,11 @@ def main():
         r = int(math.ceil(a.half / roads.TILE))
         tiles = [(tx, ty) for tx in range(-r, r) for ty in range(-r, r)]
         got = {}
+        parts = roads.osm_parts
         for on in (False, True):
-            roads.POCKETS_ON = on
+            roads.POCKETS_ON = on or a.before == "noparts"
+            roads.osm_parts = parts if on else (lambda feats, i: None)
+            roads._POCKET_MEMO.clear()
             build(md, frame, tiles, sf.urban, widths)           # (warm: the cells and specs once)
             chunks, walks, dt = build(md, frame, tiles, sf.urban, widths)
             got[on] = dt

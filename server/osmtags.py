@@ -219,6 +219,26 @@ def segment_ways(feats, i):
     return out
 
 
+def join_parts(feats, tags):
+    """The osm_parts column: per segment Overture merged from several ways (segment_ways), JSON [[from, to, lanes or
+    null], ...] in order along it (Layercake's lanes of each way: tags, join's), "" for the others. roads reads it (its
+    pocket over the pocket way's share, its width by part where OSM's lanes are the ones in use)."""
+    import mapgeom as mg
+    out = []
+    for i in range(len(feats)):
+        ways = sorted(segment_ways(feats, i), key=lambda x: x[1])
+        if len(ways) < 2:
+            out.append("")
+            continue
+        parts = []
+        for w, a, b in ways:
+            n = tags.get(w, {}).get("lanes")
+            parts.append([round(a, 6), round(b, 6), int(n) if n is not None else None])
+        out.append(json.dumps(parts, separators=(",", ":")))
+    feats.attrs["osm_parts"] = mg.text_column(out)
+    return feats
+
+
 def main_way(feats, i, ways=None):
     """The way of road feature i: its first source's (as before), else (a route relation first) the one of its ways
     that gives most of it; None."""

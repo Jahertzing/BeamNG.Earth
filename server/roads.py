@@ -2883,10 +2883,19 @@ def _ramp(L, at_end, T, v):
     return _knots(((0.0, 0.0), (L - T, 0.0), (L, v)) if at_end else ((0.0, v), (T, 0.0), (L, 0.0)))
 
 
-def _pocket_knots(L, at_end, e):
+def _pocket_knots(L, at_end, e, P=None):
     """Knots: e over the last POCKET_M at the road's end (start: not at_end), opening over POCKET_TAPER_M before; on a
     road shorter than both, its taper POCKET_SHORT_TAPER of it, the pocket the rest (whole, it stepped where its way
-    met the next: Thornton's 136th Avenue, a 53 m way)."""
+    met the next: Thornton's 136th Avenue, a 53 m way). P: m of the pocket where its way's share of a merged segment
+    says (osm_parts), its taper before it on the way before."""
+    if P is not None:
+        P = min(max(P, 0.0), L)
+        T = min(POCKET_TAPER_M, L - P)
+        if T <= 1e-9:
+            return _knots(((0.0, e), (L, e)))
+        if at_end:
+            return _knots(((0.0, 0.0), (L - P - T, 0.0), (L - P, e), (L, e)))
+        return _knots(((0.0, e), (P, e), (P + T, 0.0), (L, 0.0)))
     T = min(POCKET_TAPER_M, max(L - POCKET_M, POCKET_SHORT_TAPER * L))
     P = min(POCKET_M, L - T)
     if at_end:
@@ -3031,6 +3040,46 @@ def _pocket_rank(sp):
     """A road's POCKET_RANK; a ramp or slip road (Overture's "link": its class the road it leads to) a side street's
     (where it meets a road no major junction, nor mid-block: CO-52's slip roads at Colorado Boulevard)."""
     return POCKET_RANK["residential"] if getattr(sp, "link", False) else POCKET_RANK.get(sp.cls, 7)
+
+
+def osm_parts(feats, i):
+    """[(from, to, lanes or None)] of a segment merged from several OSM ways (the osm_parts column: osmtags.join_parts),
+    in order along it; None for a segment of one way or a cell built without it."""
+    col = feats.attrs.get("osm_parts")
+    v = str(col[i]) if col is not None else ""
+    if not v.startswith("["):
+        return None
+    try:
+        got = [(float(a), float(b), None if n is None else int(n)) for a, b, n in json.loads(v)]
+    except (TypeError, ValueError):
+        return None
+    return got if len(got) >= 2 else None
+
+
+def _lane_width(sp, left_hand=False):
+    """m of one of a road's lanes as lane_layout draws them (its class's where it draws none)."""
+    lay = lane_layout(sp, left_hand)
+    n = sum(g[1] for g in lay["groups"]) + (sp.lanes_c or 0) if lay is not None else 0
+    return (lay["hi"] - lay["lo"]) / n if n else LANE_W.get(sp.cls, LANE_W_DEFAULT)
+
+
+def _step_knots(L, ranges, ext):
+    """Knots of a width by part: ext[k] m over the share ranges[k] (from, to) of a road L m long, each step between two
+    parts a taper of POCKET_TAPER_M (at most half the part) inside the wider part (b's)."""
+    pts = [(0.0, ext[0])]
+    for k in range(len(ranges) - 1):
+        x = ranges[k][1] * L
+        e0, e1 = ext[k], ext[k + 1]
+        if abs(e1 - e0) < 1e-9:
+            continue
+        if e1 > e0:
+            T = min(POCKET_TAPER_M, (ranges[k + 1][1] - ranges[k + 1][0]) * L / 2)
+            pts += [(x, e0), (x + T, e1)]
+        else:
+            T = min(POCKET_TAPER_M, (ranges[k][1] - ranges[k][0]) * L / 2)
+            pts += [(x - T, e0), (x, e1)]
+    pts.append((L, ext[-1]))
+    return _knots(pts)
 
 
 def _travels(sp, at_end):
@@ -3215,7 +3264,9 @@ def _pocket_profiles(fl, urban_fn, widths, left_hand):
                     comps[fid].append(("mid", 0.0, 0, _ramp(L, at_end, T, centre / 2)))
                 if dw - centre >= POCKET_STEP_MIN_M:
                     comps.setdefault(fid, []).append(("scale", 0.0, 0, _ramp(L, at_end, T, -(dw - centre))))
-    # (a) exclusive turn lanes the lane count leaves out: a pocket at their downstream end
+    # (a) exclusive turn lanes the lane count leaves out: a pocket at their downstream end (over its way's share of a
+    # segment merged from several: osm_parts, the way the turn lanes are from, osmtags.join_regional)
+    pocket_parts = {}                   # fid -> {index into its osm_parts of a part a pocket covers}
     for fid in sorted(roads):
         feats, i, sp, ring, _nm = roads[fid]
         if sp.kind != "paved" or not (sp.turns_f or sp.turns_b):
@@ -3224,6 +3275,7 @@ def _pocket_profiles(fl, urban_fn, widths, left_hand):
         if lay is None:
             continue
         L = None
+        parts = osm_parts(feats, i)
         for d, n, g0, g1 in lay["groups"]:
             turns = sp.turns_f if d > 0 else sp.turns_b
             ex = [w for w, on in zip("LR", _exclusive(turns)) if on]
@@ -3238,9 +3290,31 @@ def _pocket_profiles(fl, urban_fn, widths, left_hand):
                     continue            # (no room in a divided road's median)
                 if L is None:
                     L = float(_ring_metric(ring)[1][-1])
-                kn = _pocket_knots(L, d > 0, lw)
+                P = None
+                if parts:                       # (the pocket way: the last part forward, the first backward)
+                    k = len(parts) - 1 if d > 0 else 0
+                    P = (parts[k][1] - parts[k][0]) * L
+                    pocket_parts.setdefault(fid, set()).add(k)
+                kn = _pocket_knots(L, d > 0, lw, P)
                 comps.setdefault(fid, []).append(("ins", float(ob), sg, kn))
                 added.setdefault(fid, []).append((d, w, sg, float(ob), kn))
+    # (d) a segment merged from ways of different lane counts (osm_parts) where OpenStreetMap's lanes are in use
+    # (lane sources: not CDOT's, an override's or the pavement's): its width by part, the wider part opening from the
+    # narrower over POCKET_TAPER_M as (b); a part a pocket of (a) covers keeps the segment's width (the pocket is it)
+    for fid in sorted(roads):
+        feats, i, sp, ring, _nm = roads[fid]
+        if sp.kind not in BUILT or sp.lanes is None or sp.lsrc not in (None, "osm") or sp.link:
+            continue
+        parts = osm_parts(feats, i)
+        if not parts:
+            continue
+        lw = _lane_width(sp, left_hand)
+        ext = [0.0 if k in pocket_parts.get(fid, ()) or n is None else (n - sp.lanes) * lw
+               for k, (_a, _b, n) in enumerate(parts)]
+        if not any(abs(e) >= POCKET_STEP_MIN_M for e in ext):
+            continue
+        L = float(_ring_metric(ring)[1][-1])
+        comps.setdefault(fid, []).append(("scale", 0.0, 0, _step_knots(L, [(a, b) for a, b, _n in parts], ext)))
     # (c) the approaches to a junction of major roads where OpenStreetMap gives no turn lanes (rule (c) above)
     if POCKET_INFER_ON:
         appr = []                       # (fid, its end at the junction, the direction arriving there)
