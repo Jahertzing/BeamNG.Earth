@@ -159,6 +159,35 @@ do -- the route request carries the car's heading (a nil global here once broke 
   G.clear()
   beamngEarth_core, getPlayerVehicle = savedCore, savedGet
 end
+do -- waypoints (The Drive): sent with the request, passed when near, left out of the next request; no arrival before
+  local got
+  local savedCore, savedGet = rawget(_G, 'beamngEarth_core'), rawget(_G, 'getPlayerVehicle')
+  beamngEarth_core = { requestRoute = function(id, la0, lo0, la1, lo1, b, via) got = { via = via }; return true end }
+  getPlayerVehicle = function() return nil end
+  G.clear()
+  T.check(G.setDestination(39.37, -104.86, 'Castle Rock', { { lat = 39.75, lon = -105.0, name = 'Union Station' },
+    { lat = 'x' } }), 'a destination with a waypoint')
+  local s0 = G.status()
+  T.check(s0.viasLeft == 1 and s0.via.name == 'Union Station' and s0.viasPassed == 0, 'the bad waypoint left out')
+  -- the anchor: x = (lon + 105) * 1e5, y = (lat - 39.75) * 1e5 (Union Station at 0, 0; Castle Rock far south)
+  local anchor = { geodeticToEnu = function(_, lat, lon) return (lon + 105) * 1e5, (lat - 39.75) * 1e5, 0 end }
+  G.update(anchor, { x = 5000, y = 30000, lat = 40.05, lon = -104.95 })
+  T.check(got and got.via and #got.via == 1 and got.via[1][1] == 39.75 and got.via[1][2] == -105.0,
+    'the request carries the waypoint')
+  G.clear(); G.setDestination(39.75, -105.0, 'same place', { { lat = 39.75, lon = -105.0005, name = 'w' } })
+  G.update(anchor, { x = 0, y = 0, lat = 39.75, lon = -105.0 })
+  T.check(G.status() == nil, 'at the destination with the waypoint passed on the way there: arrived')
+  local n0 = G.arrivals
+  G.setDestination(39.37, -104.86, 'Castle Rock', { { lat = 39.75, lon = -105.0, name = 'Union Station' } })
+  got = nil
+  G.update(anchor, { x = 40, y = 30, lat = 39.7503, lon = -104.9996 })
+  local s1 = G.status()
+  T.check(s1 and s1.viasLeft == 0 and s1.viasPassed == 1 and s1.via == nil, 'within VIA_PASS_M: passed')
+  T.check(got and got.via == nil, 'the route asked from there has no waypoint left')
+  T.check(G.arrivals == n0, 'passing a waypoint is no arrival')
+  G.clear()
+  beamngEarth_core, getPlayerVehicle = savedCore, savedGet
+end
 do -- the minimap's distance counts the whole planned route, not only the arrows' reach
   local rp = { path = { { distToTarget = 2700 }, { distToTarget = 1000 }, { distToTarget = 0 } }, distance = 2700 }
   G.addRest(rp, 480000)

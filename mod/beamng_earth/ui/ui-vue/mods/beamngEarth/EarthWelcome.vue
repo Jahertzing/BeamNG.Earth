@@ -37,6 +37,9 @@
             <li><b>M</b>: the world map. Search an address, right-click to teleport, left-click to set a GPS route.</li>
             <li><b>Autodrive</b> on the GPS bar: the car drives the route by itself.</li>
             <li><b>Places</b> on the map: save spots and jump back to them.</li>
+            <li><b>The Drive</b>: Frederick to Castle Rock, timed. <b>Ctrl+Alt+D</b> through downtown Denver,
+              <b>Ctrl+Alt+I</b> straight down I-25; <b>Ctrl+Alt+A</b> autodrive, <b>Ctrl+Alt+G</b> / <b>N</b> golden
+              hour or night.</li>
           </ul>
         </div>
         <div class="col">

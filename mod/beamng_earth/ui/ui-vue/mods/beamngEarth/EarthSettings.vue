@@ -105,6 +105,12 @@
                 <div class="option-reset"></div>
               </div>
 
+              <!-- The Drive: closes the menu and starts it (settings.lua uiTheDrive -> thedrive.lua) -->
+              <div v-if="item.type === 'drive'" class="inline-controls">
+                <BngButton :accent="ACCENTS.main" @click="startDrive(item.route)">{{ item.label }}</BngButton>
+                <div class="option-reset"></div>
+              </div>
+
               <!-- Feedback: the report window or the profiler (the menu closes first: settings.lua M.feedback) -->
               <div v-if="item.type === 'feedback'" class="inline-controls">
                 <BngButton :accent="ACCENTS.outlined" @click="openFeedback(item.what)">{{ item.label }}</BngButton>
@@ -261,6 +267,17 @@ let pathSentAt = 0
 
 // Mirrors lua/ge/extensions/beamngEarth/settings.lua SCHEMA (the Lua side validates and clamps).
 const settingsSchema = [
+  {
+    name: "The Drive",
+    items: [
+      { id: "theDriveDowntown", type: "drive", route: "downtown", label: "Start", name: "Frederick to Castle Rock through downtown Denver", desc: "Closes this menu and puts the car in Old Town Frederick, sets the GPS through Denver Union Station to downtown Castle Rock, and sets the time of day below. The clock starts when the car first moves and shows on the status bar; you get a split at Union Station and the best times are kept. Also Ctrl+Alt+D while driving." },
+      { id: "theDriveI25", type: "drive", route: "i25", label: "Start", name: "Frederick to Castle Rock straight down I-25", desc: "The same, but straight down I-25 the whole way (no E-470, no toll roads). Also Ctrl+Alt+I while driving." },
+      { id: "theDriveTime", type: "select", default: "golden", name: "Time of day", desc: "When The Drive starts. Golden hour: 45 minutes before today's sunset, so it gets dark on the way to Castle Rock. Midday: 12:30. Night: 21:30. Keep: the sky is left as it is. Setting a time switches Sky to Manual; choose Real time to go back. Ctrl+Alt+G and Ctrl+Alt+N set golden hour or night any time.",
+        options: [ { label: "Golden hour", value: "golden" }, { label: "Midday", value: "midday" }, { label: "Night", value: "night" }, { label: "Keep the current time", value: "real" } ] },
+      { id: "theDriveAutodrive", type: "bool", default: false, name: "Autodrive", desc: "The car drives itself the whole way (the GPS autodrive: in its lane, at the speed limit). Ctrl+Alt+A turns it on or off during any GPS route." },
+      { id: "theDriveTimes", type: "info", name: "Best times", desc: "Your best times per route, from when the car first moved to downtown Castle Rock (game time: pausing stops the clock)." },
+    ],
+  },
   {
     name: "Connection",
     items: [
@@ -422,6 +439,7 @@ function infoValue(item) {
   if (item.id === "deshadow") return s.deshadow || "off"
   if (item.id === "colormatch") return s.colormatch || "off"
   if (item.id === "cacheUsage") return (s.cache && s.cache.line) || "-"
+  if (item.id === "theDriveTimes") return driveTimes(s.theDrive)
   return ""
 }
 
@@ -442,6 +460,22 @@ function luaValue(val) {
 
 function showWelcome() {
   engineLua("if beamngEarth_settings and beamngEarth_settings.showWelcome then beamngEarth_settings.showWelcome() end")
+}
+
+// The Drive's best times: "Downtown 1:02:03 · I-25 58:10" (thedrive.records())
+function driveClock(s) {
+  s = Math.max(0, Math.round(s))
+  const h = Math.floor(s / 3600), m = Math.floor(s / 60) % 60, x = s % 60
+  const pad = n => String(n).padStart(2, "0")
+  return h > 0 ? `${h}:${pad(m)}:${pad(x)}` : `${m}:${pad(x)}`
+}
+function driveTimes(r) {
+  if (!r) return "-"
+  const part = (name, d) => `${name} ${d && typeof d.best === "number" ? driveClock(d.best) : "no run yet"}`
+  return `${part("Downtown", r.downtown)}  ·  ${part("I-25", r.i25)}`
+}
+function startDrive(route) {
+  engineLua(`if beamngEarth_settings and beamngEarth_settings.uiTheDrive then beamngEarth_settings.uiTheDrive(${JSON.stringify(route)}) end`)
 }
 
 // Feedback buttons: settings.lua closes the menu, then opens the report window or starts the profiler
