@@ -1,0 +1,4 @@
+dump -> C:\beamng-earth\look-shots\run4\dump.json
+lk_castle_rock ...
+restored
+EXIT 0
