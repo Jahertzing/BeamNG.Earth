@@ -257,6 +257,16 @@ class MapData:
         return {"pipeline": VERSION, "overture": self.release, "worldcover": maprasters.WORLDCOVER_RELEASE,
                 "canopy": maprasters.CHM_RELEASE}
 
+    def drcog(self):
+        """drcog.Drcog when the DRCOG source is on (BNE_DRCOG=1: earthd --drcog on), else None."""
+        import drcog
+        if not drcog.enabled():
+            return None
+        with self._lock:
+            if getattr(self, "_drcog", None) is None:
+                self._drcog = drcog.Drcog(self.raw_dir, self.fetcher)
+            return self._drcog
+
     def regional(self):
         """osmtags.Regional over this cache's regional tables (tools/osm_tag_table.py), made when first asked for."""
         with self._lock:
@@ -269,6 +279,10 @@ class MapData:
         source, release = _source(layer, self.release)
         lv = LAYER_VERSIONS.get(layer)
         name = layer if lv is None else f"{layer}.{lv}"
+        if layer == "buildings" and self.drcog() is not None:
+            import drcog
+            if drcog.covers(key.bounds()):  # (--drcog on: the region's roofprints in, kept under their own name)
+                name = f"{name}.{drcog.TAG}"
         if layer == "roads":
             tag = self.regional().covering(key.bounds())
             if tag is not None:         # a cell inside a regional OSM table: built with its tags, kept under its tag
@@ -352,6 +366,13 @@ class MapData:
             # the roads' OpenStreetMap tags are read alongside Overture's (each half a fresh cell's wait)
             osm = self._osm_pool().submit(self._osm_cell, key, kind) if layer == "roads" else None
             feats, sources = self.overture.query(layer, key, kind)
+            if layer == "buildings" and self.drcog() is not None:
+                import drcog
+                if drcog.covers(key.bounds()):
+                    feats, n = self.drcog().merge(feats, key, kind)
+                    if n:                   # (credited with the cell's datasets: credits.FEATURES)
+                        sources = dict(sources)
+                        sources[(drcog.DATASET, drcog.LICENSE)] = n
             if osm is not None:
                 feats = self._osm(feats, osm.result())
                 tag = self.regional().covering(key.bounds())

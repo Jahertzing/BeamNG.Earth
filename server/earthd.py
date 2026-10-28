@@ -750,6 +750,8 @@ class Server:
             lambda key: mapdata.cell(key, layers=("buildings",), kind="demand").layers.get("buildings"),
             roadwidthmod.store_dir(cache_dir, mapdata)).get
             if road_widths and mapdata is not None else None)
+        if self.road_widths is not None and mapdata.drcog() is not None:  # the edges of pavement first (drcog.py)
+            self.road_widths = mapdata.drcog().widths(self.road_widths)
         self.grader_lock = threading.Lock()
         # The download cache's bookkeeping (cache.py): every producer reports its disk hits and writes
         self.cache = cache
@@ -4855,6 +4857,10 @@ def main():
     ap.add_argument("--skyline", choices=("on", "off"), default="on",
                     help="the tall buildings out to 40 km (skyline.py; with --buildings on): towers of >= 50 m or "
                          "15 floors, all of >= 20 m or 6 floors within 6 km, as simple tinted prisms")
+    ap.add_argument("--drcog", choices=("on", "off"), default="off",
+                    help="the Denver region's DRCOG 2024 planimetrics (drcog.py): its stereo-compiled roofprints with "
+                         "their heights in place of the Overture footprints they match, its edges of pavement for the "
+                         "road widths (CC BY 3.0, credited); off = Overture's footprints everywhere")
     ap.add_argument("--gas-stations", choices=("on", "off"), default="off",
                     help="gas stations with refuelling at real stations (gasstations.py; Overture places, needs "
                          "--roads on): West Coast USA's pumps and canopies, the stock refuel prompt")
@@ -4891,6 +4897,8 @@ def main():
                          "never what this session used within the hour, the gravity model or netstats/")
     ap.add_argument("-v", "--verbose", action="store_true")
     args = ap.parse_args()
+    if args.drcog == "on":      # (every process reads it: mapdata.MapData.drcog; the revisit keys hold BNE_* too)
+        os.environ["BNE_DRCOG"] = "1"
     args.cells = resolve_cells(args.cells, args.near_visual)
     args.block = resolve_block(args.block, args.near_visual)
     args.horizon = resolve_horizon(args.horizon, args.near_visual)
