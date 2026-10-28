@@ -16,7 +16,8 @@ speed). The car is moved without turning it (the mod's own setCarAt: the cluster
 with spawn.safeTeleport, no reset, facing the road (core.lua and edgeguard.lua's call) when the road turned TURN_DEG
 from it or it is not upright. Steps of a few tens of metres: never the drop hold's jump (drophold.lua JUMP_M).
 
-It moves on (s += speed * TICK_S) only when the place is loaded: no anchor request pending, ground under the next
+It moves on (s += speed * TICK_S) only when the place is loaded: no anchor request pending (a rebase's, once its anchor
+is ready, does not count: it commits only after the car has gone on past the rebase distance), ground under the next
 point, the mod's road / sidewalk / building meshes to make at most --roads-q, the server's backlog at most
 --backlog-q, the road tiles ready --lead-m ahead along the road (roads.ahead); meanwhile the car stands at s, velocity 0.
 After --max-wait s standing it moves on anyway (said in the summary: a place that never loads is a finding, not a stop).
@@ -57,6 +58,7 @@ local function ext(n) return rawget(_G, n) end
 -- the load state: anchor, pending request, server backlog, far field and road meshes, the frame times
 local function state(st, perf)
   local out = { anchor = st.anchorId, pending = st.pending and (st.pending.purpose or true) or nil,
+    ready = st.pending and st.pending.ready or nil, placing = (st.placeFrames ~= nil or st.floorZ ~= nil) or nil,
     backlog = st.serverBacklog }
   local okF, ff = pcall(require, 'beamngEarth/farfield')
   if okF and type(ff) == 'table' and ff.stats then
@@ -98,7 +100,12 @@ function G.step(cfg)
   local out = state(st, cfg.perf)
   local veh = getPlayerVehicle(0)
   if not veh then out.err = 'no player vehicle'; return jsonEncode(out) end
-  if out.pending or not cfg.lat or not st.anchor then return jsonEncode(out) end
+  -- a teleport / resync under way, or the mod setting the car down itself: the car left alone. A rebase's anchor is
+  -- asked for PREFETCH_MARGIN before the rebase distance and commits only once the car is past it (rebase.decide):
+  -- the car moves on meanwhile, as on a drive (standing for it, the first ghost bake waited at km 19 for ever)
+  if (out.pending and out.pending ~= 'rebase') or out.placing or not cfg.lat or not st.anchor then
+    return jsonEncode(out)
+  end
   local a = st.anchor
   local x, y = a:geodeticToEnu(cfg.lat, cfg.lon, 0)
   local hx, hy = a:geodeticToEnu(cfg.hlat, cfg.hlon, 0)
@@ -200,8 +207,11 @@ def waiting_for(r, a):
     why = []
     if r.get("err"):
         why.append(r["err"])
-    if r.get("pending"):
+    if r.get("pending") and not (r["pending"] == "rebase" and r.get("ready")):
+        # (a rebase whose anchor is ready commits once the car is past the rebase distance: on to it)
         why.append(f"anchor request pending ({r['pending']})")
+    if r.get("placing"):
+        why.append("the mod is setting the car down")
     if r.get("noground"):
         why.append("no ground at the next point")
     q = (r.get("roads") or {}).get("q") or 0

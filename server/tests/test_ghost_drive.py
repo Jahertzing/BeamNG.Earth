@@ -71,12 +71,19 @@ class WaitTest(unittest.TestCase):
     def test_each_reason(self):
         a = opts()
         self.assertIn("anchor request pending (rebase)", gd.waiting_for({"pending": "rebase"}, a))
+        self.assertIn("anchor request pending (teleport)", gd.waiting_for({"pending": "teleport", "ready": True}, a))
+        self.assertIn("the mod is setting the car down", gd.waiting_for({"placing": True}, a))
         self.assertIn("no ground at the next point", gd.waiting_for({"noground": True}, a))
         self.assertEqual(gd.waiting_for({"roads": {"q": 40}}, a), ["40 road meshes to make"])
         self.assertEqual(gd.waiting_for({"backlog": 12}, a), ["server backlog 12"])
         self.assertEqual(gd.waiting_for({"lead": 96}, a), ["road tiles ready 96 m ahead"])
         self.assertEqual(gd.waiting_for({"err": "no player vehicle"}, a), ["no player vehicle"])
         self.assertEqual(gd.waiting_for({"lead": 96}, opts(lead_m=0)), [], "--lead-m 0: not waited for")
+
+    def test_a_ready_rebase_is_driven_to(self):
+        """A rebase's anchor is asked for 300 m before the rebase distance and commits only past it: standing for it
+        never ends (the PC's ghost bake 2026-10-28 stood at km 19.2 of I-25 for 16 minutes)."""
+        self.assertEqual(gd.waiting_for({"pending": "rebase", "ready": True}, opts()), [])
 
 
 class SummaryTest(unittest.TestCase):
