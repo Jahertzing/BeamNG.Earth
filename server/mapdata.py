@@ -92,7 +92,10 @@ VERSION = 2                     # pipeline version: bump when what a cell's laye
 # roads 6: rail segments' rail_flags (is_bridge / is_tunnel) in the "flags" rule (railways.py, mpsteppe's PR #287)
 # (osmtags osm_highway, construction/proposed roads left out, GitHub #184: only cells fetched after it; the cached
 # ones get it with the next Overture release bump, not a roads 7 here: every player's roads fetched again)
-LAYER_VERSIONS = {"roads": 6}
+# roads 7: src_ways, a segment's OSM ways and their shares of it (overture._WAYS): a segment from a route relation
+# joined to its own way, the turn lanes of a merged segment from the way at each end (osmtags.join_regional; Colfax and
+# CO-52 had no regional tags, 2026-10-28)
+LAYER_VERSIONS = {"roads": 7}
                                 # (2: clipped polygon pieces `own`ed by their cell, exact cell edges,
                                 # the exact no-area test of clipped rings)
 VECTOR_LAYERS = ("roads", "connectors", "buildings", "water", "land_use", "infrastructure", "building_parts", "places",
@@ -453,8 +456,7 @@ class MapData:
                 tag = self.regional().covering(key.bounds())
                 if tag is not None:
                     import osmtags
-                    recs = feats.attrs.get("src_record")
-                    ways = [osmtags.way_id(str(r)) for r in recs] if recs is not None else []
+                    ways = [w for i in range(len(feats)) for w, _a, _b in osmtags.segment_ways(feats, i)]
                     osmtags.join_regional(feats, self.regional().tags(tag, ways))
                 import cdot
                 if self.cdot() is not None and cdot.covers(key.bounds()) and len(feats):

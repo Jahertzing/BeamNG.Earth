@@ -1320,8 +1320,9 @@ def _osm_lanes(feats, specs):
             lc = 1
         if sp.oneway:
             tf, tbk = parse_turns(_rtag(feats, "turn:lanes", i)), None
-            if sp.dir == -1:                    # (drawn against its way: OSM's lanes are the travel direction's)
-                tf, tbk = None, tf
+            if sp.dir == -1:                    # (drawn against its way: OSM's lanes are the travel direction's; a
+                start = feats.attrs.get(osmtags.TURN_START)     # merged segment's from its first way, osmtags)
+                tf, tbk = None, parse_turns(str(start[i]).strip()) if start is not None else tf
         else:
             tf = parse_turns(_rtag(feats, "turn:lanes:forward", i))
             tbk = parse_turns(_rtag(feats, "turn:lanes:backward", i))
