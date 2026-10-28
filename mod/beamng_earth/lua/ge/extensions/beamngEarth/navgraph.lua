@@ -70,6 +70,13 @@ M.AHEAD_M = { 150, 350 }
 -- the traffic ran at 40-55 mph and the player's autodrive behind it averaged 46 (the traffic bench, 2026-10-28)
 M.AHEAD_PACE = 0.85     -- of the player's speed
 M.AHEAD_V_MAX = 31      -- m/s (70 mph)
+-- ... over PUSH_S at most PUSH_ACCEL: the stock speed boost (gameplay_traffic's respawnSpeed) pushes the body to its
+-- speed in 0.25 s (thrusters.applyVelocity on the cluster without the wheels), 12 g at 70 mph: the tyres were dragged
+-- along, and on I-25 cars put ahead smoked, threw dust and slid sideways in front of the player (Jeff's drive
+-- 2026-10-28: "dust clouds of cars slamming their brakes and doing burnouts, going sideways"). At 4 m/s^2 the wheels
+-- roll up with the car. The push goes once the teleport has happened (the car's jump seen by the guard).
+M.PUSH_ACCEL = 4
+M.PUSH_S = { 1, 8 }
 -- (gameplay_walk: 0.40's traffic.lua calls gameplay_walk.addVehicleToBlacklist when it activates its cars, and this
 -- level had none loaded: the cars spawned and never drove, 2026-10-19)
 M.EXTENSIONS = { 'core_multiSpawn', 'gameplay_traffic', 'gameplay_walk' }
@@ -522,6 +529,32 @@ function M.aheadSpeed(psp)
   return math.max(0, math.min(M.AHEAD_V_MAX, psp * M.AHEAD_PACE))
 end
 
+-- Pure: the seconds a push to v m/s takes (PUSH_ACCEL, within PUSH_S).
+function M.pushTime(v)
+  return math.max(M.PUSH_S[1], math.min(M.PUSH_S[2], v / M.PUSH_ACCEL))
+end
+
+-- Pure: the vehicle Lua pushing a standing car to v m/s along its nose, gently (pushTime).
+function M.pushLua(v)
+  return string.format('thrusters.applyVelocity(obj:getDirectionVector() * %.2f, %.2f)', v, M.pushTime(v))
+end
+
+-- The vehicle Lua that makes every speed boost a traffic car gets gentle: the stock respawn's too (gameplay_traffic
+-- respawnSpeed, up to 14 m/s in 0.25 s, 5.7 g: on the open I-25, where nothing hides a car, those were seen smoking as
+-- well). thrusters.applyVelocity wrapped once per car: the time stretched to at least pushTime of the speed asked.
+function M.gentleLua()
+  return string.format([[do
+if thrusters and thrusters.applyVelocity and not thrusters._bneGentle then
+  local orig = thrusters.applyVelocity
+  thrusters._bneGentle = orig
+  thrusters.applyVelocity = function(vel, dt, nodeId)
+    local sp = vel and vel.length and vel:length() or 0
+    return orig(vel, math.max(dt or 0, math.max(%.2f, math.min(%.2f, sp / %.2f))), nodeId)
+  end
+end
+end]], M.PUSH_S[1], M.PUSH_S[2], M.PUSH_ACCEL)
+end
+
 -- Pure: how near a cut a car heading for it is respawned: CUT_FRESH_M while fresh (age s since it appeared), unless
 -- this module put it ahead along the player's way (ahead); else CUT_M or CUT_S seconds at its speed sp.
 -- At least as far as the car's own plan reaches (ai.lua getMinPlanLen: max(100 m, its stopping distance at 0.2 g)) and
@@ -679,6 +712,8 @@ end
 local stillSince = {}   -- car id -> os.clock() it stopped moving
 local seenAt = {}       -- car id -> { x, y, os.clock() it appeared there }
 local putAhead = {}     -- car id -> true: its last respawn was ours, ahead along the player's way (aheadSpot)
+local pushes = {}       -- car id -> { v = m/s, at = os.clock() }: a car put ahead, to be pushed to v once it has landed
+M.PUSH_WAIT_S = 3       -- a teleport not seen this long after: no push
 local function guard(b, all)
   local gt = gameplay_traffic
   if not gt or gt.getState() ~= 'on' then return end
@@ -696,6 +731,7 @@ local function guard(b, all)
         paced[id] = paced[id] or M.paceFactor(math.random(), math.random(), math.random())
         o:queueLuaCommand(M.paceLua(paced[id]))
         if M.KEEP_ROUTE then o:queueLuaCommand(M.keepRouteLua()) end
+        o:queueLuaCommand(M.gentleLua())
         installedAt[id] = now
       end
       if o and o:getActive() then
@@ -710,6 +746,13 @@ local function guard(b, all)
           s0 = { p.x, p.y, now }
         end
         seenAt[id] = { p.x, p.y, s0[3] }
+        local push = pushes[id]
+        if push and putAhead[id] == true and s0[3] == now then
+          pushes[id] = nil
+          if sp < 3 then o:queueLuaCommand(M.pushLua(push.v)) end
+        elseif push and now - push.at > M.PUSH_WAIT_S then
+          pushes[id] = nil
+        end
         local reach = M.cutReach(now - s0[3], sp, putAhead[id])
         local toCut = false
         if dl > 1e-6 then
@@ -739,9 +782,9 @@ local function guard(b, all)
             stats.aheadRespawns = (stats.aheadRespawns or 0) + 1
             putAhead[id] = 'next'       -- (its jump, seen at the next check, is ours)
             pcall(gt.forceTeleport, id, vec3(ax, ay, pp.z), vec3(adx, ady, 0), amin, amax)
-            -- (the stock speed boost: its traffic vehicle pushes the car along its heading on its next update)
+            -- pushed to speed gently once it has landed (PUSH_ACCEL; not the stock boost's 0.25 s)
             local td = gt.getTrafficData and gt.getTrafficData()[id]
-            if td and not td.hasTrailer then td.respawnSpeed = M.aheadSpeed(pu:length()) end
+            if td and not td.hasTrailer then pushes[id] = { v = M.aheadSpeed(pu:length()), at = now } end
           elseif cp and cf then
             pcall(gt.forceTeleport, id, cp, -cf, M.RESPAWN_M[1], M.RESPAWN_M[2])
           else
@@ -1196,6 +1239,7 @@ function M.reset()
   stillSince = {}
   seenAt = {}
   putAhead = {}
+  pushes = {}
   paced = {}
   installedAt = {}
   cuts = {}

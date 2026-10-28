@@ -29,6 +29,10 @@ T.check(A.findMerge(nodes, 'm2', 'j', vec3(-100, 0, 0)) == nil, 'on the motorway
 T.check(A.findMerge(nodes, 'x1', 's1', vec3(320, -60, 0)) == nil, 'an exit ramp ending in a street: none')
 T.check(A.findMerge(nodes, 'r2', 'r1', vec3(-200, -53, 0)) == nil, 'the ramp the wrong way (not its one-way): none')
 
+-- a car the road search gave the ramp's edge while it drives in the motorway's lanes is not on the ramp
+T.check(A.onMainline(m, vec3(-30, -2, 0)), 'onMainline: 2 m off the motorway near the gore: on it')
+T.check(not A.onMainline(m, vec3(-200, -53, 0)), 'onMainline: on the ramp 53 m off: not')
+
 -- who is on the motorway there
 local vehicles = {
   { id = 1, pos = { x = -150, y = 3 }, vel = { x = 30, y = 0 } },      -- 150 m before j, at 30 m/s
