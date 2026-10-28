@@ -38,6 +38,7 @@ PLACES = {
 PX_M = 2.0
 VIEW_M = 7.0                # m from the prop to the camera
 VIEW_SKEW_DEG = 35.0        # ... off the prop's front (a three-quarter view)
+VIEW_MAX_M = 260.0          # a prop farther from the place has no view (its tiles may not be exact yet)
 VIEW_GROUPS = (("mailbox",), ("mailcbu",), ("cart_trash", "cart_recycle"), ("bussign", "busshelter"),
                ("uspsbox",), ("bikerack", "planter"))
 COLOURS = {"mailbox": (10, 10, 10), "mailcbu": (255, 140, 0), "cart_trash": (40, 200, 60), "cart_recycle": (40, 200, 60),
@@ -127,6 +128,8 @@ def views_of(frame, props, name):
         if not rows:
             continue
         r = min(rows, key=lambda r: math.hypot(r[1], r[2]))
+        if math.hypot(r[1], r[2]) > VIEW_MAX_M:
+            continue
         a = math.radians(r[4] + VIEW_SKEW_DEG)              # (yaw: the prop's front, degrees CCW from east)
         cx, cy = r[1] + VIEW_M * math.cos(a), r[2] + VIEW_M * math.sin(a)
         la, lo, _ = frame.enu_to_geodetic(np.array([cx]), np.array([cy]), 0.0)
