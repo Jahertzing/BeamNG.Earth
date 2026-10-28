@@ -25,6 +25,16 @@ T.check(nl.status().lenses == 0, 'a tile without lenses: none kept')
 
 core_environment = { getLightState = function() return { isNight = true } end }
 T.check(nl.isNight() == true, 'night from the stock environment')
+-- the sun drawn up: day, whatever the clock says (a ScatterSky at 144 degrees: a morning sun over a night clock)
+T.check(nl.sunUpAt(144) and nl.sunUpAt(30) and not nl.sunUpAt(200) and not nl.sunUpAt(-10) and not nl.sunUpAt(1)
+  and nl.sunUpAt(nil) == nil, 'sunUpAt: over the horizon from 2 to 178 degrees')
+local realFind, realFindObj = scenetree.findClassObjects, scenetree.findObject
+scenetree.findClassObjects = function(c) return c == 'ScatterSky' and { 'sunsky' } or {} end
+scenetree.findObject = function(n) return n == 'sunsky' and { elevation = 144 } or nil end
+T.check(nl.isNight() == false, 'night by the clock, the sun drawn up: not night')
+scenetree.findObject = function(n) return n == 'sunsky' and { elevation = 250 } or nil end
+T.check(nl.isNight() == true, '... the sun drawn down: night')
+scenetree.findClassObjects, scenetree.findObject = realFind, realFindObj
 core_environment = nil
 T.check(nl.isNight() == nil, 'no environment (the menu): unknown')
 -- the stadiums' evenings and the Castle Rock star's season
