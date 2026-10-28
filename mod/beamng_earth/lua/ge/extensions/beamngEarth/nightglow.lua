@@ -2,10 +2,11 @@
 -- glow and the Castle Rock star. Both are render-only TSStatics of the mod's own shapes (tools/build_night_landmarks.py)
 -- placed from latitude / longitude in the anchor's frame; their materials (bne_city_glow, bne_star_bulb) are lit by
 -- nightlights.lua, so by day they draw nothing (the glow is additive black) or a dark frame of bulbs.
---   * The glow: a dome of additive light over every big place (Natural Earth's populated places, the map's place names:
---     maplayers.js) within GLOW_NEAR_M, its radius and height by the place's rank (GLOW_R: Denver 1, Boulder 7), its
---     light fading to nothing at the rim: from outside a soft brightening over the city, from inside the sky brighter
---     overhead. (An open cylinder first: its wall and rim drew as hard edges across the sky.)
+--   * The glow: a soft sprite of additive light over every big place (Natural Earth's populated places, the map's place
+--     names: maplayers.js) within GLOW_NEAR_M, turned to face the camera every check: a half-disc of light standing
+--     on the city, brightest at its foot and fading to nothing all round (no edge from any side), its radius and
+--     height by the place's rank (GLOW_R: Denver 1, Boulder 7). It shrinks away as the camera comes into the city
+--     (glowShare). (First an open cylinder, then a dome: from outside both showed hard edges across the sky.)
 --   * The star: on top of the Rock in Castle Rock (STAR), facing I-25 to the west, lit in its season (nightlights.lua).
 local M = {}
 
@@ -55,6 +56,19 @@ function M.glowSize(r)
   return R, math.max(M.GLOW_H_MIN_M, R * M.GLOW_H_SHARE)
 end
 
+-- Pure: the share of its full size a glow of radius R shows at d m from the camera: full from GLOW_FULL_R radii out,
+-- shrinking to nothing at GLOW_GONE_R radii (inside the city its light is all round, not a dome ahead).
+M.GLOW_FULL_R = 2.0
+M.GLOW_GONE_R = 0.5
+function M.glowShare(d, R)
+  return math.max(0, math.min(1, (d / R - M.GLOW_GONE_R) / (M.GLOW_FULL_R - M.GLOW_GONE_R)))
+end
+
+-- Pure: the engine's yaw (setFromEuler z, clockwise) turning the sprite's face (its local +y) from (x, y) to (cx, cy).
+function M.faceYaw(x, y, cx, cy)
+  return -(math.atan2(cy - y, cx - x) - math.pi / 2)
+end
+
 local function drop(key)
   local e = objs[key]
   local o = e and scenetree.findObjectById(e.id)
@@ -102,10 +116,25 @@ function M.update(anchor, anchorId, night)
       local key = 'glow' .. i
       -- (the ground there is not known here: the camera's height for it, GLOW_SINK_M under; the frame's curvature
       -- is the anchor's)
-      local x, y, z = want_(key, p.lat, p.lon, cam.z, M.GLOW_NEAR_M + R)
-      if x then
-        local id = make(key, M.GLOW_SHAPE, x, y, z - M.GLOW_SINK_M, R, R, H + M.GLOW_SINK_M)
-        if id then objs[key] = { id = id, anchorId = anchorId } else M.errors = M.errors + 1 end
+      local x, y, z = anchor:geodeticToEnu(p.lat, p.lon, cam.z)
+      local d = math.sqrt((x - cam.x) ^ 2 + (y - cam.y) ^ 2)
+      local k = M.glowShare(d, R)
+      if d <= M.GLOW_NEAR_M + R and k > 0 then
+        want[key] = true
+        local e = objs[key]
+        if e and e.anchorId ~= anchorId then drop(key); e = nil end
+        if not e then
+          local id = make(key, M.GLOW_SHAPE, x, y, z - M.GLOW_SINK_M, 1, 1, 1)
+          if id then e = { id = id, anchorId = anchorId }; objs[key] = e else M.errors = M.errors + 1 end
+        end
+        local o = e and scenetree.findObjectById(e.id)
+        if o then
+          local m = MatrixF(true)
+          m:setFromEuler(vec3(0, 0, M.faceYaw(x, y, cam.x, cam.y)))
+          m:setPosition(vec3(x, y, z - M.GLOW_SINK_M))
+          o:setTransform(m)
+          o:setScale(vec3(R * k, 1, (H + M.GLOW_SINK_M) * k))
+        end
       end
     end
   end

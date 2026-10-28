@@ -445,6 +445,7 @@ end
 
 local function onLevel()
   clock, graceUntil, bigMapUntil, mission, pending = 0, M.GRACE_S, 0, false, nil
+  celestialAt = -1e9
   inOurLevel = getCurrentLevelIdentifier and getCurrentLevelIdentifier() == M.LEVEL_ID or false
 end
 M.onClientStartMission = onLevel
@@ -458,11 +459,30 @@ function M.onExtensionLoaded()
   if scenetree.MissionGroup and getCurrentLevelIdentifier and getCurrentLevelIdentifier() then onLevel() end
 end
 
+-- core_celestial is what moves the drawn sun: every frame it reads the TimeOfDay and writes ScatterSky's azimuth and
+-- elevation (celestial.lua onPreRender, apply). Freeroam's preset extensions load it on the stock maps, but in our
+-- level it was not loaded (2026-10-28, Jeff's PC: extensions.isExtensionLoaded('core_celestial') false), so the sky
+-- kept the level's saved daytime sun whatever the clock said: never a night sky, the night lights on under a blue
+-- one. Loaded here when missing, looked at every CELESTIAL_CHECK_S.
+M.CELESTIAL_CHECK_S = 5.0
+M.celestialLoads = 0
+local celestialAt = -1e9
+local function ensureCelestial()
+  if rawget(_G, 'core_celestial') or type(extensions) ~= 'table' or type(extensions.load) ~= 'function' then return end
+  M.celestialLoads = M.celestialLoads + 1
+  local ok, err = pcall(extensions.load, 'core_celestial')
+  if not ok then log('W', 'beamngEarth', 'sky: core_celestial did not load: ' .. tostring(err)) end
+end
+
 function M.onUpdate(dtReal)
   clock = clock + (dtReal or 0)
   -- other levels keep their own time and clouds, as weather.lua does (GitHub issue #1, 2026-10-17: on Hirochi Raceway
   -- the time jumped to the real clock every 30 s and the paused clock ran)
   if not inOurLevel then return end
+  if clock - celestialAt >= M.CELESTIAL_CHECK_S then
+    celestialAt = clock
+    ensureCelestial()
+  end
   local ok, err = pcall(updateClouds, dtReal)
   if not ok then log('W', 'beamngEarth', 'clouds: ' .. tostring(err)) end
   if pending and clock >= pending.at + M.MISSION_SETUP_S then switchToManual() end

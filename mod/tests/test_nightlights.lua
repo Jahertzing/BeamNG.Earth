@@ -44,16 +44,29 @@ T.check(nl.starSeason(2026, 12, 31) and nl.starSeason(2027, 1, 25) and not nl.st
 T.check(not nl.starSeason(2026, 10, 28) and not nl.starSeason(nil, 1, 1), 'not in October, not without a date')
 T.check(nl.starSeason(2025, 11, 22) and not nl.starSeason(2025, 11, 21), '2025: Thanksgiving 11-27, Starlighting 11-22')
 
+MatrixF = MatrixF or function() return { setFromEuler = function(self, e) self.e = e end,
+  setPosition = function(self, p) self.p = p end } end
 local ng = require('beamngEarth/nightglow')
 local r1, h1 = ng.glowSize(1)
 local r7 = ng.glowSize(7)
 T.check(r1 > r7 and h1 >= ng.GLOW_H_MIN_M, 'a big city glows wider than a town')
+T.check(ng.glowShare(3 * r1, r1) == 1 and ng.glowShare(0.4 * r1, r1) == 0 and ng.glowShare(r1, r1) > 0
+  and ng.glowShare(r1, r1) < 1, 'the glow: full from afar, shrinking as the camera comes into the city')
+-- the sprite faces the camera: setFromEuler z turns clockwise; its face is local +y
+local function faced(x, y, cx, cy)
+  local a = -ng.faceYaw(x, y, cx, cy)                  -- counter-clockwise
+  local fx, fy = -math.sin(a), math.cos(a)              -- local +y turned by a
+  local dx, dy = cx - x, cy - y
+  local L = math.sqrt(dx * dx + dy * dy)
+  return math.abs(fx - dx / L) < 1e-9 and math.abs(fy - dy / L) < 1e-9
+end
+T.check(faced(0, 0, 0, 10) and faced(0, 0, 10, 0) and faced(5, 5, -3, 2) and faced(0, 0, 0, -7), 'faceYaw: its face to the camera')
 T.check(ng.glowSize(99) == ng.GLOW_R[ng.GLOW_RANK_MAX], 'ranks past the last: the last size')
 -- the glows only at night (by day the fog pass lit their additive cylinders: pale rings in the sky)
 local S = dofile(dir .. '/stubs.lua')
 readFile = function() return 'export default {};' end
 jsonDecode = function() return { places = { { 'Denver', -104.99, 39.74, 1, 1 } } } end
-core_camera = { getPosition = function() return vec3(0, 0, 1600) end }
+core_camera = { getPosition = function() return vec3(40000, 0, 1600) end }    -- (40 km out: its glow full)
 local anchor = { geodeticToEnu = function(_, lat, lon, h) return (lon + 104.99) * 85000, (lat - 39.74) * 111000, h end }
 local function glows() local n = 0 for _, o in ipairs(S.liveOf('TSStatic')) do
   if o.fields.shapeName == ng.GLOW_SHAPE then n = n + 1 end end return n end

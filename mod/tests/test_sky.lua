@@ -122,9 +122,14 @@ local function run(seconds, dt)
 end
 local function realTime() return sky.todFields(now, tod.latitude, tod.longitude).time end
 
+local loadedExt = {}
+extensions = { load = function(name) loadedExt[#loadedExt + 1] = name; if name == 'core_celestial' then core_celestial = {} end end }
 sky.onClientStartMission()
 check(sky.getMode() == 'real', 'real by default')
 run(0.1)
+check(#loadedExt == 1 and loadedExt[1] == 'core_celestial', 'core_celestial loaded in our level (it moves the drawn sun)')
+run(sky.CELESTIAL_CHECK_S * 2)
+check(#loadedExt == 1, '... once: not again while it is loaded')
 check(tod.year == 2026 and tod.month == 10 and tod.day == 10 and tod.play == true and tod.dayLength == sky.REAL_DAY_S
   and near(tod.time, realTime(), 1e-9), 'synced to the real clock')
 -- level start: core_environment's setState(init_env), freeroam's start time: grace
