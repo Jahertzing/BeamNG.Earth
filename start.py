@@ -86,6 +86,9 @@ def main():
             cmd += [flag, value]
         else:
             skipped.append(flag)
+    import bmplaunch            # the mod's settings page's server options (as the app's launcher: setting_flags)
+    if has_flag(help_text, "--drcog"):
+        cmd += ["--drcog", "on" if bmplaunch.mod_setting(user_dir, "drcog", True) is not False else "off"]
     extra = args.extra[1:] if args.extra[:1] == ["--"] else args.extra
     cmd += extra
 

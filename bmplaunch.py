@@ -98,6 +98,12 @@ def _mod_settings(user_dir):
         return {}
 
 
+def mod_setting(user_dir, key, default=None):
+    """A setting of the mod's settings file (settings.lua SCHEMA), default when the file or the key is missing."""
+    v = _mod_settings(user_dir).get(key)
+    return default if v is None else v
+
+
 def on_launch(user_dir, data_dir=None):
     """Start BeamMP with the game? The mod's setting; an older app's "never ask" (beammp.json declined) counts as off
     until the setting is written."""

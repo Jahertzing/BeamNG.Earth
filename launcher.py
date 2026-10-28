@@ -184,9 +184,16 @@ def run_server(argv):
     earthd.main()
 
 
+def setting_flags(user_dir):
+    """Server options from the mod's settings page (its settings file in the game's user folder): --drcog on / off
+    (the setting "drcog", default on: DRCOG's planimetrics change nothing outside the Denver region)."""
+    import bmplaunch
+    return ["--drcog", "on" if bmplaunch.mod_setting(user_dir, "drcog", True) is not False else "off"]
+
+
 def start_server(user_dir, extra, log_path):
     cmd = [sys.executable] + ([] if FROZEN else [os.path.abspath(__file__)])
-    cmd += ["--server", "--user-dir", user_dir] + RECOMMENDED + extra
+    cmd += ["--server", "--user-dir", user_dir] + RECOMMENDED + setting_flags(user_dir) + extra
     env = dict(os.environ)
     env["BNGEARTH_PARENT"] = str(os.getpid())      # the server ends when this launcher does (watch_parent)
     kw = {"cwd": ROOT, "env": env}
