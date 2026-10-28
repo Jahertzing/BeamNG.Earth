@@ -148,6 +148,22 @@ class RulesTest(unittest.TestCase):
         self.assertEqual(hb.pin_metres({"pinM": 6750.0}, 15000.0), 6750.0)
         self.assertEqual(hb.pin_metres({"pinM": 6750.0}, 10000.0), 4500.0, "core.lua PIN_SHARE of the setting")
 
+    def test_the_pinned_anchor_rule(self):
+        A, B = (40.0, -105.0), (40.0 + 1200 * DEG_N, -105.0)
+        anchors, pin_m = [A, B], 6750.0
+        at = lambda m: (40.0 + m * DEG_N, -105.0)     # noqa: E731
+        self.assertEqual(hb.pin_want(*at(100), anchors, pin_m, A, 100.0), (False, A), "A is the nearest: stay")
+        self.assertEqual(hb.pin_want(*at(700), anchors, pin_m, A, 700.0), (False, B), "B nearer, not by 300 m")
+        self.assertEqual(hb.pin_want(*at(760), anchors, pin_m, A, 760.0), (True, B), "B 320 m nearer: move")
+        self.assertEqual(hb.pin_want(*at(760), anchors, pin_m, B, 440.0), (False, B), "in B already")
+        self.assertEqual(hb.pin_want(*at(760), anchors, pin_m, None, 1e9), (True, B), "no anchor yet: move")
+        self.assertEqual(hb.pin_want(*at(20000), anchors, pin_m, A, 20000.0), (None, None), "none near")
+        self.assertEqual(hb.pin_want(*at(760), anchors, 0.0, A, 760.0), (None, None), "no pin distance")
+        self.assertEqual(hb.rebase_hint(27.0, 0.0, 700.0, 15000.0, 10.0, -20.0, 1024, 1.0, pinned=True),
+                         modsim.follow_centre_near(10.0 + 54.0, -20.0, 10.0 + 27.0, -20.0,
+                                                   modsim.follow_mode(27.0, 0.0, 1024)[1], 1024),
+                         "pinned: the block where the player will be at the answer, within reach")
+
     def test_rebase_hint_at_the_origin_is_modsims(self):
         for vx, vy, dist in ((27.0, 0.0, 14700.0), (10.0, -20.0, 14800.0), (27.0, 3.0, 15200.0)):
             self.assertEqual(hb.rebase_hint(vx, vy, dist, 15000.0, 0.0, 0.0, 512),
@@ -298,6 +314,27 @@ class DriveTest(unittest.TestCase):
         self.assertTrue(all(abs(p["z"] - 1600.0) < 1 for p in poses), "the teleport's ground height")
         commits = [m for m in srv.got if m["type"] == "commit_anchor"]
         self.assertEqual([m["anchorId"] for m in commits], list(range(1, len(asked) + 1)))
+
+    def test_a_drive_moves_to_the_nearer_planned_anchor(self):
+        # two planned anchors 1200 m apart, the rebase distance 15 km: the distance rule never fires on a 2.4 km
+        # drive; the pinned-anchor rule moves the frame to B 150 m past the midpoint (B 300 m nearer)
+        A, B = (40.0, -105.0), (40.0 + 1200 * DEG_N, -105.0)
+        line = [A, (40.0 + 2400 * DEG_N, -105.0)]
+        srv = StandIn()
+        self.addCleanup(srv.close)
+        c = hb.Client(srv.port)
+        self.addCleanup(c.close)
+        hb.hello(c, 10)
+        d = hb.Drive(c, gd_route(line), [A, B], 6750.0, 15000.0, 1024, "/nonexistent",
+                     opts(speed=100.0, max_wait=20.0), say=lambda *x, **k: None)
+        s = d.run()
+        self.assertTrue(s["complete"], s)
+        asked = [(m["lat"], m["lon"], m["purpose"]) for m in srv.got if m["type"] == "prepare_anchor"]
+        self.assertEqual(asked, [(A[0], A[1], "teleport"), (B[0], B[1], "rebase")])
+        self.assertEqual((s["rebases"], s["pinned"], s["discards"]), (1, 1, 0))
+        rebase = next(m for m in srv.got if m["type"] == "prepare_anchor" and m["purpose"] == "rebase")
+        self.assertLess(abs(rebase["cx"]), 3000, "the hint: a block near the player, not 15 km ahead")
+        self.assertEqual(s["anchors"], [[A[0], A[1]], [round(B[0], 6), B[1]]])
 
     def test_on_past_a_spot_that_never_loads(self):
         line = [(40.0, -105.0), (40.0 + 600 * DEG_N, -105.0)]

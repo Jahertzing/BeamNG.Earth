@@ -334,6 +334,43 @@ def python_far_trace(lines, final=None):
     return out
 
 
+class PinnedAnchorRuleTest(unittest.TestCase):
+    """rebase.decide's want (the pinned-anchor rule) and pin_want, as test_rebase.lua / test_routepins.lua."""
+
+    def test_decide_with_want(self):
+        d = modsim.rebase_decide
+        D = 10000.0
+        self.assertEqual(d(3000, None, None, D, want=True), "prefetch")
+        self.assertIsNone(d(3000, None, None, D, now=3, retry_at=5, want=True))
+        self.assertIsNone(d(3000, None, None, D, want=False))
+        self.assertEqual(d(9700, None, None, D, want=False), "prefetch", "the distance rule underneath")
+        self.assertIsNone(d(3000, None, None, D))
+        pinned = {"purpose": "rebase", "ready": True, "pinned": True}
+        self.assertEqual(d(3000, pinned, 100, D, want=True), "commit")
+        self.assertEqual(d(3000, pinned, 100, D, want=None), "commit")
+        self.assertEqual(d(3000, pinned, 500, D, want=True), "discard", "stale terrain")
+        self.assertEqual(d(3000, pinned, 100, D, want=False), "discard", "no longer the nearest")
+        self.assertIsNone(d(3000, dict(pinned, ready=False), None, D, want=True))
+        plain = {"purpose": "rebase", "ready": True}
+        self.assertIsNone(d(9900, plain, 100, D, want=True), "a distance-driven request waits for the distance")
+        self.assertEqual(d(10000, plain, 100, D, want=False), "commit")
+
+    def test_pin_want(self):
+        self.assertEqual(modsim.REBASE["PIN_HYST_M"], 300.0)
+        self.assertIsNone(modsim.pin_want(None, False, 5000.0))
+        self.assertFalse(modsim.pin_want(100.0, True, 100.0))
+        self.assertFalse(modsim.pin_want(450.0, False, 700.0))
+        self.assertTrue(modsim.pin_want(440.0, False, 760.0))
+        self.assertTrue(modsim.pin_want(500.0, False, 600.0, hyst=50.0))
+
+    def test_pinned_hint_leads_by_the_latency(self):
+        self.assertEqual(modsim.rebase_hint(27.0, 0.0, 700.0, 15000.0, 1024, 1.0, pinned=True),
+                         modsim.follow_centre_near(54.0, 0.0, 27.0, 0.0, modsim.follow_mode(27.0, 0.0, 1024)[1], 1024),
+                         "pinned: centred where the player will be at the answer, within reach")
+        self.assertEqual(modsim.rebase_hint(27.0, 0.0, 14700.0, 15000.0, 1024, 1.0),
+                         modsim.follow_target(300.0, 0.0, 27.0, 0.0, 1024), "not pinned: as before")
+
+
 @unittest.skipIf(LUAJIT is None, "luajit not installed")
 class ModSimTest(unittest.TestCase):
     def test_ports_match_lua(self):

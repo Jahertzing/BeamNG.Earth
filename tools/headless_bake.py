@@ -35,7 +35,9 @@ summary.json files), the children's lines prefixed with their leg.
 
 The client (the mod's rules from server/tests/modsim.py, line-by-line ports of follow.lua and rebase.lua): hello; per
 route a teleport to its start (the anchor pinned as routepins.lua does: the planned anchor within PIN_SHARE of the
-rebase distance, else the grid point); then the car moved along routes.json at --speed, a pose every POSE_S (its height
+rebase distance, else the grid point); the pinned-anchor rule as the car moves (core.lua pinWant: the frame moves to a
+planned anchor as soon as it is rebase.PIN_HYST_M nearer than the current one, so every drive is in the same frames
+and a bake covers an area, not a path); then the car moved along routes.json at --speed, a pose every POSE_S (its height
 read from the committed block's heightmap: the horizon far field's eye), the terrain-follow and rebase requests as the
 mod makes them. It moves on only when the place is loaded: no anchor request pending (a rebase's, once ready, does
 not count: it commits past the rebase distance), the next block ready before the car nears its block's edge, the ground
@@ -403,9 +405,27 @@ def anchor_for(lat, lon, anchors, pin_m):
     return tuple(a) if a is not None else rb.snap_anchor(lat, lon)
 
 
-def rebase_hint(vx, vy, dist, distance, dx, dy, size, latency=None):
+def pin_want(lat, lon, anchors, pin_m, current, dist):
+    """core.lua pinWant / routepins.want: (want, nearest planned anchor) for the player at (lat, lon), dist from the
+    current anchor (lat, lon): None when none is within pin_m, False when the nearest is the current one or not
+    rebase.PIN_HYST_M nearer, True when the frame should move to it."""
+    a = rb.pin((lat, lon), anchors, pin_m) if pin_m > 0 and anchors else None
+    if a is None:
+        return None, None
+    a = tuple(a)
+    same = current is not None and abs(a[0] - current[0]) < 1e-7 and abs(a[1] - current[1]) < 1e-7
+    return modsim.pin_want(rb.horizontal(a, (lat, lon)), same, dist), a
+
+
+def rebase_hint(vx, vy, dist, distance, dx, dy, size, latency=None, pinned=False):
     """core.lua rebaseHint with the player's spot (dx, dy) in the new frame (modsim.rebase_hint has it at the
-    origin)."""
+    origin); pinned: the pinned-anchor rule's request (the commit comes with the answer: the block for the player
+    at p + v * lead)."""
+    if pinned:
+        lead = modsim.rebase_ahead_lead(latency)
+        lat = lead - modsim.REBASE["LEAD_EXTRA_S"]
+        return modsim.follow_centre_near(dx + vx * lead, dy + vy * lead, dx + vx * lat, dy + vy * lat,
+                                         modsim.follow_mode(vx, vy, size)[1], size)
     rem = max(0.0, distance - dist)
     if rem <= 0 and modsim.rebase_table(size)["KEEP_EDGE"] > 0:
         lead = modsim.rebase_ahead_lead(latency)
@@ -490,13 +510,14 @@ class Drive:
         self.next_id = next_id
         self.st = {"pending": None, "tp": None, "progress": None}
         self.frame = self.aid = self.block = None
+        self.anchor_ll = None       # the committed anchor's (lat, lon)
         self.hm = {}                # (anchor id, cx, cy) -> read_heightmap
         self.z = 0.0
         self.t_lat = self.a_lat = None
         self.retry_at = self.follow_retry = 0.0
         self.slots_gone = []
         self.stats = {"rebases": 0, "prepares": 0, "commits": 0, "anchor_errors": 0, "terrain_errors": 0,
-                      "discards": 0, "anchors": []}
+                      "discards": 0, "pinned": 0, "anchors": []}
         self.waits = []
         self.by = {k: 0.0 for k in CAUSES}      # seconds by cause: moving, or the first wait reason's (cause_of)
 
@@ -567,6 +588,7 @@ class Drive:
 
     def commit(self, m):
         self.frame = self.geodesy.EnuFrame(m["lat"], m["lon"])
+        self.anchor_ll = (float(m["lat"]), float(m["lon"]))
         self.aid = m["anchorId"]
         self.block = (m["terrain"]["cx"], m["terrain"]["cy"])
         self.st["tp"] = None
@@ -611,13 +633,19 @@ class Drive:
             gx0, gy0, gx1, gy1 = modsim.ground_box(m["terrain"]["cx"], m["terrain"]["cy"], size)
             edge = min(nx - gx0, gx1 - nx, ny - gy0, gy1 - ny)
         dist = math.hypot(x, y)
-        act = modsim.rebase_decide(dist, p, stale, self.distance, now, self.retry_at, edge=edge, size=size)
+        # the pinned-anchor rule (core.lua pinWant): a pinned request whose anchor is no longer the nearest is discarded
+        want, near = pin_want(lat, lon, self.anchors, self.pin_m, self.anchor_ll, dist)
+        if p and p.get("pinned") and want and near != (p["lat"], p["lon"]):
+            want = False
+        act = modsim.rebase_decide(dist, p, stale, self.distance, now, self.retry_at, edge=edge, size=size, want=want)
         if act == "prefetch":
+            pinned = want is True
             aLat, aLon = anchor_for(lat, lon, self.anchors, self.pin_m)
             dx, dy = self.enu(self.geodesy.EnuFrame(aLat, aLon), lat, lon)
-            cx, cy = rebase_hint(vx, vy, dist, self.distance, dx, dy, size, self.a_lat)
+            cx, cy = rebase_hint(vx, vy, dist, self.distance, dx, dy, size, self.a_lat, pinned)
             st["pending"] = {"requestId": self.rid(), "purpose": "rebase", "sent": now, "lat": aLat, "lon": aLon,
-                             "cx": cx, "cy": cy}
+                             "cx": cx, "cy": cy, "pinned": pinned}
+            self.stats["pinned"] += 1 if pinned else 0
             self.send_anchor(st["pending"])
         elif act == "commit":
             self.commit(p["msg"])
@@ -754,6 +782,24 @@ def bne_env():
 
 
 # --- the legs (--jobs) ----------------------------------------------------------------------------------------------
+def route_names(text, lines):
+    """The routes of --routes (a comma list; an item with * or ? a pattern over routes.json's names, in its order:
+    'scan_*'), every route in lines when none given."""
+    if not text:
+        return list(lines)
+    import fnmatch
+    out = []
+    for item in text.split(","):
+        item = item.strip()
+        if not item:
+            continue
+        if "*" in item or "?" in item:
+            out += [n for n in lines if fnmatch.fnmatchcase(n, item) and n not in out]
+        elif item not in out:
+            out.append(item)
+    return out
+
+
 def legs_of(names, both_ways):
     """The legs [(route, back)]: each route one way, and back again too with both_ways."""
     return [(n, back) for n in names for back in ((False, True) if both_ways else (False,))]
@@ -967,7 +1013,7 @@ def main(argv=None):
     if not data or not lines:
         print(f"no plan in {bd}: route_bake.py plan first", file=sys.stderr)
         return 2
-    names = a.routes.split(",") if a.routes else list(lines)
+    names = route_names(a.routes, lines)
     legs = parse_legs(a.legs) if a.legs else legs_of(names, a.both_ways)
     distance = a.rebase_m or rb.rebase_distance(a.user_dir)
     if data.get("rebaseDistance") and abs(float(data["rebaseDistance"]) - distance) > 1:

@@ -258,12 +258,16 @@ def follow_decide(px, py, vx, vy, cx, cy, pending, now=0.0, retry_at=0.0, gate=N
     return ("prepare", tx, ty)
 
 
-def rebase_decide(dist, pending, stale, distance, now=0.0, retry_at=0.0, edge=None, size=1024):
+def rebase_decide(dist, pending, stale, distance, now=0.0, retry_at=0.0, edge=None, size=1024, want=None):
+    """rebase.decide; want: the pinned-anchor rule's (pin_want: None, True, False), pending["pinned"] a request it
+    asked for."""
     if not pending:
-        return "prefetch" if dist >= distance - REBASE["PREFETCH_MARGIN"] and now >= retry_at else None
+        return "prefetch" if (want or dist >= distance - REBASE["PREFETCH_MARGIN"]) and now >= retry_at else None
     if pending["purpose"] != "rebase" or not pending.get("ready"):
         return None
-    if dist < distance:
+    if pending.get("pinned") and want is False:
+        return "discard"
+    if not pending.get("pinned") and dist < distance:
         return None
     R = rebase_table(size)
     if stale is not None and stale > R["STALE_DIST"]:
@@ -278,9 +282,25 @@ def rebase_ahead_lead(latency=None):
     return (REBASE["LATENCY_S"] if latency is None else latency) + REBASE["LEAD_EXTRA_S"]
 
 
-def rebase_hint(vx, vy, dist, distance, size=1024, latency=None):
+def pin_want(d_nearest, same_anchor, dist, hyst=None):
+    """routepins.want's verdict: None when no planned anchor is within the pin distance (d_nearest None), False when
+    the nearest is the current anchor (same_anchor) or not hyst (rebase.PIN_HYST_M) nearer than it (dist: the player's
+    distance from the current anchor), else True: the frame moves to it."""
+    if d_nearest is None:
+        return None
+    if same_anchor:
+        return False
+    return dist - d_nearest >= (REBASE["PIN_HYST_M"] if hyst is None else hyst)
+
+
+def rebase_hint(vx, vy, dist, distance, size=1024, latency=None, pinned=False):
     """core.lua rebaseHint; at or past the distance with the stale-anchor rule (512²): the terrain at
-    p + v * (anchor latency + 1 s), the player's position at the answer within reach."""
+    p + v * (anchor latency + 1 s), the player's position at the answer within reach; pinned (the pinned-anchor rule
+    asked): the block for the player at p + v * (anchor latency + 1 s), the commit comes with the answer."""
+    if pinned:
+        lead = rebase_ahead_lead(latency)
+        lat = lead - REBASE["LEAD_EXTRA_S"]
+        return follow_centre_near(vx * lead, vy * lead, vx * lat, vy * lat, follow_mode(vx, vy, size)[1], size)
     rem = max(0.0, distance - dist)
     if rem <= 0 and rebase_table(size)["KEEP_EDGE"] > 0:
         lead = rebase_ahead_lead(latency)

@@ -303,8 +303,16 @@ end
 -- after a stale anchor was discarded) the terrain goes where the player will be when the answer
 -- arrives, p + v * (measured anchor latency + 1 s), so a slow server cannot make it stale forever.
 -- (dx, dy): the player's spot in the new frame when its anchor is not the player's position (snapped: rebaseAnchor)
-local function rebaseHint(pl, dx, dy)
+-- pinned (the pinned-anchor rule, pinWant): the commit comes as soon as the answer does, so the terrain goes where the
+-- player will be then, p + v * (measured anchor latency + 1 s)
+local function rebaseHint(pl, dx, dy, pinned)
   dx, dy = dx or 0, dy or 0
+  if pinned then          -- (as the stale-anchor rule's re-request: centred where the player will be, within reach)
+    local lead = rebase.aheadLead(st.anchorLatency)
+    local lat = lead - rebase.LEAD_EXTRA_S
+    return follow.centreNear(dx + pl.vx * lead, dy + pl.vy * lead, dx + pl.vx * lat, dy + pl.vy * lat,
+      follow.reachFor(pl.vx, pl.vy))
+  end
   local rem = math.max(0, rebase.distance - pl.dist)
   if rem <= 0 and rebase.KEEP_EDGE > 0 then
     local lead = rebase.aheadLead(st.anchorLatency)
@@ -330,12 +338,30 @@ local function rebaseAnchor(lat, lon)
   return sLat, sLon, dx, dy
 end
 
--- A rebase's request for the player now (pl: st.player): anchor lat, lon and the terrain hint cx, cy in its frame.
-function M._rebaseRequest(pl)
+-- A rebase's request for the player now (pl: st.player): anchor lat, lon and the terrain hint cx, cy in its frame
+-- (pinned: the pinned-anchor rule asked for it, pinWant).
+function M._rebaseRequest(pl, pinned)
   local aLat, aLon, dx, dy = rebaseAnchor(pl.lat, pl.lon)
-  local cx, cy = rebaseHint(pl, dx, dy)
+  local cx, cy = rebaseHint(pl, dx, dy, pinned)
   return aLat, aLon, cx, cy
 end
+
+-- The pinned-anchor rule (routepins.want, rebase.decide's want), checked again once the player moved PIN_CHECK_M or
+-- the anchor changed: -> want (nil | true | false), and the nearest planned anchor's lat, lon when there is one. The
+-- frame is the nearest planned anchor's, whichever way the car came, so a bake in those frames fits every drive.
+M.PIN_CHECK_M = 50
+local function pinWant(pl)
+  if not M.SNAP_TELEPORTS or not st.anchor then return nil end
+  local c = st.pinCheck
+  if c and c.anchorId == st.anchorId and hypot(pl.x - c.x, pl.y - c.y) < M.PIN_CHECK_M then
+    return c.want, c.lat, c.lon
+  end
+  local want, aLat, aLon = require('beamngEarth/routepins').want(pl.lat, pl.lon, st.anchor.lat, st.anchor.lon, pl.dist,
+    M.PIN_SHARE * rebase.distance, rebase.PIN_HYST_M)
+  st.pinCheck = { anchorId = st.anchorId, x = pl.x, y = pl.y, want = want, lat = aLat, lon = aLon }
+  return want, aLat, aLon
+end
+M._pinWant = pinWant
 
 -- Terrain centre for a resync (same frame): where terrain-follow would put it now.
 local function resyncHint()
@@ -1353,7 +1379,10 @@ local function updateWorld(dt)
     local x0, y0, x1, y1 = lattice.groundBox(tr.cx or 0, tr.cy or 0)
     edgeDist = math.min(nx - x0, x1 - nx, ny - y0, y1 - ny)
   end
-  local action = rebase.decide(pl.dist, p, staleDist, st.clock, st.retryAt, edgeDist)
+  -- the pinned-anchor rule: a pinned request whose anchor is no longer the nearest planned one is discarded (want false)
+  local want, wLat, wLon = pinWant(pl)
+  if p and p.pinned and want and (math.abs(p.lat - wLat) > 1e-7 or math.abs(p.lon - wLon) > 1e-7) then want = false end
+  local action = rebase.decide(pl.dist, p, staleDist, st.clock, st.retryAt, edgeDist, want)
   if p and p.ready and p.purpose == 'resync' then
     -- the player may have driven off the terrain the server prepared meanwhile: ask again
     if staleDist > rebase.STALE_DIST then
@@ -1384,8 +1413,9 @@ local function updateWorld(dt)
   if (action == 'commit' or action == 'resync') and st.paused then action = nil end -- vehicles move only with physics running
   if action == 'prefetch' then
     if net.isConnected() then
-      local aLat, aLon, cx, cy = M._rebaseRequest(pl)
-      requestAnchor(aLat, aLon, 'rebase', cx, cy)
+      local pinned = want == true
+      local aLat, aLon, cx, cy = M._rebaseRequest(pl, pinned)
+      if requestAnchor(aLat, aLon, 'rebase', cx, cy) and pinned then st.pending.pinned = true end
     end
   elseif action == 'commit' or action == 'resync' then
     -- a heavy op: it runs once the governor has ramped streaming down (asked again every frame);

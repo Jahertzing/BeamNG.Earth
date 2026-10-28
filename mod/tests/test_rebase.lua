@@ -48,4 +48,26 @@ T.check(rebase.aheadLead(nil) == rebase.LATENCY_S + rebase.LEAD_EXTRA_S and reba
 T.check(rebase.configure(1024) == 1024 and rebase.STALE_DIST == 450 and rebase.KEEP_EDGE == 0, 'configure(1024) restores v1.3.1')
 T.check(rebase.configure(nil) == 1024, 'no size: 1024')
 
+-- the pinned-anchor rule (want: routepins.want): a planned anchor PIN_HYST_M nearer than the current one moves the frame
+-- at once, whatever the distance; the distance rule stays underneath
+T.check(rebase.PIN_HYST_M == 300, 'hysteresis 300 m')
+T.check(d(3000, nil, nil, 0, 0, nil, true) == 'prefetch', 'want: prefetch well inside the distance')
+T.check(d(3000, nil, nil, 3, 5, nil, true) == nil, 'want: not before retryAt')
+T.check(d(3000, nil, nil, 0, 0, nil, false) == nil, 'the current anchor is the nearest: no prefetch')
+T.check(d(9700, nil, nil, 0, 0, nil, false) == 'prefetch', '... unless the distance rule fires')
+T.check(d(3000, nil, nil, 0, 0, nil, nil) == nil, 'no planned anchor near: the distance rule alone')
+T.check(d(3000, { purpose = 'rebase', ready = true, pinned = true }, 100, 0, 0, nil, true) == 'commit',
+  'a pinned request commits as soon as it is ready')
+T.check(d(3000, { purpose = 'rebase', ready = true, pinned = true }, 100, 0, 0, nil, nil) == 'commit',
+  '... also once no planned anchor is near any more')
+T.check(d(3000, { purpose = 'rebase', ready = true, pinned = true }, 500, 0, 0, nil, true) == 'discard',
+  'a pinned request whose terrain is stale is discarded (asked again from the player)')
+T.check(d(3000, { purpose = 'rebase', ready = true, pinned = true }, 100, 0, 0, nil, false) == 'discard',
+  'a pinned request whose anchor is no longer the nearest planned one is discarded')
+T.check(d(3000, { purpose = 'rebase', ready = false, pinned = true }, nil, 0, 0, nil, true) == nil, 'not ready: wait')
+T.check(d(9900, { purpose = 'rebase', ready = true }, 100, 0, 0, nil, true) == nil,
+  'a distance-driven request (not pinned) still waits for the distance')
+T.check(d(10000, { purpose = 'rebase', ready = true }, 100, 0, 0, nil, false) == 'commit',
+  '... and commits there whatever want says')
+
 T.done('test_rebase')
