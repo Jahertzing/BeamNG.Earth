@@ -1239,3 +1239,21 @@ class ChainResolveTest(unittest.TestCase):
                 pool = {("b", 0): pool[("b", 0)], ("a", 0): pool[("a", 0)]}
             self.assertEqual(res._resolve(("a", 0), pool, {}, set()), [("a", 0), ("b", 0)])
             self.assertEqual(float(pool[("b", 0)][1][-1][0]), 300.0)
+
+
+class StreetSignsTest(unittest.TestCase):
+    def test_street_name_signs_at_a_named_crossroads(self):
+        """Colfax across Grant in town: build_tile's signs get the street name blades on a corner post (guidesigns)."""
+        c = (100.0, 100.0)
+        f = features([[(0.0, 100.0), c], [c, (250.0, 100.0)], [(100.0, 0.0), c], [c, (100.0, 250.0)]],
+                     ["primary", "primary", "residential", "residential"])
+        f.attrs["name"] = np.array(["East Colfax Avenue"] * 2 + ["Grant Street"] * 2, object)
+        signs = []
+        roads.build_tile(FRAME, 0, 0, [f], flat, lambda la, lo: np.ones(np.shape(la), bool), signs=signs)
+        self.assertEqual(len(signs), 1)
+        self.assertIsNotNone(signs[0]["mesh"])
+        self.assertGreaterEqual(len(signs[0]["col"][2]), 1)
+        f.attrs.pop("name")
+        signs = []
+        roads.build_tile(FRAME, 0, 0, [f], flat, lambda la, lo: np.ones(np.shape(la), bool), signs=signs)
+        self.assertIsNone(signs[0]["mesh"])
