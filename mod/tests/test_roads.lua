@@ -390,4 +390,45 @@ do
   for i = -4, -1 do for j = 4, 7 do s2['1:' .. i .. '_' .. j] = true end end
   T.check(roads.skyCovered(s2, 1, -1, 1), 'skyCovered: negative squares')
 end
+
+-- our skyline's parts under upstream 1.7.0's skyline squares (bldsky, 1 km, every building to 4.8 km): a part is
+-- hidden while the square holding its road tile is made, shown again when it goes (fix/upstream-170-overlaps: drawn
+-- twice from 1.9 to 4.8 km before); never neither (no hole), never both (no double)
+do
+  roads.reset()
+  roads.SKY_CHECK_S = 0
+  local g = {}
+  function g:try() return true end
+  function g:charge() end
+  function g:chargeMotion() end
+  local aid = 5
+  local function shapeObj(name)
+    for _, o in pairs(S.objects) do if o.class == 'TSStatic' and o.fields.shapeName == name then return o end end
+  end
+  roads.onFarTile({ anchorId = aid, key = '0_0', data = { shape = '/t/bldsky_0_0.cdae', pos = { 0, 0, 0 } } }, aid, 'S')
+  T.check(not roads.skyPartCovered(aid, '1_2'), 'bldsky: not covered before its square is made')
+  roads.update(g, aid)
+  T.check(shapeObj('/t/bldsky_0_0.cdae') ~= nil, 'bldsky: square made')
+  T.check(roads.skyPartCovered(aid, '0_0') and roads.skyPartCovered(aid, '3_3') and roads.skyPartCovered(aid, '1_2'),
+    'bldsky: its 16 road tile squares covered')
+  T.check(not roads.skyPartCovered(aid, '4_0') and not roads.skyPartCovered(aid, '-1_0'), 'bldsky: its neighbours not')
+  T.check(not roads.skyPartCovered(aid + 1, '1_2'), 'bldsky: another anchor\'s square not')
+  roads.onFarTile({ anchorId = aid, key = '-1_-1', data = { shape = '/t/bldsky_m1.cdae', pos = { -1024, -1024, 0 } } }, aid, 'S')
+  roads.update(g, aid)
+  T.check(roads.skyPartCovered(aid, '-4_-1') and roads.skyPartCovered(aid, '-1_-4') and not roads.skyPartCovered(aid, '-5_-1'),
+    'bldsky: negative squares (floor)')
+  -- a skyline cell with a part under the bldsky square and one past it
+  roads.onSkyTile({ anchorId = aid, key = '853_1554', tier = 'mid', data = { box = { -3000, -3000, 3000, 3000 },
+    shapes = {}, parts = { { k = '1_2', shape = '/t/sky_p1.cdae', pos = { 256, 512, 0 } },
+                           { k = '5_0', shape = '/t/sky_p2.cdae', pos = { 1280, 0, 0 } } } } }, aid)
+  for _ = 1, 4 do roads.update(g, aid, { x = 0, y = 0 }, nil) end
+  local p1, p2 = shapeObj('/t/sky_p1.cdae'), shapeObj('/t/sky_p2.cdae')
+  T.check(p1 ~= nil and p2 ~= nil, 'skyline parts made')
+  T.check(p1 and p1.hidden == true, 'skyline part under a bldsky square: hidden (no double)')
+  T.check(p2 and not p2.hidden, 'skyline part past the bldsky squares: shown')
+  roads.onFarDrop({ anchorId = aid, key = '0_0' }, 'S')
+  roads.update(g, aid, { x = 0, y = 0 }, nil)
+  T.check(p1 and not p1.hidden, 'its bldsky square dropped: the skyline part shown again (no hole)')
+  roads.reset()
+end
 T.done('test_roads')

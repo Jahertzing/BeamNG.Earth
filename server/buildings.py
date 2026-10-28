@@ -3076,8 +3076,9 @@ def _sky_mesh(items):
         windows = spec.windows is not False
         wall = (ms if windows else mi, _sky_colour(spec.facade, f))
         roof = (mi, _sky_colour(spec.roof_mat or ROOF_FLAT, f))
-        z0 = gmin - SKIRT_LITE_M
-        z1 = base_z(spec, gmin, gmax) + float(spec.min_h or 0.0) + float(spec.height or 0.0)
+        mh = float(spec.min_h or 0.0)
+        z0 = gmin - SKIRT_LITE_M if mh <= 0.5 else base_z(spec, gmin, gmax) + mh     # (a part over another: its own)
+        z1 = base_z(spec, gmin, gmax) + mh + float(spec.height or 0.0)
         if z1 <= z0 + 0.5:
             continue
         n = len(ring)
@@ -3097,6 +3098,8 @@ def _sky_mesh(items):
             else:
                 m.quad((a[0], a[1], z0), (b[0], b[1], z0), (b[0], b[1], z1), (a[0], a[1], z1), uv, uv, uv, uv, wall)
         m.poly([(p[0], p[1], z1) for p in ring], [uv] * n, roof)
+        if mh > 0.5:                                # (its underside)
+            m.poly([(p[0], p[1], z0) for p in ring[::-1]], [uv] * n, wall)
     if not m.n:
         return None
     P, UV, T, M, C = m.arrays()

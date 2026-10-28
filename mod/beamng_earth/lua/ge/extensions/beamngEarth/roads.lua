@@ -620,7 +620,7 @@ end
 -- `skyline_drop` {anchorId, key}): a cell's tall buildings out to 40 km, render-only, as one mesh per road tile square
 -- (`parts`, keyed "tx_ty" as the road and far building tiles) and the whole cell merged (`shapes`, pooled: slots
 -- "m<k>"). Near the cell (SKY_PARTS_M) or once a near tier covers one of its squares, the parts are drawn and each is
--- hidden while its square's road tile or far building tile shows its buildings (the same buildings: drawn once); the
+-- hidden while its square's road tile, far building tile or bldsky square shows its buildings (drawn once); the
 -- merged mesh stays until every part is made. Farther, the merged mesh alone (one object instead of hundreds). Made
 -- last of all (after the near meshes and the far building tiles), nearest cell first. A tile sent again (another
 -- tier) replaces the old one once its own meshes are made.
@@ -687,14 +687,23 @@ function M.onSkyDrop(msg)
   sky[key] = nil
 end
 
--- Does the near tier of anchor aid show the buildings of road tile square k ("tx_ty")?
-local function skyCovered(aid, k)
+-- Does a nearer tier of anchor aid show the buildings of road tile square k ("tx_ty")? Its road tile, its far
+-- building tile, or (upstream 1.7.0's skyline squares to 4.8 km, `bldsky_tile`) the SKY_UNIT square holding it: that
+-- draws every building of 40 m2 and more there, ours with them (fix/upstream-170-overlaps: drawn twice from 1.9 km to
+-- 4.8 km before). Pure but for the tables it reads.
+function M.skyPartCovered(aid, k)
   local key = tileKey(aid, k)
   local t = tiles[key]
   if t and t.bld ~= nil then return true end
   local f = far[key]
-  return f ~= nil and f.id ~= nil
+  if f ~= nil and f.id ~= nil then return true end
+  local tx, ty = string.match(tostring(k), '^(-?%d+)_(-?%d+)$')
+  if not tx then return false end
+  local n = M.SKY_UNIT
+  local s = far[tileKey(aid, 'S' .. math.floor(tonumber(tx) / n) .. '_' .. math.floor(tonumber(ty) / n))]
+  return s ~= nil and s.id ~= nil
 end
+local skyCovered = M.skyPartCovered
 
 local function boxDist(b, p)
   if not b or type(p) ~= 'table' or not p.x then return math.huge end
