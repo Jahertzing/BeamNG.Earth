@@ -199,4 +199,11 @@ do
   T.check(math.abs(fast2.speedLimit - 29.0 * 1.1) < 1e-9, 'paceLua: a new map scaled as it comes (setMap wrapped once)')
   mapmgr = nil
 end
+-- how near a cut a car is respawned: fresh cars far off, unless this module put them ahead along the player's way
+do
+  T.check(N.cutReach(1, 10, nil) == N.CUT_FRESH_M, 'cutReach: a fresh car (the stock respawn): CUT_FRESH_M')
+  T.check(N.cutReach(1, 30, true) == 30 * N.CUT_S, 'cutReach: a fresh car we put ahead: its speed\'s reach, not CUT_FRESH_M')
+  T.check(N.cutReach(10, 10, nil) == N.CUT_M, 'cutReach: an older slow car: CUT_M')
+  T.check(N.cutReach(1, 30, true) < N.CUT_FRESH_M, 'cutReach: within the AHEAD_M spots of the far end, so no loop')
+end
 T.done('test_navgraph')
