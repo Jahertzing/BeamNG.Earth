@@ -26,6 +26,7 @@ sys.path.insert(0, HERE)
 import mcp  # noqa: E402
 
 TRAFFIC_S = 10.0
+SKIP_S = 90.0               # (the teleport, the settle, the snap onto the road: autodrive_perf --from)
 MODES = {"off": 0, "light": 0.5, "normal": 1, "busy": 1.5}      # (navgraph.lua MODES, modeAmount)
 LIGHT_MIN, BUSY_MAX, BUSY_MORE = 3, 24, 4
 FAST_MS, SPREAD, SPREAD_MAX = 20, 0.06, 0.12                   # (navgraph.lua paceLua)
@@ -140,6 +141,10 @@ def poller(path, stop):
 
 def traffic_summary(path):
     rows = [json.loads(x) for x in open(path) if x.strip()]
+    # the teleport and the settle are not the drive: the polls from SKIP_S on (and while the traffic runs, if it does)
+    rows = [r for r in rows if r["t"] - rows[0]["t"] >= SKIP_S] if rows else rows
+    if any(r.get("state") == "on" for r in rows):
+        rows = [r for r in rows if r.get("state") == "on"]
     if not rows:
         return {}
     fast = [s for r in rows for s in r.get("speeds", []) if s >= 50]
