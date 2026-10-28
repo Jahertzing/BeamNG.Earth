@@ -366,7 +366,7 @@ class SplitTest(unittest.TestCase):
 class MeshTest(unittest.TestCase):
     def check_outward(self, ring, attrs):
         spec = bld.plan(ring, attrs)
-        P, UV, T, M, mats, C = bld.build([(spec, 0.0, 0.0)])
+        P, UV, T, M, mats, C = bld.build([(spec, 0.0, 0.0)], kit=False)    # (the kit's pieces: test_facadekit)
         c = np.append(ring.mean(0), spec.height / 2)
         n = np.cross(P[T[:, 1]] - P[T[:, 0]], P[T[:, 2]] - P[T[:, 0]])
         mid = P[T].mean(1)

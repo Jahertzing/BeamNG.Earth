@@ -1545,6 +1545,14 @@ The user: "make the world look alive ... look like a professionally made map".
   - churches (class or name): a tall gabled nave and a square tower with a slate spire; brick row houses
     get white marble stoops (two steps, the door raised to them); in dense cores (> 35 % cover) small
     buildings are row houses even where Overture's footprints leave gaps.
+- **Facade kit** (`server/facadekit.py`, 2026-10-28; near tiles' full detail only): thin quads in front of the
+  textured walls: sill, head and jambs round each laid-over sash window of a house, shutters on 30 % of pitched
+  houses, a frame round the front door, a white-siding garage door (2.7 m, or 4.9 m on 55 % of walls >= 11 m)
+  where `doors()`' driveway meets the house (no ground-floor window there), a sloped awning over half the
+  shopfronts, balconies (slab + steel railing, every other bay from the 2nd floor) on half the 3-6 storey
+  apartments' street walls, a stone wainscot on 30 % of 2+ storey buildings. No holes cut (windows are not
+  recessed). `build_parts(max_parts=4)` leaves the kit off a building that would take the tile past 85 % of its
+  four meshes' vertices. Frederick: +44 % vertices (4.4k a tile), +0.09 s a tile; Denver's Capitol Hill +20 %.
 - **Far tiles** (`bldfar_tile` / `bldfar_drop`, 256 m squares to 1600 m): the same buildings, lite mesh (no
   cornices, boxes, per-bay quads), render-only; `roads.lua` hides one while the road tile of its square
   shows its own colliding buildings, and makes them only once the near meshes are all made (they share

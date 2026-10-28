@@ -329,7 +329,7 @@ def oriented_box(p):
 class Spec:
     """What is built for one footprint (decided by plan())."""
     __slots__ = ("ring", "floors", "floor_h", "height", "roof", "roof_mat", "facade", "band", "shop", "plain", "min_h", "wall", "door", "windows", "front", "steeple", "stoop",
-                 "sign", "porch", "cls", "seed", "deck", "pitch", "portal", "gring", "skel")
+                 "sign", "porch", "cls", "seed", "deck", "pitch", "portal", "gring", "skel", "drive")
 
     def __init__(self, **kw):
         for k in self.__slots__:
@@ -824,14 +824,29 @@ def _plain_wall_with_windows(m, spec, a, b, L, z0, z_eave, wallmat, mat_idx, edg
             m.quad((p[0], p[1], base), (q[0], q[1], base), (q[0], q[1], zt), (p[0], p[1], zt),
                    (0, v0), (nbs / BAND_SHOP[1], v0), (nbs / BAND_SHOP[1], v1), (0, v1), mat_idx[SHOP])
         return
-    nb = int(L // HOUSE_BAY_M)
-    if nb < 1 or L < 2.0:
+    if L < 2.0:
         return
     d = (b - a) / L
-    out = np.array([d[1], -d[0]]) * WIN_OUT_M
     win = mat_idx["bne_bld_fac_white"]
     u0, u1, v0, v1 = WIN_UV
+    for c, zf in house_window_slots(spec, a, d, np.array([d[1], -d[0]]), L, z_eave, edge):
+        p, q = c - d * WIN_W / 2, c + d * WIN_W / 2
+        m.quad((p[0], p[1], zf), (q[0], q[1], zf), (q[0], q[1], zf + WIN_H), (p[0], p[1], zf + WIN_H),
+               (u0, v0), (u1, v0), (u1, v1), (u0, v1), win)
+
+
+def house_window_slots(spec, a, d, out, L, z_eave, edge=None):
+    """[(centre (2,) WIN_OUT_M out from the wall, sill z)] of a house's laid-over sash windows on one wall (a: its
+    start, d: along it, out: its outward unit normal, L: its length): a whole number per floor centred in their
+    bays, none in the middle bay of the ground floor (where a front door may stand: doors()) nor over its garage door
+    (facadekit.garage_span). The facade kit puts its trims round the same windows."""
+    nb = int(L // HOUSE_BAY_M)
+    if nb < 1 or L < 2.0:
+        return []
+    import facadekit
+    gs = facadekit.garage_span(spec, edge, L) if edge is not None else None
     base = z_eave - spec.floors * spec.floor_h
+    out_ = []
     for f in range(spec.floors):
         zf = base + f * spec.floor_h + WIN_SILL
         if zf + WIN_H > z_eave - 0.2:
@@ -839,10 +854,11 @@ def _plain_wall_with_windows(m, spec, a, b, L, z0, z_eave, wallmat, mat_idx, edg
         for k in range(nb):
             if f == 0 and nb % 2 == 1 and k == nb // 2:
                 continue                                # where a front door may stand (doors(): the middle)
-            c = a + d * (L * (k + 0.5) / nb) + out
-            p, q = c - d * WIN_W / 2, c + d * WIN_W / 2
-            m.quad((p[0], p[1], zf), (q[0], q[1], zf), (q[0], q[1], zf + WIN_H), (p[0], p[1], zf + WIN_H),
-                   (u0, v0), (u1, v0), (u1, v1), (u0, v1), win)
+            s = L * (k + 0.5) / nb
+            if f == 0 and gs is not None and s + WIN_W / 2 > gs[0] - 0.3 and s - WIN_W / 2 < gs[1] + 0.3:
+                continue                                # the garage door's place
+            out_.append((a + d * s + out * WIN_OUT_M, zf))
+    return out_
 
 
 def _walls(m, spec, ring, z0, z_eave, mat_idx, lite=False):
@@ -1338,11 +1354,18 @@ def _concat(meshes):
             meshes[0][4], np.concatenate([m[5] for m in meshes]))
 
 
-def build_parts(specs_and_ground, lite=False, max_verts=MAX_MESH_VERTS, with_lod=False):
+KIT_FILL = 0.85     # the facade kit's details only while the tile's meshes stay under this share of max_parts meshes
+
+
+def build_parts(specs_and_ground, lite=False, max_verts=MAX_MESH_VERTS, with_lod=False, max_parts=None):
     """build() split into meshes of at most max_verts vertices each (whole buildings per mesh): a list, [] if empty.
     Each building is built once (build draws them one by one) and the meshes joined. with_lod: each mesh carries the
-    lite mesh of its buildings as a 7th element (write: the shape's coarse detail)."""
+    lite mesh of its buildings as a 7th element (write: the shape's coarse detail). max_parts (the meshes a road tile
+    can carry, roads.BLD_PARTS_MAX): a building whose facade kit would take the tile's vertices past KIT_FILL of them
+    is built without it (in tile order: the same buildings every build)."""
     parts, cur, cur_lite, n = [], [], [], 0
+    budget = KIT_FILL * max_parts * max_verts if max_parts else None
+    total = 0
 
     def flush():
         if cur:
@@ -1351,8 +1374,11 @@ def build_parts(specs_and_ground, lite=False, max_verts=MAX_MESH_VERTS, with_lod
 
     for item in specs_and_ground:
         one = build([item], lite)
+        if one is not None and budget is not None and not lite and total + len(one[0]) > budget:
+            one = build([item], lite, kit=False)        # (over the tile's budget: no kit)
         if one is None:
             continue
+        total += len(one[0])
         if cur and n + len(one[0]) > max_verts:
             flush()
             cur, cur_lite, n = [], [], 0
@@ -1618,10 +1644,10 @@ GARAGE_DRIVE_W = 6.5        # m: a garage entrance's two lanes
 GARAGE_DRIVE_MAX_M = 25.0   # m from the outline to a road's edge at most
 
 
-def build(specs_and_ground, lite=False):
+def build(specs_and_ground, lite=False, kit=True):
     """The tile's mesh from [(Spec, ground z min, ground z max)] with rings in the tile's local frame:
     (positions, uvs, tris, tri material indices, MATERIALS) or None if empty. lite (far tiles): no
-    cornices, whole walls instead of one quad per bay."""
+    cornices, whole walls instead of one quad per bay. kit: the facade kit's details (facadekit.py; never lite)."""
     m = Mesh()
     for spec, gmin, gmax in specs_and_ground:
         if spec.cls == "toll_booth":        # a stock prop (toll_booth_rows)
@@ -1656,6 +1682,9 @@ def build(specs_and_ground, lite=False):
             else:
                 z_top = z_eave - (spec.floors - 1) * spec.floor_h if spec.floors > 1 else z_eave
             _signs(m, spec, ring, z_top, mat_idx)
+        if kit and not lite:
+            import facadekit
+            facadekit.add(m, spec, ring, gmin, gmax, z_eave, mat_idx)
     if m.n == 0:
         return None
     P, UV, T, M, C = m.arrays()
@@ -2823,6 +2852,7 @@ def doors(items, lines, x0, y0, drives=None):
                 pts = [p0 + (p1 - p0) * (j / (n - 1)) for j in range(n)]
                 drives.append({"m": DRIVEWAY["m"], "w": DRIVEWAY_W, "tl": DRIVEWAY["tl"], "p": DRIVEWAY["p"],
                                "n": [[round(float(pp[0]), 3), round(float(pp[1]), 3), 0.0] for pp in pts]})
+                spec.drive = (edge, Le * g)     # the garage door where it meets the house (facadekit.garage)
         if spec.roof != "flat" and not narrow and _hash01(spec.seed, "fence") < FENCE_SHARE:
             rows.extend(_front_fence(spec, a, d, Le, f, A[kseg], D[kseg], L2[kseg], SHALF[kseg], gmin,
                                      drives is not None and spec.wall and Le >= 7.0, (A, B, SHALF)))
@@ -2989,7 +3019,7 @@ def road_tile(frame, tx, ty, md, ground, lines=None, props=None, items=None):
         items = road_tile_items(frame, tx, ty, md, ground)
     if props is not None and lines:
         props.extend(doors(items, lines, x0, y0))
-    meshes = build_parts(items, with_lod=True)
+    meshes = build_parts(items, with_lod=True, max_parts=4)      # (roads.BLD_PARTS_MAX)
     if not meshes:
         return None
     return meshes, collider_boxes(items, x0, y0), collision_mesh(items)
