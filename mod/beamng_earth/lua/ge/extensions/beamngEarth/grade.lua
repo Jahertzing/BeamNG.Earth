@@ -24,19 +24,38 @@ M.PRESETS = {
     shadows = { 0.465, 0.49, 0.55, 0.65 }, highlights = { 0.55, 0.52, 0.465, 0.55 }, misc = { 0.07, 0.92, 0.5, 0 } },
 }
 M.NAMES = { 'off', 'natural', 'colorado', 'vivid' }
+-- Every preset blends to this at night (nightlights.lua's state, faded over NIGHT_FADE_S): the day contrast and
+-- vibrance sank the unlit ground to black (look probe run5, Denver 20:30), so a softer toe, a faint moonlit-blue
+-- lift in the shadows, cooler balance, the sodium lamps' warmth kept in the highlights.
+M.NIGHT = { balance = { 0.97, 1.0, 1.04, 1 }, tone = { 1.08, 0.30, 0.92, 0.25 },
+  shadows = { 0.49, 0.505, 0.545, 0.7 }, highlights = { 0.54, 0.515, 0.47, 0.35 }, misc = { 0.05, 0.95, 0, 0 } }
+M.NIGHT_FADE_S = 10
 
--- Pure: the shader constants of a preset, as setShaderConst strings.
-function M.constsFor(name)
+-- Pure: the shader constants of a preset, as setShaderConst strings; night (0..1) blends it to M.NIGHT.
+function M.constsFor(name, night)
   local p = M.PRESETS[name]
   if not p then return nil end
-  local function s(v) return string.format('%.6g %.6g %.6g %.6g', v[1], v[2], v[3], v[4]) end
-  return { ['$gradeBalance'] = s(p.balance), ['$gradeTone'] = s(p.tone), ['$gradeShadows'] = s(p.shadows),
-    ['$gradeHighlights'] = s(p.highlights), ['$gradeMisc'] = s(p.misc) }
+  local k = math.min(math.max(tonumber(night) or 0, 0), 1)
+  local function s(key)
+    local a, b = p[key], M.NIGHT[key]
+    local v = {}
+    for i = 1, 4 do v[i] = a[i] + (b[i] - a[i]) * k end
+    return string.format('%.6g %.6g %.6g %.6g', v[1], v[2], v[3], v[4])
+  end
+  return { ['$gradeBalance'] = s('balance'), ['$gradeTone'] = s('tone'), ['$gradeShadows'] = s('shadows'),
+    ['$gradeHighlights'] = s('highlights'), ['$gradeMisc'] = s('misc') }
 end
 
 local mode = 'colorado'
 local active = false
 local lastCheck = -math.huge
+local nightK = 0          -- the night blend now (moves towards nightlights.lua's state)
+
+-- Is it night (nightlights.lua's state; false without it)?
+local function isNight()
+  local ok, nl = pcall(require, 'beamngEarth/nightlights')
+  return ok and type(nl) == 'table' and nl.night == true
+end
 
 local function create()
   local pfx = scenetree.findObject(M.PFX_NAME)
@@ -75,7 +94,7 @@ local function enabledOf(pfx)
 end
 
 local function setConsts(pfx)
-  for k, v in pairs(M.constsFor(mode) or {}) do pfx:setShaderConst(k, v) end
+  for k, v in pairs(M.constsFor(mode, nightK) or {}) do pfx:setShaderConst(k, v) end
 end
 
 function M.setMode(m)
@@ -94,7 +113,11 @@ function M.update(inOurLevel)
   end
   local t = os.clock()
   if t - lastCheck < M.CHECK_S then return end
+  local dt = math.min(t - lastCheck, M.NIGHT_FADE_S)
   lastCheck = t
+  local target = isNight() and 1 or 0
+  local step = dt / M.NIGHT_FADE_S
+  nightK = target > nightK and math.min(target, nightK + step) or math.max(target, nightK - step)
   if mode == 'off' then
     if active then M.restore() end
     return
@@ -120,5 +143,6 @@ function M.restore()
 end
 
 function M.isActive() return active end
+function M.nightBlend() return nightK end
 
 return M
