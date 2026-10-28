@@ -270,6 +270,17 @@ def oriented_box(p):
     u = np.array([ux, uy])
     if hw > hl:
         u, hl, hw = np.array([vx, vy]), hw, hl
+    # the axis made the ring's own (2026-10-28): the edge search's winner among equal-area edges, and so the axis'
+    # sign (and for a square its direction), is decided by float noise, which differs under another anchor's frame;
+    # every placement along the box (its roof's ridge, the rooftop clutter, box_ring's corners) went with it
+    q = np.asarray(p, np.float64)[:, :2]
+    if hl - hw < 1e-3 * max(float(hl), 1.0) and len(q) > 1:
+        e = q[1] - q[0]
+        v_ = np.array([-u[1], u[0]])
+        if abs(float(np.dot(v_, e))) > abs(float(np.dot(u, e))):
+            u = v_
+    if float(np.dot(q[0] - c, u)) > 0:
+        u = -u
     return c, u, hl, hw
 
 
@@ -412,7 +423,20 @@ def plan(ring, attrs, neighbours=0, lat=None, lon=None, look=None, town=False, d
     arid West (district_town): single-storey main streets and ranch houses."""
     area = _area2(ring) / 2
     c = ring.mean(0)
-    seed = _hash01(round(float(c[0]) * 2), round(float(c[1]) * 2), round(area)) if look is None else look
+    # the seed every hashed choice of the building's look starts from: its feature id (attrs["seed_key"], from
+    # tile_buildings: the same building, the same look, whatever the anchor; 2026-10-28: it was hashed from the ring's
+    # centroid in the anchor's tile frame, so a house's walls, porch, colours and windows changed with the anchor it was
+    # built under); a part of a building: the building's look; else (a ring alone: tests, tools) its centroid as given
+    seed_key = attrs.get("seed_key")
+    if look is not None:
+        seed = look
+    elif seed_key is not None:
+        seed = _hash01(str(seed_key), "seed")
+    else:
+        seed = _hash01(round(float(c[0]) * 2), round(float(c[1]) * 2), round(area))
+    cov = attrs.get("cover")            # its z17 square's footprint cover (world_coverage), over the tile's
+    if cov is not None:
+        town, dense = cov < TOWN_COVERAGE, cov > BRICK_WALK_COVERAGE
     style = region_style(lat, lon)
     _, _, hl, hw = oriented_box(ring)
     box_fill = area / max(4 * hl * hw, 1e-6)
@@ -1144,10 +1168,20 @@ def drawn_ring(spec):
     reports 2026-10-17)."""
     ring = spec.ring
     if spec.roof not in ("flat", "dome", "onion", "cone") and roof_skeleton(spec) is None:   # (a curved roof's
-        c, u, hl, hw = oriented_box(ring)                                                   # walls: the outline)
-        v = np.array([-u[1], u[0]])
-        ring = np.array([c - u * hl - v * hw, c + u * hl - v * hw, c + u * hl + v * hw, c - u * hl + v * hw])
+        ring = box_ring(ring)                                                               # walls: the outline)
     return ring
+
+
+def box_ring(ring):
+    """The oriented box of a ring as its 4 corners (counter-clockwise), starting at the corner nearest the ring's own
+    first one: the box's axis comes from a tie between equal-area edges that float noise decides, so under another
+    anchor it could start at the opposite corner and every per-wall hashed choice (the window sheet's bays, the facade
+    kit's) moved to another wall (2026-10-28)."""
+    c, u, hl, hw = oriented_box(ring)
+    v = np.array([-u[1], u[0]])
+    box = np.array([c - u * hl - v * hw, c + u * hl - v * hw, c + u * hl + v * hw, c - u * hl + v * hw])
+    k = int(np.argmin(np.hypot(*(box - np.asarray(ring, np.float64)[0, :2]).T)))
+    return np.roll(box, -k, axis=0)
 
 
 def _porch(m, spec, base, mat_idx):
@@ -1317,7 +1351,8 @@ def _roof(m, spec, ring, z_eave, mat_idx):
     rm = mat_idx[spec.roof_mat]
     if spec.roof == "flat":
         pts = [(p[0], p[1], z_eave) for p in ring]
-        uv = [(p[0] / ROOF_UV_M, p[1] / ROOF_UV_M) for p in ring]
+        o = ring[0]             # (from the building's own corner: the anchor frame's origin shifted the texture)
+        uv = [((p[0] - o[0]) / ROOF_UV_M, (p[1] - o[1]) / ROOF_UV_M) for p in ring]
         m.poly(pts, uv, rm)
         return
     sk = roof_skeleton(spec)
@@ -2502,6 +2537,7 @@ def tile_buildings(frame, x0, y0, x1, y1, layers, elev, water=None, part_layers=
     lm_pts = landmarks.points_in_tile(frame, x0, y0, x1, y1, margin=LANDMARK_MARGIN_M)
     seen = set()
     rings, attrs, looks, mins = [], [], [], []
+    wcov = world_coverage(layers)       # (town / dense: each building's own z17 square, not the anchor's tile)
     for f in layers:
         if f is None or len(f.kind) == 0:
             continue
@@ -2532,6 +2568,11 @@ def tile_buildings(frame, x0, y0, x1, y1, layers, elev, water=None, part_layers=
             cx, cy = float(e[:-1].sum() / k), float(n[:-1].sum() / k)
             if not (x0 <= cx < x1 and y0 <= cy < y1):
                 continue
+            # world-anchored (the map's own lon / lat, never the anchor frame): the building's seed key (its id) and
+            # its z17 square's cover
+            glon, glat = float(outer[:-1, 0].sum() / k), float(outer[:-1, 1].sum() / k)
+            cover_ = float(wcov.get(int(_z_cover(glon, glat)), 0.0))
+            seed_key = str(key) if key is not None else f"ll{round(glon * 1e6)},{round(glat * 1e6)}"
             if min_size is not None:
                 h_ = a["height"][i] if a.get("height") is not None else None
                 if h_ is None or not np.isfinite(h_):
@@ -2584,7 +2625,7 @@ def tile_buildings(frame, x0, y0, x1, y1, layers, elev, water=None, part_layers=
                         pmh = float(pat.get("min_height") if pat.get("min_height") is not None else pmh)
                     keep = pat["roof_shape"].lower() in landmarks.SHAPES or pat["roof_shape"].lower() == "pyramidal"
                     rings.append(r)
-                    attrs.append({"class": at["class"], "height": ph, "num_floors": None,
+                    attrs.append({"class": at["class"], "height": ph, "num_floors": None, "cover": cover_,
                                   "roof_shape": pat["roof_shape"] if keep else "flat",
                                   "roof_height": pat.get("roof_height") if keep else None,
                                   "roof_color": pat.get("roof_color"), "roof_look": pat.get("roof_look"),
@@ -2636,7 +2677,7 @@ def tile_buildings(frame, x0, y0, x1, y1, layers, elev, water=None, part_layers=
                 at = dict(at, bridge_part=on) if fm_ in STEEL_MATERIALS else dict(at, bridge_masonry=fm_)
             if is_ml:
                 at = dict(at, ml=True)          # (_ml_steep once its ground is known)
-            attrs.append(at)
+            attrs.append(dict(at, seed_key=seed_key, cover=cover_))
             looks.append(None)
             mins.append(mh)
     if not rings:
@@ -3480,9 +3521,7 @@ def skyline_tile(frame, ux, uy, md, ground, out_dir, vfs_dir, aid, lamp_region=N
     for spec, _gmin, _gmax in items:        # (the simplest shape: a box or a few corners, a flat roof, nothing on it)
         ring = np.asarray(spec.ring, np.float64)
         if len(ring) > 4 and abs(_area2(ring)) / 2 < SKY_BOX_AREA_M2:
-            c, u, hl, hw = oriented_box(ring)
-            v = np.array([-u[1], u[0]])
-            ring = np.array([c - u * hl - v * hw, c + u * hl - v * hw, c + u * hl + v * hw, c - u * hl + v * hw])
+            ring = box_ring(ring)
         elif len(ring) > SKY_MAX_CORNERS:     # (rings are open: the last corner is not the first again)
             ring = ring[::int(np.ceil(len(ring) / SKY_MAX_CORNERS))]
         spec.ring = ring
@@ -3720,6 +3759,44 @@ def _cell_lock_get():
     return _cell_lock
 
 
+Z_COVER = 17                # world_coverage's squares: web-mercator z17 tiles (~234 m at 40 N, as a road tile), each
+                            # inside one z14 map cell (the cell a building's centre lies in is loaded with it)
+
+
+def _z_cover(lon, lat):
+    """The z17 tile (an int key) of (lon, lat) (arrays or floats)."""
+    n = float(1 << Z_COVER)
+    la = np.radians(np.clip(np.asarray(lat, np.float64), -85.0, 85.0))
+    x = np.floor((np.asarray(lon, np.float64) + 180.0) / 360.0 * n).astype(np.int64)
+    y = np.floor((1.0 - np.log(np.tan(la) + 1.0 / np.cos(la)) / math.pi) / 2.0 * n).astype(np.int64)
+    return (x << 24) + y
+
+
+def world_coverage(layers):
+    """{z17 tile key: the share of it the building footprints cover} (each footprint by its centre, each id once) of
+    the buildings layers: the town / dense flags per building (plan) from its own square of the world, not from the
+    road tile it fell in under some anchor."""
+    los, las, ars, ids = [], [], [], []
+    for f in layers:
+        if f is None or len(f.kind) == 0:
+            continue
+        lo, la, ar = _footprints(f)
+        los.append(lo)
+        las.append(la)
+        ars.append(ar)
+        fid = getattr(f, "ids", None)
+        ids.append(np.asarray(fid).astype(str) if fid is not None
+                   else np.array([f"#{len(ids)}-{k}" for k in range(len(lo))]))
+    if not los:
+        return {}
+    lo, la, ar, iid = np.concatenate(los), np.concatenate(las), np.concatenate(ars), np.concatenate(ids)
+    _, first = np.unique(iid, return_index=True)
+    lo, la, ar = lo[first], la[first], ar[first]
+    side = 40075016.686 * np.cos(np.radians(la)) / (1 << Z_COVER)
+    keys, inv = np.unique(_z_cover(lo, la), return_inverse=True)
+    return dict(zip(keys.tolist(), np.bincount(inv, weights=ar / (side * side)).tolist()))
+
+
 def cell_footprints(key, layer):
     """(lon, lat, area m2) arrays of a cell's building footprints (outer rings), cached per cell (layer may
     be None once cached). Pure."""
@@ -3728,8 +3805,32 @@ def cell_footprints(key, layer):
         got = _cell_stats.get(key)
     if got is not None:
         return got
-    if layer is None or len(layer.ids) == 0:
+    got = _footprints(layer)
+    with _cell_lock:
+        if len(_cell_stats) > 64:
+            _cell_stats.clear()
+        _cell_stats[key] = got
+    return got
+
+
+def _footprints(layer):
+    """(lon, lat, area m2) arrays of a buildings layer's footprints (outer rings). Pure."""
+    if layer is None or len(layer.kind) == 0:
         got = (np.zeros(0), np.zeros(0), np.zeros(0))
+    elif not hasattr(layer, "ring_off"):                # (a layer with parts() only: the tests' stand-ins)
+        out = []
+        for i in range(len(layer.kind)):
+            parts = layer.parts(i)
+            r = np.asarray(parts[0][0], np.float64) if parts and parts[0] else np.zeros((0, 2))
+            if len(r) < 3:
+                out.append((0.0, 0.0, 0.0))
+                continue
+            x = r[:, 0] * 111320.0 * math.cos(math.radians(float(r[:, 1].mean())))
+            y = r[:, 1] * 111320.0
+            out.append((float(r[:, 0].mean()), float(r[:, 1].mean()),
+                        abs(float(np.dot(x, np.roll(y, -1)) - np.dot(np.roll(x, -1), y))) / 2))
+        A = np.array(out, np.float64).reshape(-1, 3)
+        got = (A[:, 0], A[:, 1], A[:, 2])
     else:
         f = layer
         first = f.ring_off[f.part_off[:-1]]
@@ -3746,10 +3847,6 @@ def cell_footprints(key, layer):
         last = np.maximum(b - 1, a)
         area = np.abs(C[last] - C[a] + x[last] * y[a] - x[a] * y[last]) / 2
         got = ((CX[b] - CX[a]) / n, (CY[b] - CY[a]) / n, area)
-    with _cell_lock:
-        if len(_cell_stats) > 64:
-            _cell_stats.clear()
-        _cell_stats[key] = got
     return got
 
 
