@@ -31,6 +31,24 @@ class ReportTest(unittest.TestCase):
             self.assertIn("terrain blocks: 2 (1 read back, 1 built)", text)
             self.assertEqual(br.main(["--log", p]), 0)
 
+    def test_drive_lines(self):
+        """An autodrive leg's summary and a ghost drive's (km, the waits) both get their line."""
+        import json
+        with tempfile.TemporaryDirectory() as d:
+            for name, s in (("i25_0_ai", {"miles": 10.9, "seconds": 960, "fps": 59.7, "frame_ms": {"p99": 19.1}}),
+                            ("i25_ghost", {"km": 93.2, "route_km": 93.2, "seconds": 4100, "fps": 88.0,
+                                           "frame_ms": {"p99_worst_tick": 31.0, "max": 70.0},
+                                           "frames_over": {"over50": 2, "over100": 0},
+                                           "waits": {"count": 12, "seconds": 340.0, "gave_up": 1},
+                                           "hitch_causes": {"mod.roads": [2, 70]}})):
+                os.makedirs(os.path.join(d, name))
+                with open(os.path.join(d, name, "summary.json"), "w") as f:
+                    json.dump(s, f)
+            text = br.report(br.scan([]), runs=[d])
+            self.assertIn("i25_0_ai: 10.9 mi in 960 s, 59.7 fps, p99 19.1 ms", text)
+            self.assertIn("i25_ghost: 93.2 of 93.2 km in 4100 s, 88.0 fps, worst p99 31.0 ms, max 70.0 ms, >50 ms 2, "
+                          ">100 ms 0; waited 12x 340.0 s (1 gave up); hitches: mod.roads x2 (worst 70 ms)", text)
+
 
 if __name__ == "__main__":
     unittest.main()

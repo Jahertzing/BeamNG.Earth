@@ -111,10 +111,14 @@ def parent_gone():
     stopped in any way (Ctrl+C, killed by PID: no handler of its own runs) ends the drive here, the car parked and the
     autodrive off (route_bake 2026-10-28: a killed bake left its drive and the mod's autodrive running)."""
     gone = threading.Event()
+    fd = sys.stdin.fileno()
 
     def watch():
+        # os.read on the descriptor, not sys.stdin.buffer: a thread blocked in the buffered reader holds its lock, and
+        # the exit at the end of every leg died on it ("Fatal Python error: _enter_buffered_busy", the PC bake
+        # 2026-10-28: the leg's return code a crash)
         try:
-            while sys.stdin.buffer.read(4096):
+            while os.read(fd, 4096):
                 pass
         except (OSError, ValueError):
             pass

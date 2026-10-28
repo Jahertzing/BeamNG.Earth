@@ -94,6 +94,20 @@ class ParentPipeTest(unittest.TestCase):
         leg = rb._drive_leg([sys.executable, "-c", "import sys; sys.exit(0 if '--parent-pipe' in sys.argv else 4)"])
         self.assertEqual(leg.returncode, 0)
 
+    def test_a_drive_ends_cleanly_while_its_caller_still_holds_the_pipe(self):
+        """The leg's own end (arrived, out of time) with the watcher still reading: no fatal error at the exit (the PC
+        bake 2026-10-28: "_enter_buffered_busy: could not acquire lock for <stdin>", every leg a crash)."""
+        import subprocess
+        tools = os.path.dirname(os.path.abspath(ad.__file__))
+        child = ("import sys, time; sys.path.insert(0, %r); import autodrive_perf as ad; ad.parent_gone(); "
+                 "time.sleep(0.3)" % tools)
+        p = subprocess.Popen([sys.executable, "-c", child], stdin=subprocess.PIPE, stderr=subprocess.PIPE)
+        err = p.stderr.read()
+        self.assertEqual(p.wait(30), 0, err)
+        self.assertNotIn(b"Fatal", err)
+        p.stdin.close()
+        p.stderr.close()
+
 
 if __name__ == "__main__":
     unittest.main()

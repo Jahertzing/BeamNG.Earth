@@ -103,6 +103,14 @@ def report(ev, runs=()):
             fo = s.get("frames_over") or {}
             causes = ", ".join(f"{k} x{v[0]} (worst {v[1]:.0f} ms)" for k, v in list((s.get("hitch_causes") or {})
                                                                                     .items())[:4])
+            if "km" in s:           # a ghost drive (ghost_drive.py): distance in km, the waits for the world to load
+                w = s.get("waits") or {}
+                out.append(f"{os.path.relpath(os.path.dirname(p), d)}: {s.get('km')} of {s.get('route_km')} km in "
+                           f"{s.get('seconds')} s, {s.get('fps')} fps, worst p99 {fm.get('p99_worst_tick')} ms, max "
+                           f"{fm.get('max')} ms, >50 ms {fo.get('over50')}, >100 ms {fo.get('over100')}; waited "
+                           f"{w.get('count')}x {w.get('seconds')} s ({w.get('gave_up')} gave up); hitches: "
+                           f"{causes or 'none'}")
+                continue
             out.append(f"{os.path.relpath(os.path.dirname(p), d)}: {s.get('miles')} mi in {s.get('seconds')} s, "
                        f"{s.get('fps')} fps, p99 {fm.get('p99')} ms, max {fm.get('max')} ms, >50 ms "
                        f"{fo.get('over50')}, >100 ms {fo.get('over100')}; hitches: {causes or 'none'}")
@@ -114,7 +122,7 @@ def main(argv=None):
     ap.add_argument("--log", action="append", required=True, help="a server log (glob ok; repeat for more)")
     ap.add_argument("--since", default=None, help="'YYYY-MM-DD HH:MM[:SS]' (the log's own clock)")
     ap.add_argument("--until", default=None)
-    ap.add_argument("--runs", action="append", default=[], help="a folder of autodrive_perf runs (summary.json)")
+    ap.add_argument("--runs", action="append", default=[], help="a folder of autodrive_perf / ghost_drive runs (summary.json)")
     a = ap.parse_args(argv)
     paths = sorted({p for g in a.log for p in glob.glob(g)})
     if not paths:
