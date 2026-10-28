@@ -135,6 +135,28 @@ class WidthTest(unittest.TestCase):
             self.assertEqual(get("x", road), first)
         self.assertEqual(calls, ["x"])
 
+    def test_a_failed_cell_is_not_asked_by_every_road(self):
+        d = drcog.Drcog("unused", None)
+        coords, off = self.edges(4.0)
+        asked = []
+
+        def edges(key, kind="demand"):
+            asked.append(key)
+            if len(asked) == 1:
+                raise IOError("offline")
+            return {"coords": coords, "off": off}
+        clock = [1000.0]
+        with mock.patch.object(d, "edges", side_effect=edges), \
+                mock.patch.object(drcog.time, "monotonic", side_effect=lambda: clock[0]):
+            get = d.widths(lambda fid, l: (14.0, 3.0))
+            roads = [np.array([ll(20 + i, 0), ll(180 - i, 0)]) for i in range(5)]
+            self.assertEqual([get(i, r) for i, r in enumerate(roads)], [(14.0, 3.0)] * 5)
+            self.assertEqual(len(asked), 1)             # (the others: the fallback, without a request)
+            clock[0] += drcog.EDGES_RETRY_S + 1
+            w = get(0, roads[0])                        # not decided for good: the edges once they come
+            self.assertAlmostEqual(w[0], 8.0, places=3)
+            self.assertEqual(len(asked), 2)
+
     def test_the_index_gives_the_same_widths(self):
         # a downtown-like grid of edge lines (blocks of 80 m, roads 8-20 m wide) and roads in every direction
         rng = np.random.default_rng(7)

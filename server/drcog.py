@@ -28,6 +28,7 @@ import logging
 import math
 import os
 import threading
+import time
 import urllib.parse
 
 import numpy as np
@@ -58,6 +59,7 @@ WIDTH_SAMPLES = (0.25, 0.5, 0.75)
 WIDTH_REACH_M = 25.0
 WIDTH_RANGE_M = (3.0, 40.0)
 WIDTH_MIN_SAMPLES = 2
+EDGES_RETRY_S = 60.0        # a cell whose edges could not be fetched: asked again after this (not by every road in it)
 
 
 def enabled():
@@ -91,6 +93,7 @@ class Drcog:
         self.fetcher = fetcher
         self._lock = threading.Lock()
         self._mem = {}
+        self._edges_failed = {}         # cell key -> time.monotonic() to ask for its edges again
 
     # --- fetching ---------------------------------------------------------------------------------------------
     def _query(self, url, bounds, fields, kind):
@@ -189,23 +192,34 @@ class Drcog:
         memo, lock = {}, threading.Lock()
 
         def measure(fid, lonlat):
+            """(width or the fallback's, final): not final when the cell's edges could not be had (asked again)."""
             fb = fallback(fid, lonlat) if fallback is not None else None
             ll = np.asarray(lonlat, np.float64)
             if len(ll) < 2:
-                return fb
+                return fb, True
             mid = ll[len(ll) // 2]
             if not covers((mid[0], mid[1], mid[0], mid[1])):
-                return fb
+                return fb, True
+            key = mapcells.cell_of(float(mid[1]), float(mid[0]))
+            with self._lock:
+                retry_at = self._edges_failed.get(key)
+            if retry_at is not None and time.monotonic() < retry_at:
+                import revisit
+                revisit.fault()             # (as the failed fetch did: a build that goes on without it is not kept)
+                return fb, False
             try:
-                key = mapcells.cell_of(float(mid[1]), float(mid[0]))
                 e = self.edges(key, kind)
             except Exception as ex:         # (the buildings' measure, as without the source)
                 log.debug("drcog edges: %s: %s", type(ex).__name__, ex)
-                return fb
+                with self._lock:            # (not every road of the cell asking again: 2,922 requests for 9
+                    self._edges_failed[key] = time.monotonic() + EDGES_RETRY_S     # downtown road tiles offline)
+                return fb, False
+            with self._lock:
+                self._edges_failed.pop(key, None)
             w = measure_width(ll, e["coords"], e["off"], edge_index(e))
             if w is None:
-                return fb
-            return (w, fb[1] if fb is not None else 2.5)
+                return fb, True
+            return (w, fb[1] if fb is not None else 2.5), True
 
         def get(fid, lonlat):
             # decided once per road per run, as the buildings' measure (roadwidth.RoadWidths.get): every consumer
@@ -213,7 +227,9 @@ class Drcog:
             with lock:
                 if fid in memo:
                     return memo[fid]
-            got = measure(fid, lonlat)
+            got, final = measure(fid, lonlat)
+            if not final:                   # (the edges once they come)
+                return got
             with lock:
                 return memo.setdefault(fid, got)
         return get
