@@ -249,12 +249,30 @@ class ChainTest(unittest.TestCase):
         m = imagery.nodata_mask(a, white=True)
         self.assertTrue(m[:30, :30].all() and m[:, 200:].all(), "both at once")
 
+    def test_nodata_mask_grey(self):
+        """A MapServer with ArcGIS's light grey background (La Plata County: 204): masked past its flights for a grey
+        source; a grey roof inside the tile stays data, as does the grey in a white or a black source's tile."""
+        rng = np.random.default_rng(4)
+        a = rng.integers(20, 200, (256, 256, 3), dtype=np.uint8)
+        a[100:140, 100:140] = 205                       # a flat grey roof in the middle
+        self.assertIsNone(imagery.nodata_mask(a, fill="grey"))
+        a[:, 200:] = 204                                # past the flights
+        a[:, 200:, 1] = 202                             # (JPEG's wobble)
+        m = imagery.nodata_mask(a, fill="grey")
+        self.assertTrue(m[:, 200:].all())
+        self.assertFalse(m[:, :196].any())
+        self.assertIsNone(imagery.nodata_mask(a))
+        self.assertIsNone(imagery.nodata_mask(a, white=True))
+        self.assertTrue(imagery.fill_texels(a, "grey")[:, 200:].all())
+        self.assertIsNone(imagery.fill_texels(a, "black"))
+
     def test_front_range_sources(self):
         """Colorado's county sources: lazy exports at z18, their fill past their lines (white for the MapServers,
         black for the ImageServers), before NAIP; a newer or finer one before an older one whose box overlaps it;
         then the Planetary Computer's NAIP 2023 for the whole state, then USDA's and USGS's NAIP."""
         names = ["co_boulder_county", "co_frederick", "co_larimer", "co_thornton", "co_arapahoe", "co_douglas",
-                 "co_jeffco", "co_lakewood", "co_springs", "co_pitkin", "co_naip2023"]
+                 "co_arvada", "co_jeffco", "co_lakewood", "co_springs", "co_pitkin", "co_laplata", "co_vail",
+                 "co_naip2023"]
         idx = [imagery.DEFAULT_CHAIN.index(n) for n in names]
         self.assertEqual(idx, sorted(idx))
         self.assertLess(idx[-1], imagery.DEFAULT_CHAIN.index("naipusda"))
@@ -262,7 +280,7 @@ class ChainTest(unittest.TestCase):
         for n in names:
             s = imagery.SOURCES[n]
             self.assertTrue(s.lazy and s.export == 2 and s.max_zoom == (17 if n == "co_naip2023" else 18), n)
-            self.assertEqual(s.nodata, "black" if n in black else "white", n)
+            self.assertEqual(s.nodata, "grey" if n == "co_laplata" else "black" if n in black else "white", n)
             self.assertIn(netfetch.host_of(s.url), netfetch.POLICIES, n)
         self.assertEqual(imagery.SOURCES["co_naip2023"].resolver, "pcnaip")
 

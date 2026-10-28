@@ -164,7 +164,8 @@ POLICIES = {
                      miss_ttl=90 * DAY, binary=True, timeout=30.0, max_attempts=2, base_delay=2.0,
                      breaker_threshold=6, breaker_window=120.0, optional=True)
        for h in ("maps.bouldercounty.org", "maps.thorntonco.gov", "gis.arapahoegov.com", "apps.douglas.co.us",
-                 "gisportal.jeffco.us", "egis.lakewood.org", "gis.coloradosprings.gov")},
+                 "gisportal.jeffco.us", "egis.lakewood.org", "gis.coloradosprings.gov", "maps.arvada.org",
+                 "gis.vailgov.com")},
     # NOAA NCEI's DEM global mosaic (bathymetry for the sea floor, seacarve.py): one export per map-data cell
     "gis.ngdc.noaa.gov": HostPolicy(rate=1.0, burst=4.0, max_conc=2, daily_budget=4000,
                                     allow_prefetch=True, offline_ok=True, miss_ttl=30 * DAY,
