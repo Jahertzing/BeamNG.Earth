@@ -23,7 +23,8 @@ DEG_N = 1 / 111195.0        # degrees of latitude per metre
 
 
 def opts(**kw):
-    o = dict(speed=hb.SPEED, roads_q=hb.ROADS_Q, backlog_q=hb.BACKLOG_Q, edge_m=hb.EDGE_M, max_wait=hb.MAX_WAIT_S)
+    o = dict(speed=hb.SPEED, roads_q=hb.ROADS_Q, backlog_q=hb.BACKLOG_Q, edge_m=hb.EDGE_M, max_wait=hb.MAX_WAIT_S,
+             ground_wait=hb.GROUND_WAIT_S)
     o.update(kw)
     return argparse.Namespace(**o)
 
@@ -81,6 +82,8 @@ class RulesTest(unittest.TestCase):
         pr = {"ground": [1, 1], "roads": [8, 9], "far": [36, 40]}
         self.assertEqual(hb.waiting_for({"progress": pr}, 500.0, a), [])
         self.assertTrue(hb.waiting_for({"progress": dict(pr, ground=[0, 1])}, 500.0, a))
+        self.assertEqual(hb.waiting_for({"progress": dict(pr, ground=[0, 1]), "ground_s": a.ground_wait}, 500.0, a),
+                         [], "the photo's refresh waited for long enough")
         self.assertTrue(hb.waiting_for({"progress": dict(pr, roads=[5, 9])}, 500.0, a))
         self.assertTrue(hb.waiting_for({"progress": dict(pr, far=[30, 40])}, 500.0, a))
 
