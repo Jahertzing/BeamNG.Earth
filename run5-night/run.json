@@ -1,0 +1,104 @@
+{
+ "places": [
+  {
+   "id": "lk_denver_north",
+   "name": "I-25 north of downtown Denver, looking south at the skyline",
+   "lat": 39.7835,
+   "lon": -104.9905,
+   "group": "look",
+   "heldout": false,
+   "tags": [
+    "colorado"
+   ],
+   "time": {
+    "time": 0.9375,
+    "year": 2026,
+    "month": 10,
+    "day": 20,
+    "utcOffset": -6.9994,
+    "hour": 10.5,
+    "date": "2026-10-20"
+   },
+   "weather": "clear",
+   "views": [],
+   "ok": true,
+   "load": {
+    "anchor_s": 1.07,
+    "farDone_s": 18.38,
+    "exact_s": 1.07,
+    "ready_s": 18.38,
+    "timedOut": false,
+    "reasons": [],
+    "polls": 20,
+    "regionsWait_s": null
+   },
+   "status": "Far field ready (434 tiles)",
+   "tiles": {
+    "live": 434,
+    "covered": 64,
+    "materials": 2380,
+    "imports": 446,
+    "failed": 0,
+    "textured": 438,
+    "pops": 0
+   },
+   "exact": {
+    "missLoad": 0,
+    "framesLoad": 0,
+    "underLevel": -1,
+    "exactLevel": -1,
+    "nearVisual": "detail",
+    "missAfter": 0,
+    "framesAfter": 0
+   },
+   "ground_z": 1582.1086425781,
+   "sky": {
+    "lon": -104.99049377441,
+    "date": "2026-10-20",
+    "mission": false,
+    "inOurLevel": true,
+    "mode": "manual",
+    "lat": 39.783515930176,
+    "grace": 0,
+    "utcOffset": -6.9994,
+    "localTime": "10:30"
+   },
+   "weatherSet": {
+    "ok": true,
+    "fogDensity": 9.5163389826109e-05,
+    "coverage": 0
+   }
+  }
+ ],
+ "variants": [
+  {
+   "name": "after"
+  },
+  {
+   "name": "ungraded",
+   "lua": "require('beamngEarth/grade').setMode('off') require('beamngEarth/grade').update(false)",
+   "undo": "require('beamngEarth/grade').setMode('colorado')",
+   "settle": 3
+  },
+  {
+   "name": "natural",
+   "lua": "require('beamngEarth/grade').setMode('natural')",
+   "undo": "require('beamngEarth/grade').setMode('colorado')",
+   "settle": 3.5
+  },
+  {
+   "name": "vivid",
+   "lua": "require('beamngEarth/grade').setMode('vivid')",
+   "undo": "require('beamngEarth/grade').setMode('colorado')",
+   "settle": 3.5
+  }
+ ],
+ "restore": {
+  "errors": [],
+  "weather": "real",
+  "sky": "real",
+  "home_s": 1.04,
+  "camera": "game",
+  "ok": true
+ }
+}

@@ -1,0 +1,104 @@
+{
+ "places": [
+  {
+   "id": "lk_castle_rock",
+   "name": "I-25 north of Castle Rock, looking south (Castle Rock butte, Pikes Peak ~70 km)",
+   "lat": 39.43,
+   "lon": -104.883,
+   "group": "look",
+   "heldout": false,
+   "tags": [
+    "colorado"
+   ],
+   "time": {
+    "time": 0.9375,
+    "year": 2026,
+    "month": 10,
+    "day": 20,
+    "utcOffset": -6.9922,
+    "hour": 10.5,
+    "date": "2026-10-20"
+   },
+   "weather": "clear",
+   "views": [],
+   "ok": true,
+   "load": {
+    "anchor_s": 1.04,
+    "farDone_s": 36.64,
+    "exact_s": 1.04,
+    "ready_s": 36.64,
+    "timedOut": false,
+    "reasons": [],
+    "polls": 38,
+    "regionsWait_s": null
+   },
+   "status": "Far field ready (424 tiles)",
+   "tiles": {
+    "live": 424,
+    "covered": 64,
+    "materials": 2376,
+    "imports": 424,
+    "failed": 0,
+    "textured": 424,
+    "pops": 0
+   },
+   "exact": {
+    "missLoad": 0,
+    "framesLoad": 0,
+    "underLevel": -1,
+    "exactLevel": -1,
+    "nearVisual": "detail",
+    "missAfter": 0,
+    "framesAfter": 0
+   },
+   "ground_z": 1888.5092773438,
+   "sky": {
+    "lon": -104.88299560547,
+    "date": "2026-10-20",
+    "mission": false,
+    "inOurLevel": true,
+    "mode": "manual",
+    "lat": 39.430015563965,
+    "grace": 0,
+    "utcOffset": -6.9922,
+    "localTime": "10:30"
+   },
+   "weatherSet": {
+    "ok": true,
+    "fogDensity": 0.00012928198409835,
+    "coverage": 0
+   }
+  }
+ ],
+ "variants": [
+  {
+   "name": "after"
+  },
+  {
+   "name": "ungraded",
+   "lua": "require('beamngEarth/grade').setMode('off') require('beamngEarth/grade').update(false)",
+   "undo": "require('beamngEarth/grade').setMode('colorado')",
+   "settle": 3
+  },
+  {
+   "name": "natural",
+   "lua": "require('beamngEarth/grade').setMode('natural')",
+   "undo": "require('beamngEarth/grade').setMode('colorado')",
+   "settle": 3.5
+  },
+  {
+   "name": "vivid",
+   "lua": "require('beamngEarth/grade').setMode('vivid')",
+   "undo": "require('beamngEarth/grade').setMode('colorado')",
+   "settle": 3.5
+  }
+ ],
+ "restore": {
+  "errors": [],
+  "weather": "real",
+  "sky": "real",
+  "home_s": 2.12,
+  "camera": "game",
+  "ok": true
+ }
+}

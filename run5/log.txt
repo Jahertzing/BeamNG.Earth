@@ -1,0 +1,3 @@
+﻿dump -> C:\beamng-earth\look-shots\run5\dump.json
+lk_castle_rock ...
+restored

@@ -1,0 +1,3 @@
+﻿dump -> C:\beamng-earth\look-shots\run5-night\dump.json
+lk_denver_north ...
+restored

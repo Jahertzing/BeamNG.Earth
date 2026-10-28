@@ -1,0 +1,3 @@
+﻿dump -> C:\beamng-earth\look-shots\run5-dusk\dump.json
+lk_frederick_west ...
+restored
