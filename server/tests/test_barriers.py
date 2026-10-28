@@ -289,6 +289,31 @@ class NoiseWallTest(unittest.TestCase):
         self.assertEqual(list(barriers._in_parts(parts, np.array([[50.0, 50.0], [250.0, 20.0]]))), [True, False])
 
 
+class NonFiniteGroundTest(unittest.TestCase):
+    def test_nan_ground_leaves_those_points_out(self):
+        """A NaN ground height under part of a barrier (Castle Rock's tiles on Jeff's PC, 2026-10-28: a NaN vertex in
+        the tunnel mesh failed the tile): no non-finite value in any barrier nor in the mesh, the rest kept."""
+        def holey(la, lo):
+            e = (np.asarray(la, np.float64) * 0 + (np.asarray(lo) - LON) * M_LON)
+            return np.where((e > 100.0) & (e < 140.0), np.nan, np.where(np.abs((np.asarray(la) - LAT) * M_LAT) > 17.0,
+                                                                          5.0, 10.0))
+        rs = [road("a", 9.0, 1), road("b", -9.0, -1)]
+        bs = barriers.tile_barriers(FRAME, rs, holey, BOX)
+        self.assertTrue(bs)
+        for b in bs:
+            for k in ("line", "z", "foot"):
+                self.assertTrue(np.isfinite(b[k]).all(), (b["kind"], k))
+        js = [b for b in bs if b["kind"] == "jersey"]
+        self.assertTrue(js)
+        for b in js:
+            self.assertFalse(((b["line"][:, 0] > 102.0) & (b["line"][:, 0] < 138.0)).any())
+        self.assertTrue([b for b in bs if b["kind"] == "wbeam"], "the embankments' guardrails kept")
+        P, T, UV, M = [], [], [], []
+        bad = dict(bs[0], z=np.full(len(bs[0]["z"]), np.nan))
+        barriers.mesh_into(bs + [bad], (0.0, 0.0, 0.0), P, T, UV, M, 0)
+        self.assertTrue(np.isfinite(np.concatenate(P)).all())
+
+
 class MappedTest(unittest.TestCase):
     def test_mapped_lines(self):
         f = features([[(0, 10), (100, 10)], [(0, 30), (100, 30)], [(0, 50), (100, 50)], [(0, 70), (100, 70)]],
