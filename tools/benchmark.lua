@@ -176,6 +176,7 @@ end
 function B.hud(visible)
   local ui = ext('ui_visibility')
   if not (ui and ui.set) then return toJson({ ok = false, error = 'no ui_visibility' }) end
+  if type(visible) == 'string' then visible = jsonDecode(visible) end   -- (call() sends JSON: "false" is truthy)
   ui.set(visible and true or false)
   return toJson({ ok = true, visible = ui.get and ui.get() })
 end
