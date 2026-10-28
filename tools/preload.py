@@ -419,7 +419,8 @@ def plan_exports(region, chain, coverage=None, skip=()):
                 if s.max_zoom < z or z < s.min_zoom or s.export != k:
                     continue
                 if s.bounds:
-                    if not imagerymod.in_bounds(s, *key):
+                    if not imagerymod.range_in_bounds(s, z, key[1], key[1] + (1 << k) - 1, key[2],
+                                                      key[2] + (1 << k) - 1):     # (the whole parent, as warm())
                         continue
                     cov = coverage.get(s.name)
                     if cov is not None and cov.get(parent15(*key)) is False:
