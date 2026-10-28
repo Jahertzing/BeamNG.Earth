@@ -1003,8 +1003,8 @@ def _inside(ring, p):
     return fast._ef.point_inside(np.asarray(ring, np.float64), float(x), float(y))     # (Rust; even-odd)
 
 
-def _box(m, c, u, hx, hy, z0, z1, mat):
-    """An axis-u box (half sizes hx along u, hy across) from z0 to z1: four sides and a top."""
+def _box(m, c, u, hx, hy, z0, z1, mat, bottom=False):
+    """An axis-u box (half sizes hx along u, hy across) from z0 to z1: four sides and a top (and its underside)."""
     v = np.array([-u[1], u[0]])
     k = [c + u * sx * hx + v * sy * hy for sx, sy in ((-1, -1), (1, -1), (1, 1), (-1, 1))]
     uv = ((0.002, 0.995), (0.012, 0.995), (0.012, 0.999), (0.002, 0.999))
@@ -1012,6 +1012,8 @@ def _box(m, c, u, hx, hy, z0, z1, mat):
         a, b = k[i], k[(i + 1) % 4]
         m.quad((a[0], a[1], z0), (b[0], b[1], z0), (b[0], b[1], z1), (a[0], a[1], z1), *uv, mat)
     m.quad(*[(p[0], p[1], z1) for p in k], *uv, mat)
+    if bottom:
+        m.quad(*[(p[0], p[1], z0) for p in k[::-1]], *uv, mat)
 
 
 def _signs(m, spec, ring, z_top, mat_idx):
@@ -1169,7 +1171,9 @@ def _porch(m, spec, base, mat_idx):
     for t in (-w / 2 + 0.15, 0.0, w / 2 - 0.15):                                                   # posts
         _box(m, c + d * t + out * (D - 0.15), d, 0.08, 0.08, base + PORCH_DECK_M, top, white)
     roof = mat_idx[spec.roof_mat] if spec.roof_mat else white
-    _box(m, c + out * (D / 2 + 0.1), d, w / 2 + 0.15, D / 2 + 0.1, top, top + 0.18, roof)          # roof
+    # the roof, with its underside: without it the porch's ceiling was see-through from the street and only the roof's
+    # end face showed, a dark bar over a post (2026-10-28's shots)
+    _box(m, c + out * (D / 2 + 0.1), d, w / 2 + 0.15, D / 2 + 0.1, top, top + 0.18, roof, bottom=True)
 
 
 def door_ground(spec, edge, along, gmax):
