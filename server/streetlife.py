@@ -88,6 +88,7 @@ USPS_SPACING_M = 420.0      # downtown: a blue collection box along a main stree
 BIKE_SPACING_M = 160.0
 PLANTER_SPACING_M = 55.0
 DOWNTOWN_CLASSES = {"primary", "secondary", "tertiary"}
+DOWNTOWN_GROUPS = {G_USPS, G_BIKE_RACK, G_PLANTER}
 DOWNTOWN_END_M = 9.0        # m off a sidewalk run's ends (its corner's crosswalk and curb ramp)
 USPS_H, BIKE_RACK_H, PLANTER_H = 1.53, 1.16, 0.8     # (the stock shapes' heights: trees.lua CATALOG)
 
@@ -403,6 +404,41 @@ def bus_stops_for(md, frame, keys):
     return mapped_bus_stops(frame, infra)
 
 
+FOOTPRINT_PAD_M = 4.0       # a building's footprint this near the tile blocks its props (one of the next tile's too)
+
+
+def footprints_for(md, frame, keys, box, pad=FOOTPRINT_PAD_M):
+    """The outer rings (anchor frame) of every building of the map cells keys that reaches within pad of the tile box:
+    the tile's own buildings are those whose centroid is in it (buildings.tile_buildings), so a downtown block
+    crossing the tile's edge would not block the props at its foot. [] when the cells cannot be read."""
+    import mapgeom
+    try:
+        layers = [md.cell(k, layers=("buildings",), kind="demand").layers.get("buildings") for k in keys]
+    except Exception:
+        return []
+    x0, y0, x1, y1 = box
+    seen, rings = set(), []
+    for f in layers:
+        if f is None or len(f.kind) == 0 or not isinstance(f, mapgeom.Features):
+            continue
+        ids = getattr(f, "ids", None)
+        cx, cy = f.outer_centres(frame)
+        m = 400.0                               # (a centre this far out at most: the largest blocks)
+        for i in np.flatnonzero((cx >= x0 - m) & (cx < x1 + m) & (cy >= y0 - m) & (cy < y1 + m)).tolist():
+            key = ids[i] if ids is not None else None
+            if key is not None and key in seen:
+                continue
+            seen.add(key)
+            parts = f.parts(i)
+            if not parts or not parts[0] or len(parts[0][0]) < 4:
+                continue
+            e, n = mapgeom.enu_xy(f, frame, np.asarray(parts[0][0], np.float64))
+            if e.max() < x0 - pad or e.min() > x1 + pad or n.max() < y0 - pad or n.min() > y1 + pad:
+                continue
+            rings.append(np.stack([e, n], 1))
+    return rings
+
+
 def bus_stop_rows(stops, lines, box, z_at, left_hand=False, walks=None, town=True):
     """Rows of the bus stops (mapped_bus_stops) in the tile box: the sign at the back of the curb of the nearest
     street (lines: build_tile's [(centreline (k, 2+), half width, class, urban)]), facing the oncoming traffic; a
@@ -548,7 +584,8 @@ def tile_rows(frame, md, keys, drives, walks, lines, box, ground, us, town, left
     the anchor frame; md, keys: the map data and the tile's cells (the mapped bus stops); drives: the houses' driveway
     chunks (buildings.doors'); ground(x (n,), y (n,)) -> the drawn ground (NaN off the block: left out); spots (a list)
     gets the driveways' parking spots; blockers: the tile's building footprints in the anchor frame (nothing in or
-    against them)."""
+    against them; with md, every building reaching the tile: footprints_for). The downtown extras roads.build_tile
+    put in props (downtown_rows) are taken out of props when they stand in or against a building."""
     def z_at(xy):
         xy = np.asarray(xy, np.float64).reshape(-1, 2)
         return np.asarray(ground(xy[:, 0], xy[:, 1]), np.float64)
@@ -560,4 +597,9 @@ def tile_rows(frame, md, keys, drives, walks, lines, box, ground, us, town, left
     if md is not None and lines:
         rows += bus_stop_rows(bus_stops_for(md, frame, keys), lines, box, z_at, left_hand, walks, town)
     rows = [r for r in rows if math.isfinite(r[3])]
-    return out_of(off_roads(clear_of(rows, props), lines), blockers)
+    rings = list(blockers) + (footprints_for(md, frame, keys, box) if md is not None else [])
+    extras = [r for r in props if r[0] in DOWNTOWN_GROUPS]
+    if extras and rings and isinstance(props, list):
+        kept = {id(r) for r in out_of(extras, rings)}
+        props[:] = [r for r in props if r[0] not in DOWNTOWN_GROUPS or id(r) in kept]
+    return out_of(off_roads(clear_of(rows, props), lines), rings)

@@ -196,6 +196,14 @@ class ClearTest(unittest.TestCase):
         self.assertEqual(len(rows), 1)
         self.assertTrue(sl._Segs(lines).clear([(rows[0][1], rows[0][2])], 0.5)[0])
 
+    def test_downtown_extras_out_of_buildings(self):
+        ring = np.array([(0.0, 115.0), (20.0, 115.0), (20.0, 130.0), (0.0, 130.0)])
+        props = [[sl.G_PLANTER, 10.0, 120.0, 0, 0, 1, 0.8, 0], [sl.G_BIKE_RACK, 10.0, 106.0, 0, 0, 1, 1.16, 0],
+                 ["hydrant", 12.0, 121.0, 0, 0, 1, 0.9, 0]]
+        sl.tile_rows(None, None, [], [], [], street_line(), BOX, lambda x, y: np.zeros(np.shape(x)), us=True,
+                     town=True, props=props, blockers=[ring])
+        self.assertEqual([r[0] for r in props], [sl.G_BIKE_RACK, "hydrant"])
+
     def test_clear_of_props(self):
         rows = [[sl.G_MAILBOX, 10.0, 10.0, 0, 0, 1, 1.25, 0], [sl.G_MAILBOX, 20.0, 10.0, 0, 0, 1, 1.25, 0]]
         props = [["hydrant", 10.5, 10.2, 0, 0, 1, 0.9, 0]]
