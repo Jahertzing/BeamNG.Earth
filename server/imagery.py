@@ -454,6 +454,7 @@ class Imagery:
         self._warm_failed = {}              # warm key -> time.monotonic() until which it is passed over (failed)
         self._warm_cv = threading.Condition()
         self._warm_thread = None
+        self._closed = False                # close(): the warm thread ends
         self._inflight = {}
         self._lock = threading.RLock()     # RLock: a done future's callback runs at once
         self._local = threading.local()     # per fetch thread: the kind of the request being loaded
@@ -892,6 +893,8 @@ class Imagery:
                                 seen.add(key)
                                 want.append(key)
         with self._warm_cv:
+            if self._closed:
+                return
             self._warm_want = want
             if self._warm_thread is None:
                 self._warm_thread = threading.Thread(target=self._warm_loop, name="img-warm", daemon=True)
@@ -905,6 +908,8 @@ class Imagery:
             with self._warm_cv:
                 key = None
                 while key is None:
+                    if self._closed:
+                        return
                     if self._warm_want is not want:     # a new list (the player moved on): looked at afresh
                         done, want = set(), self._warm_want
                     now, passed = time.monotonic(), False
@@ -1256,12 +1261,22 @@ class Imagery:
             return res, used
         return np.asarray(Image.fromarray(out, "RGB").point(self.lut_table)), used
 
-    def close(self):
+    def close(self, wait=False):
+        """Stop the warm thread and the fetch pools (queued fetches are dropped). wait: until the warm thread and
+        the fetches running now have finished, so nothing writes into the cache any more (the tests' temporary
+        caches: rmtree raced a coverage probe or a warm fetch still writing, 2026-10-28)."""
+        with self._warm_cv:
+            self._closed = True
+            self._warm_cv.notify_all()
         if self.deshadow is not None:
             self.deshadow.close()
         if self.colormatch is not None:
             self.colormatch.close()
-        self.pool.shutdown(wait=False, cancel_futures=True)
+        self.pool.shutdown(wait=wait, cancel_futures=True)
+        self.urgent_pool.shutdown(wait=wait, cancel_futures=True)
+        t = self._warm_thread
+        if wait and t is not None and t is not threading.current_thread():
+            t.join()
 
 
 # --- texture gutter ----------------------------------------------------------------------
