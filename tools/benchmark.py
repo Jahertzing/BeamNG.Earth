@@ -1173,7 +1173,7 @@ def main(argv=None):
         return 0
     opts = options(force=a.force, timeout=a.timeout, view_timeout=a.view_timeout, home_timeout=a.home_timeout,
                    settle=a.settle, fps_seconds=a.fps_seconds, poll=a.poll, exact=a.exact, backlog=a.backlog, png=a.png,
-                   server_log=a.server_log, region_quiet=a.region_quiet, weather=a.weather)
+                   server_log=a.server_log, region_quiet=a.region_quiet, weather=a.weather, hide_hud=a.hide_hud)
     out = Path(a.out) if a.out else run_dir(a.runs, a.label)
     meta = {"label": a.label, "set": os.path.relpath(a.benchmarks, ROOT), "setDigest": set_digest(a.benchmarks),
             "which": a.which if not ids else "places", "git": git_info()}
