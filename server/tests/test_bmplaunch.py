@@ -205,19 +205,24 @@ class DrcogSetting(unittest.TestCase):
     def test_flag_from_the_setting(self):
         import launcher
         with tempfile.TemporaryDirectory() as user:
-            self.assertEqual(launcher.setting_flags(user), ["--drcog", "on"], "on by default (no settings file)")
+            on = ["--drcog", "on", "--lidar-heights", "on"]
+            self.assertEqual(launcher.setting_flags(user), on, "on by default (no settings file)")
             os.makedirs(os.path.join(user, "settings"))
             with open(os.path.join(user, "settings", "beamngEarth.json"), "w") as f:
                 json.dump({"clouds": False}, f)
-            self.assertEqual(launcher.setting_flags(user), ["--drcog", "on"], "on when the file has no value")
+            self.assertEqual(launcher.setting_flags(user), on, "on when the file has no value")
             with open(os.path.join(user, "settings", "beamngEarth.json"), "w") as f:
                 json.dump({"drcog": False}, f)
-            self.assertEqual(launcher.setting_flags(user), ["--drcog", "off"])
+            self.assertEqual(launcher.setting_flags(user), ["--drcog", "off", "--lidar-heights", "on"])
+            with open(os.path.join(user, "settings", "beamngEarth.json"), "w") as f:
+                json.dump({"lidarHeights": False}, f)
+            self.assertEqual(launcher.setting_flags(user), ["--drcog", "on", "--lidar-heights", "off"])
             self.assertEqual(bmplaunch.mod_setting(user, "missing", 7), 7)
 
     def test_server_knows_the_flag(self):
         src = (Path(__file__).resolve().parents[1] / "earthd.py").read_text(encoding="utf-8")
         self.assertIn('ap.add_argument("--drcog"', src)
+        self.assertIn('ap.add_argument("--lidar-heights", choices=("on", "off"), default="on"', src)
 
 
 class OnLaunch(unittest.TestCase):
