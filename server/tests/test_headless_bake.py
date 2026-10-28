@@ -55,8 +55,9 @@ class ServerCommandTest(unittest.TestCase):
             hb.main(["--connect", str(hb.GAME_PORT)])
 
     def test_alone_the_machines_share_below_normal(self):
-        with tempfile.TemporaryDirectory() as user:
-            far, road = hb.alone_workers()
+        with (tempfile.TemporaryDirectory() as user,
+              unittest.mock.patch.object(hb, "available_gb", return_value=64.0)):    # (not this machine's)
+            far, road = hb.alone_workers(ram_gb=64.0)
             cmd = hb.server_command(user, 0, "/c", win=True, mode="alone")
             self.assertEqual(cmd[cmd.index("--workers") + 1], str(far))
             self.assertEqual(cmd[cmd.index("--road-processes") + 1], str(road))
@@ -74,12 +75,27 @@ class ServerCommandTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             hb.server_command("/u", 0, "/c", mode="auto")
 
-    def test_the_machines_share(self):
-        self.assertEqual(hb.alone_workers(24), (6, 4), "the 12-core PC: a far worker per 4 CPUs, a road process per 6")
-        self.assertEqual(hb.alone_workers(24, jobs=2), (3, 2))
-        self.assertEqual(hb.alone_workers(24, jobs=8), (1, 1), "at least one each")
-        self.assertEqual(hb.alone_workers(64), hb.ALONE_MAX)
-        self.assertEqual(hb.alone_workers(2), (1, 1))
+    def test_servers_and_workers_from_the_memory_free(self):
+        # the PC with the game closed: 43 GB free (2026-10-28 20:50), 24 CPUs
+        # a process of a tree grows to 1.6 GB over a bake (4 x (3 + 2) = 56 GB paged on the 64 GB PC)
+        jobs, far, road, note = hb.plan_servers(8, 8, ram_gb=43.0, cpus=24)
+        self.assertEqual((jobs, far, road), (2, 1, 4), "43 GB free less 8 reserved: two servers of 5 workers")
+        self.assertIn("2 servers in the 43 GB", note)
+        self.assertEqual(hb.plan_servers(4, 8, ram_gb=43.0, cpus=24)[:3], (2, 1, 4))
+        self.assertEqual(hb.plan_servers(4, 8, ram_gb=56.0, cpus=24)[:3], (3, 1, 4),
+                         "56 GB: 3 x (1 + 4) = 15 workers over 2 x (3 + 4) = 14")
+        self.assertEqual(hb.plan_servers(4, 8, ram_gb=100.0, cpus=24)[:3], (4, 3, 4), "100 GB: four full servers")
+        self.assertEqual(hb.plan_servers(2, 8, ram_gb=56.0, cpus=24), (2, 3, 4, None))
+        self.assertEqual(hb.plan_servers(8, 2, ram_gb=100.0, cpus=24), (2, 3, 4, None), "at most one per leg")
+        self.assertEqual(hb.plan_servers(8, 8, ram_gb=400.0, cpus=12), (4, 3, 4, None), "CPUS_PER_JOB")
+        self.assertEqual(hb.plan_servers(8, 8, ram_gb=10.0, cpus=24)[:3], (1, 1, 2), "too little memory: the least")
+        self.assertEqual(hb.plan_servers(2, 2, ram_gb=1e9, cpus=24), (2, 3, 4, None))
+        self.assertEqual(hb.alone_workers(ram_gb=64.0), (3, 4))
+        self.assertEqual(hb.alone_workers(ram_gb=20.0), (1, 2), "20 GB: the least")
+        self.assertIsNone(hb.workers_for(10.0))
+        self.assertEqual(hb.workers_for(11.2), (1, 2))
+        self.assertEqual(hb.workers_for(14.4), (1, 4), "the road processes first")
+        self.assertEqual(hb.workers_for(18.0), (3, 4))
 
     def test_auto_is_alone_unless_the_game_runs(self):
         self.assertEqual(hb.resolve_mode("game"), "game")
@@ -124,12 +140,15 @@ class LegsTest(unittest.TestCase):
         self.assertAlmostEqual(c.point(c.length)[0], route.point(route.length)[0], places=6)
         self.assertAlmostEqual(b.point(0.0)[0], route.point(10000 / 3 - 1000)[0], places=6)
         self.assertIs(hb.stretch(route, 0, 1), route)
-        self.assertEqual(hb.jobs_for(8, 4, ram_gb=64.0), (4, None), "at most one per leg")
-        self.assertEqual(hb.jobs_for(8, 16, ram_gb=64.0), (8, None))
-        jobs, note = hb.jobs_for(12, 16, ram_gb=42.0)      # (the PC with the game closed: 63.6 GB, ~21 GB in use)
-        self.assertEqual(jobs, 5)
-        self.assertIn("5 jobs", note)
-        self.assertEqual(hb.jobs_for(1, 0, ram_gb=1.0), (1, None))
+        # the longest stretches first, each to the job with the least so far
+        legs = hb.legs_of(["long", "short"], True, split=2)
+        L = {hb.leg_label(*lg): (90000.0 if lg[0] == "long" else 30000.0) / 2 + 1000.0 for lg in legs}
+        groups = hb.share_out(legs, 3, L)
+        self.assertEqual(len(groups), 3)
+        loads = sorted(sum(L[hb.leg_label(*lg)] for lg in g) for g in groups)
+        self.assertLess(loads[-1] - loads[0], 47000.0, loads)
+        self.assertEqual([lg[0] for lg in groups[0]][:1], ["long"], "the longest goes first")
+        self.assertEqual(hb.share_out(legs, 3, None), [legs[0::3], legs[1::3], legs[2::3]], "no lengths: round robin")
 
     def test_a_childs_command_carries_the_options(self):
         a = argparse.Namespace(speed=80.0, roads_q=1, backlog_q=4, edge_m=160.0, max_wait=180.0, ground_wait=20.0,
@@ -479,12 +498,15 @@ class CommandTest(unittest.TestCase):
                           "         'waits': {'count': 0, 'seconds': 0.0, 'gave_up': 0}}\n"
                           "    json.dump(s, open(os.path.join(sys.argv[1], leg, 'summary.json'), 'w'))\n")
                 return [sys.executable, "-c", script, out, ",".join(hb.leg_label(*lg) for lg in legs)]
-            with unittest.mock.patch.object(hb, "child_command", fake_child):
+            # (available_gb patched: on a machine short of memory the planner falls to one server, which this tool
+            # then runs itself, a real earthd: the test hung 500 s on the PC while a bake ran, 2026-10-28)
+            with (unittest.mock.patch.object(hb, "child_command", fake_child),
+                  unittest.mock.patch.object(hb, "available_gb", return_value=64.0)):
                 rc = hb.main(["--rebase-m", "900", "--mode", "alone", "--jobs", "2", "--both-ways"] + self.args(d))
             self.assertEqual(rc, 1, "a leg that did not finish (t_back) fails the run")
             self.assertEqual([lg for lg, _, _, _ in cmds], [[("t", False, None)], [("t", True, None)]], "a job per leg")
-            far, road = hb.alone_workers(jobs=2)
-            self.assertEqual({(m, w, r) for _, m, w, r in cmds}, {("alone", far, road)}, "the workers divided")
+            far, road = hb.plan_servers(2, 2, ram_gb=64.0)[1:3]
+            self.assertEqual({(m, w, r) for _, m, w, r in cmds}, {("alone", far, road)}, "the plan's workers")
             run = rb.read_json(os.path.join(bd, rb.MANIFEST))["runs"][-1]
             self.assertFalse(run["complete"])
             self.assertEqual(run["jobs"], 2)
