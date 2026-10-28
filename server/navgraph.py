@@ -37,6 +37,14 @@ NARROW_M = 5.5              # narrower two-way streets need slower encounters wi
 NARROW_MS = 30.0 / 3.6
 RING_MS = 30.0 / 3.6
 ENTRY_DRIVABILITY = 0.9     # stock AI yields to the ring's 1.0, even on a tangential entry
+# An exit ramp from a motorway or trunk to a street: the stock traffic picks its way on at every fork at random, weighted
+# by drivability squared, straightness and lanes (graphpath getPathTWithState), so a quarter of I-25's traffic left at
+# every exit, many crossing three lanes in the last 100 m (the AI plans that far ahead). At 0.6 an exit is taken about a
+# third as often, and a car coming off it gives way to the street it meets (ai.lua: a road of lower drivability yields).
+# Not on-ramps, nor a ramp from one motorway to another: a ramp of lower drivability than the motorway it joins makes its
+# cars stop dead at the gore.
+EXIT_DRIVABILITY = 0.6
+MAINLINE = ("motorway", "trunk")
 # mph over the posted limit the AI drives on motorways and trunks (their ramps too) where limits are in mph: US
 # Interstate traffic flows about this much over (the stock AI's "legal" mode holds the edge's speed exactly, so at the
 # limit every car on I-25 drove it in lockstep and the player passed them all); the speed signs keep the posted limit
@@ -110,6 +118,46 @@ def _speed_profile(xy, width, oneway, limit=math.inf):
     return np.sqrt(v2)
 
 
+def exit_ramps(edges, classes):
+    """Indices of the edges (navgraph rows: in, out, oneway, ..., ramp at 8; classes: each one's road class) on exit ramps:
+    one-way ramp chains that start where a one-way motorway or trunk (not a ramp) comes in, and end without joining a
+    one-way motorway or trunk again (an exit to a street, not a motorway-to-motorway ramp)."""
+    outs, ins = {}, {}
+    for k, e in enumerate(edges):
+        outs.setdefault(e[0], []).append(k)
+        ins.setdefault(e[1], []).append(k)
+        if not e[2]:
+            outs.setdefault(e[1], []).append(k)
+            ins.setdefault(e[0], []).append(k)
+
+    def ramp(k):
+        return len(edges[k]) > 8 and edges[k][8] == 1 and edges[k][2] == 1
+
+    def mainline(k):
+        return edges[k][2] == 1 and not ramp(k) and classes[k] in MAINLINE
+
+    out = set()
+    done = set()
+    for k in range(len(edges)):
+        if k in done or not ramp(k) or not any(mainline(i) for i in ins.get(edges[k][0], ())):
+            continue
+        chain, stack, joins = set(), [k], False
+        while stack:
+            c = stack.pop()
+            if c in chain:
+                continue
+            chain.add(c)
+            end = edges[c][1]
+            nxt = [o for o in outs.get(end, ()) if edges[o][0] == end and ramp(o)]
+            if any(mainline(o) and edges[o][0] == end for o in outs.get(end, ())):
+                joins = True
+            stack += nxt
+        done |= chain
+        if not joins:
+            out |= chain
+    return out
+
+
 def driving_width(spec):
     """The width of a road's driving lanes: the drawn carriageway (spec.width) less its parking lanes and edge
     strips (roads.carriageway adds them), i.e. the class's driving width capped by the drawn one; a four-lane
@@ -171,6 +219,7 @@ def build(frame, feats_list, elev, centre, urban_fn=None, window=WINDOW_M, decks
     the mapped traffic signals (furniture.mapped_signals; None: guessed), as the road tiles' props have them."""
     cx, cy = centre
     nodes, edges, edge_fids, seen = {}, [], [], set()
+    edge_cls = []           # each edge's road class (exit_ramps: which ramps leave a motorway for a street)
     carriage = []           # (half width, centreline (k, 2)) of every road and bridge here (the signal heads keep off them)
     prop_arms = {}          # connector name -> [(fid, spec, unit vector away, point, end, length)] (the props' view)
     ring_cands = []         # the roads the road tiles draw (fid, spec, pts, None): roundabout rings (islands.ring_fids)
@@ -319,6 +368,7 @@ def build(frame, feats_list, elev, centre, urban_fn=None, window=WINDOW_M, decks
                 edges.append([a, b, 1 if direction else 0, elo, eli, round(target, 2), driv, round(ew / 2, 2),
                               1 if ramp else 0])
                 edge_fids.append(fid)
+                edge_cls.append(spec.cls)
     import islands
     ring = islands.ring_directions(ring_cands, left_hand)
     ring_nodes = {nm for fid, e in zip(edge_fids, edges) if fid in ring for nm in e[:2]}
@@ -334,6 +384,8 @@ def build(frame, feats_list, elev, centre, urban_fn=None, window=WINDOW_M, decks
             # Yield through the stock AI's priority mechanism, not action 4 (which it ignores).
             e[6] = min(e[6], ENTRY_DRIVABILITY)
             e[5] = min(e[5], round(RING_MS, 2))
+    for k in exit_ramps(edges, edge_cls):
+        edges[k][6] = min(edges[k][6], EXIT_DRIVABILITY)
     # keep the edges with both ends in the window; z of their nodes from the ground
     inside = {nm for nm, (x, y) in pending.items() if abs(x - cx) <= window and abs(y - cy) <= window}
     edges = [e for e in edges if e[0] in inside and e[1] in inside]

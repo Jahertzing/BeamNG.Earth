@@ -60,6 +60,33 @@ class GraphTest(unittest.TestCase):
         self.assertTrue(all(e[8] == 0 for e in main))
         self.assertTrue(all(e[8] == 1 for e in ramp))
 
+    def test_exit_ramps_to_streets_are_less_drivable(self):
+        # motorway A -> J -> B (one-way); an exit ramp J -> X to a two-way street S1 - S2; an on-ramp O -> K joining the
+        # motorway at K (K on the motorway: J -> K -> B); a ramp from J to another motorway M1 -> M2
+        lines = [[(0, 0), (200, 0)], [(200, 0), (400, 0)], [(200, 0), (300, -60)], [(300, -100), (300, 100)],
+                 [(150, -80), (200, 0)], [(200, 0), (300, 60)], [(300, 60), (500, 60)]]
+        classes = ["motorway", "motorway", "motorway", "residential", "motorway", "motorway", "motorway"]
+        connectors = [(0, "A", 0.0, 0.0), (0, "J", 1.0, 1.0), (1, "J", 0.0, 0.0), (1, "B", 1.0, 1.0),
+                      (2, "J", 0.0, 0.0), (2, "X", 1.0, 1.0), (3, "S1", 0.0, 0.0), (3, "X", 0.4, 0.4),
+                      (3, "S2", 1.0, 1.0), (4, "O", 0.0, 0.0), (4, "J", 1.0, 1.0),
+                      (5, "J", 0.0, 0.0), (5, "M1", 1.0, 1.0), (6, "M1", 0.0, 0.0), (6, "M2", 1.0, 1.0)]
+        g = graph(lines, classes, connectors=connectors,
+                  oneway=[(0, 1.0), (1, 1.0), (2, 1.0), (4, 1.0), (5, 1.0), (6, 1.0)],
+                  subclass=[(2, "link"), (4, "link"), (5, "link")])
+        def piece(e):       # which feature an edge is on (its shape-point nodes are named s<feature id>_...)
+            for nm in e[:2]:
+                if nm.startswith("s"):
+                    return nm[1:].split("_")[0]
+            return None
+        exit_edges = [e for e in g["edges"] if piece(e) == "id002"]
+        self.assertTrue(exit_edges)
+        self.assertTrue(all(e[6] == navgraph.EXIT_DRIVABILITY for e in exit_edges), exit_edges)
+        onramp = [e for e in g["edges"] if piece(e) == "id004"]
+        connector = [e for e in g["edges"] if piece(e) == "id005"]
+        self.assertTrue(onramp and all(e[6] == 1.0 for e in onramp), "an on-ramp keeps the motorway's drivability")
+        self.assertTrue(connector and all(e[6] == 1.0 for e in connector), "a motorway-to-motorway ramp too")
+        self.assertTrue(all(e[6] == 1.0 for e in g["edges"] if e[8] == 0 and e[0] in ("cA", "cJ")))
+
     def test_not_drivable_and_window(self):
         g = graph([[(0, 0), (50, 0)], [(0, 10), (50, 10)], [(0, 20), (50, 20)], [(5000, 0), (5100, 0)]],
                   ["footway", "service", "residential", "residential"], subclass=[(1, "parking_aisle")])
