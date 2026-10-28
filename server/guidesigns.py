@@ -54,12 +54,14 @@ STEEL = (150, 152, 152)
 LAYER_M = 0.012                 # m between a face's layers (panel, border, shield, lettering): toward the viewer
 PANEL_DEPTH = 0.05              # m from a panel's face to its back
 
-# MUTCD 2009 freeway overhead sizes (inches as metres: the capitals' heights)
-CAP_DEST = 0.50                 # destinations (20" upper case, 15" lower case)
-CAP_CARD = 0.45                 # cardinal directions (18")
-CAP_TAB = 0.45                  # the exit number tab
-CAP_DIST = 0.40                 # "1 MILE", "1/2 MILE" (16")
-SHIELD_H = 1.07                 # a route shield (42")
+# MUTCD 2009 freeway overhead sizes (inches as metres: the capitals' heights), a fifth bigger: a screen shows a
+# sign at a fraction of the eye's resolution (the user, 2026-10-28: "still cant really read the signs")
+SIGN_SCALE = 1.2
+CAP_DEST = 0.50 * SIGN_SCALE    # destinations (20" upper case, 15" lower case)
+CAP_CARD = 0.45 * SIGN_SCALE    # cardinal directions (18")
+CAP_TAB = 0.45 * SIGN_SCALE     # the exit number tab
+CAP_DIST = 0.40 * SIGN_SCALE    # "1 MILE", "1/2 MILE" (16")
+SHIELD_H = 1.07 * SIGN_SCALE    # a route shield (42")
 MARGIN = 0.38                   # a guide sign's inner margin
 BORDER = 0.05                   # its white border
 CORNER = 0.30                   # its corner radius
@@ -83,8 +85,8 @@ BILLBOARD_CLEAR_M = 350.0       # m kept from a sign gantry
 BILLBOARD_ADS = 23              # West Coast USA's dragbillboard_sign01 .. 23 (trees.lua bbad01 ..)
 STREET_CLASSES = {"trunk", "primary", "secondary", "tertiary", "residential", "unclassified", "living_street"}
 STREET_MAJOR = {"trunk", "primary", "secondary", "tertiary"}
-BLADE_CAP = (0.20, 0.15)        # a street name blade's capitals: major streets (8", the MUTCD's over 40 mph), the
-                                # rest (6"; 4" in town reads at ~15 m on a screen: the user, 2026-10-28)
+BLADE_CAP = (0.25, 0.20)        # a street name blade's capitals: major streets 10", the rest 8" (the MUTCD's 6" / 4"
+                                # read at ~15 m on a screen: the user, 2026-10-28)
 BLADE_TOP_M = 3.15              # m from the ground to the post's top (the lower blade's bottom: MUTCD 7 ft + the stop
                                 # or yield sign under it on the same corner elsewhere)
 STREET_CLEAR_M = 1.3            # m from the corner's two carriageway edges to the post (the sidewalk's corner)

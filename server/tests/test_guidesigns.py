@@ -84,7 +84,7 @@ class Lettering(unittest.TestCase):
         x0, y0, x1, y1 = f.bounds()
         self.assertAlmostEqual(x1 - x0, w, delta=0.01)
         self.assertAlmostEqual(y1 - y0, h, delta=0.01)
-        self.assertTrue(3.0 < w < 9.0 and 2.0 < h < 5.0, (w, h))
+        self.assertTrue(3.0 < w < 11.0 and 2.0 < h < 6.5, (w, h))
         for make in (lambda: gs.gore_face("220"), lambda: gs.mile_face(214), lambda: gs.speed_face(75),
                      lambda: gs.reassurance_face([("I", "25", "NORTH")])):
             f, (w, h) = make()
