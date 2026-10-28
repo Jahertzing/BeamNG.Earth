@@ -432,6 +432,16 @@ local function restoreCamera(c)
   return 'free'
 end
 
+-- The mode the player's settings ask for ('real' / 'manual'), else the one info() saw: a run that found the sky left in
+-- 'manual' by an earlier run that died before its restore would otherwise put 'manual' back for good (Jeff's game sat
+-- in a 30-minute day of 2026-06-20 at night, 2026-10-28).
+local function settingsMode(key, seen)
+  local stg = ext('beamngEarth_settings')
+  local ok, v = pcall(function() return stg and stg.get and stg.get(key) end)
+  if ok and (v == 'real' or v == 'manual') then return v end
+  return seen
+end
+
 local function restoreSky(s)
   local tod = firstOfClass('TimeOfDay')
   if tod and s.tod then
@@ -439,8 +449,9 @@ local function restoreSky(s)
     postApply(tod)
   end
   local sky = ext('beamngEarth_sky')
-  if sky and sky.setMode and s.mode then sky.setMode(s.mode) end -- 'real' re-syncs on its next update
-  return s.mode
+  local mode = settingsMode('skyMode', s.mode)
+  if sky and sky.setMode and mode then sky.setMode(mode) end -- 'real' re-syncs on its next update
+  return mode
 end
 
 local function restoreWeather(w)
@@ -456,8 +467,9 @@ local function restoreWeather(w)
     postApply(li)
   end
   local we = ext('beamngEarth_weather')
-  if we and we.setMode and w.mode then we.setMode(w.mode) end
-  return w.mode
+  local mode = settingsMode('weatherMode', w.mode)
+  if we and we.setMode and mode then we.setMode(mode) end
+  return mode
 end
 
 -- parts: which to restore ({ cam = true, sky = true, weather = true, perfmon = true, ui = true }; nil = all)

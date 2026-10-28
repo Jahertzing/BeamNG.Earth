@@ -178,6 +178,16 @@ T.check(tod.time == 0.1 and tod.play == true and tod.month == 10 and tod.day == 
 T.check(cloud.coverage == 0.8 and cloud.cirrusCoverage == 0.3 and level.fogDensity == 0.002
   and level.fogAtmosphereHeight == 400, 'restore: clouds and fog back')
 T.check(not loaded.beamngEarth_perfmon and beamngEarth_perfmon == nil, 'restore: perfmon unloaded')
+
+-- a run that found the sky left in 'manual' (an earlier run died before its restore) puts back the settings' mode
+do
+  local saved = { sky = { mode = 'manual', tod = { time = 0.5 } }, weather = { mode = 'manual' } }
+  sky.setMode('manual'); weather.setMode('manual')
+  beamngEarth_settings = { get = function(k) return ({ skyMode = 'real', weatherMode = 'real' })[k] end }
+  local r2 = B.restore(saved, { weather = true, sky = true })
+  T.check(r2.ok and sky.getMode() == 'real' and weather.getMode() == 'real', 'restore: the settings\' modes over a stale manual')
+  beamngEarth_settings = nil
+end
 T.check(cam.name == 'free', 'restore without cam leaves the camera')
 T.check(core_camera._free.manualzoom.fov == 65, 'the views left their FOV on the free camera')
 r = B.restore(sv, { cam = true })
