@@ -18,12 +18,20 @@ anchors.json, the anchors the mod pins its teleports and rebases to: routepins.l
 never cut back, so a whole route (several GB) stays on disk. Its anchor is the key's first two parts (lat, lon), as
 every anchor's kind has them. load() looks there first. A code change makes them unreachable as any other; the bake
 tool builds the route again and removes what that run did not use. PIN_SUBDIR lives in the world folder (cache.py "The
-world folder": <world>/bake, never cut back or cleared) when there is one, else in the cache folder (pin_dir)."""
+world folder": <world>/bake, never cut back or cleared) when there is one, else in the cache folder (pin_dir).
+
+Generations: a code change no longer throws a baked route away. The bake's own server (tools/headless_bake.py,
+BNE_REVISIT_GENS=bake) marks each anchor it stores or reads pinned items for, under its code (PIN_SUBDIR/gens/<code>/).
+Another server, missing an item of an anchor its own code never baked, takes the whole anchor from the newest
+generation that did (one generation per anchor and process: a road tile and the ground carved for it come from the
+same code). So after an update the route stays baked as it was, and the next bake run replaces it anchor by anchor
+(Jeff, 2026-10-28: "why does it have to keep restarting from scratch")."""
 import hashlib
 import json
 import os
 import re
 import threading
+import time
 import zipfile
 
 import cache
@@ -36,11 +44,18 @@ PIN_SUBDIR = "bake"         # a baked route's items: never cut back (route_bake.
 ANCHORS = "anchors.json"    # in PIN_SUBDIR: {"anchors": [[lat, lon], ...]} the baked route's anchors
 CACHE_DIR = None            # the server's cache folder (blockworker._State, earthd.Server): stores without one at hand
 PIN_DIR = None              # the baked route's folder; None: pin_dir's (the world folder's PIN_SUBDIR, else the cache's)
+GENS = os.environ.get("BNE_REVISIT_GENS", "on")     # on: older baked generations as a fallback; bake: marks (the
+                                                    # bake's server, which builds anew); off: neither
+GENS_SUBDIR = "gens"        # in PIN_SUBDIR: <code>/<lat>_<lon> an anchor that code baked, <code>/started its first mark
+MAX_GENS = 8                # the older generations looked at
 
 _faults = [0]
 _code = []
 _lock = threading.Lock()
 _at = {}                    # key -> its anchor (lat, lon), from key(): whether store() pins it
+_parts = {}                 # key -> (kind, parts), from key(): the same item's key under an older generation's code
+_gen_of = {}                # (pin dir, anchor) -> the code this process takes the anchor's items from (sticky)
+_marked = set()             # (pin dir, code, anchor) marked already
 _pins = {"stamp": None, "set": frozenset()}
 
 
@@ -69,22 +84,101 @@ def code_key():
                     except OSError:
                         pass
             for k in sorted(os.environ):                # (the build switches: BNE_*)
-                if k.startswith("BNE_") and k not in ("BNE_REVISIT", "BNE_REVISIT_MB", "BNE_REVISIT_SKIP"):
+                if k.startswith("BNE_") and k not in ("BNE_REVISIT", "BNE_REVISIT_MB", "BNE_REVISIT_SKIP",
+                                                      "BNE_REVISIT_GENS"):
                     h.update(f"{k}={os.environ[k]}".encode())
             _code.append(h.hexdigest()[:16])
         return _code[0]
 
 
+def _key_with(kind, code, parts):
+    return hashlib.sha1(repr((kind, code, parts)).encode()).hexdigest()
+
+
 def key(kind, *parts):
     """The cache key of an item: its kind, what it was built from (the anchor's lat/lon, the tile, the settings) and
     the code."""
-    k = hashlib.sha1(repr((kind, code_key(), parts)).encode()).hexdigest()
+    k = _key_with(kind, code_key(), parts)
     if len(parts) >= 2 and isinstance(parts[0], float) and isinstance(parts[1], float):
         with _lock:
             if len(_at) > 100000:
                 _at.clear()
+                _parts.clear()
             _at[k] = (parts[0], parts[1])
+            _parts[k] = (kind, parts)
     return k
+
+
+def _anchor_name(at):
+    return f"{round(at[0], 7):.7f}_{round(at[1], 7):.7f}"
+
+
+def mark_anchor(pd, code, at, started=None):
+    """Anchor at (lat, lon) baked under code in the baked route's folder pd (started: the generation's time, when it is
+    the first mark)."""
+    gd = os.path.join(pd, GENS_SUBDIR, code)
+    os.makedirs(gd, exist_ok=True)
+    first = os.path.join(gd, "started")
+    if not os.path.exists(first):
+        with open(first, "w") as f:
+            f.write(repr(time.time() if started is None else float(started)))
+    open(os.path.join(gd, _anchor_name(at)), "a").close()
+
+
+def _mark(cache_dir, k):
+    """The bake's server stored or read a pinned item of k's anchor: the anchor is baked under this code."""
+    with _lock:
+        at = _at.get(k)
+    if at is None:
+        return
+    pd, code = pin_dir(cache_dir), code_key()
+    if (pd, code, at) in _marked:
+        return
+    try:
+        mark_anchor(pd, code, at)
+        with _lock:
+            _marked.add((pd, code, at))
+    except OSError:
+        pass
+
+
+def _gens(pd):
+    """The baked generations [code], newest first."""
+    root = os.path.join(pd, GENS_SUBDIR)
+    out = []
+    try:
+        names = os.listdir(root)
+    except OSError:
+        return out
+    for name in names:
+        try:
+            with open(os.path.join(root, name, "started")) as f:
+                out.append((float(f.read().strip() or 0), name))
+        except (OSError, ValueError):
+            continue
+    return [c for _, c in sorted(out, reverse=True)]
+
+
+def _gen_for(cache_dir, at):
+    """The code this process takes anchor at's items from: its own when its code baked the anchor or no generation
+    did, else the newest generation that did."""
+    pd = pin_dir(cache_dir)
+    with _lock:
+        got = _gen_of.get((pd, at))
+    if got is not None:
+        return got
+    code, name, got = code_key(), _anchor_name(at), code_key()
+    gens = _gens(pd)
+    if code not in gens or not os.path.exists(os.path.join(pd, GENS_SUBDIR, code, name)):
+        for g in gens[:MAX_GENS]:
+            if g != code and os.path.exists(os.path.join(pd, GENS_SUBDIR, g, name)):
+                got = g
+                break
+    with _lock:
+        if len(_gen_of) > 10000:
+            _gen_of.clear()
+        _gen_of.setdefault((pd, at), got)
+        return _gen_of[(pd, at)]
 
 
 def pin_dir(cache_dir, world_dir=None):
@@ -133,7 +227,8 @@ def store(cache_dir, kind, k, blobs, extra=None):
     anchor). Never raises; False when not kept."""
     if not ON or kind in SKIP:
         return False
-    path = _path(cache_dir, kind, k, PIN_SUBDIR if _pinned(cache_dir, k) else SUBDIR)
+    pinned = _pinned(cache_dir, k)
+    path = _path(cache_dir, kind, k, PIN_SUBDIR if pinned else SUBDIR)
     tmp = f"{path}.{os.getpid()}.{threading.get_ident()}.tmp"
     try:
         os.makedirs(os.path.dirname(path), exist_ok=True)
@@ -142,6 +237,8 @@ def store(cache_dir, kind, k, blobs, extra=None):
                 z.writestr(name, data)
             z.writestr("meta.json", json.dumps({"names": list(blobs), "extra": extra}))
         os.replace(tmp, path)
+        if pinned and GENS == "bake":
+            _mark(cache_dir, k)
         return True
     except Exception:
         try:
@@ -162,6 +259,14 @@ def load(cache_dir, kind, k):
     """({name: bytes}, extra) of the item under key k, or None when there is none (or it cannot be read)."""
     if not ON or kind in SKIP:
         return None
+    if GENS == "on" and _pinned(cache_dir, k):
+        with _lock:
+            at, kp = _at.get(k), _parts.get(k)
+        g = _gen_for(cache_dir, at)
+        if g != code_key():
+            if kp is None or kp[0] != kind:
+                return None
+            return _read(_path(cache_dir, kind, _key_with(kind, g, kp[1]), PIN_SUBDIR))
     path = _path(cache_dir, kind, k, PIN_SUBDIR)
     if not os.path.exists(path):
         path = _path(cache_dir, kind, k)
@@ -174,6 +279,15 @@ def load(cache_dir, kind, k):
                 path = pin
             except OSError:
                 pass
+    got = _read(path)
+    if got is not None and GENS == "bake" and path == _path(cache_dir, kind, k, PIN_SUBDIR):
+        _mark(cache_dir, k)                 # (an anchor this code baked before: still this generation's)
+    return got
+
+
+def _read(path):
+    if not os.path.exists(path):
+        return None
     try:
         with zipfile.ZipFile(path) as z:
             meta = json.loads(z.read("meta.json"))

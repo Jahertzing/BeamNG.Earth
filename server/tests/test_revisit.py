@@ -97,6 +97,54 @@ class RevisitTest(unittest.TestCase):
             self.assertEqual(revisit.load(d, "roads", off)[0], {"a": b"x"})
             self.assertTrue(where(off, revisit.PIN_SUBDIR) and not where(off, revisit.SUBDIR), "moved when read")
 
+    def test_a_baked_route_outlives_a_code_change(self):
+        """After a code change an anchor's items come from the newest generation that baked it, all of them (a road
+        tile and the ground under it from the same code), until a bake run under the new code replaces it."""
+        saved = (list(revisit._code), revisit.GENS)
+
+        def as_code(code, gens):
+            revisit._code[:] = [code]
+            revisit.GENS = gens
+            revisit._gen_of.clear()
+
+        try:
+            with tempfile.TemporaryDirectory() as d:
+                os.makedirs(os.path.join(d, revisit.PIN_SUBDIR))
+                with open(os.path.join(d, revisit.PIN_SUBDIR, revisit.ANCHORS), "w") as f:
+                    json.dump({"anchors": [[40.1, -104.94], [40.2, -104.94]]}, f)
+                x, y = (40.1, -104.94), (40.2, -104.94)
+                as_code("a" * 16, "bake")
+                for at in (x, y):
+                    for kind in ("roads", "block"):
+                        self.assertTrue(revisit.store(d, kind, revisit.key(kind, *at, 1), {"v": b"A"}))
+                as_code("b" * 16, "on")
+                self.assertEqual(revisit.load(d, "roads", revisit.key("roads", *x, 1))[0], {"v": b"A"})
+                self.assertIsNone(revisit.load(d, "roads", revisit.key("roads", *x, 2)), "not baked: built")
+                self.assertIsNone(revisit.load(d, "roads", revisit.key("block", *x, 1)), "another kind's key")
+                as_code("b" * 16, "off")
+                self.assertIsNone(revisit.load(d, "roads", revisit.key("roads", *x, 1)))
+                as_code("b" * 16, "bake")       # (the next bake run builds anew: x's road tile, not its block yet)
+                self.assertIsNone(revisit.load(d, "roads", revisit.key("roads", *x, 1)))
+                self.assertTrue(revisit.store(d, "roads", revisit.key("roads", *x, 1), {"v": b"B"}))
+                as_code("b" * 16, "on")
+                self.assertEqual(revisit.load(d, "roads", revisit.key("roads", *x, 1))[0], {"v": b"B"})
+                self.assertIsNone(revisit.load(d, "block", revisit.key("block", *x, 1)),
+                                  "never A's block under B's road")
+                self.assertEqual(revisit.load(d, "block", revisit.key("block", *y, 1))[0], {"v": b"A"})
+                as_code("c" * 16, "on")         # (another change: the newest generation that baked each anchor)
+                self.assertEqual(revisit.load(d, "roads", revisit.key("roads", *x, 1))[0], {"v": b"B"})
+                self.assertEqual(revisit.load(d, "roads", revisit.key("roads", *y, 1))[0], {"v": b"A"})
+                as_code("b" * 16, "on")         # (an anchor's generation is kept for the process: marks after it do not
+                y_block = revisit.key("block", *y, 1)   # switch it)
+                self.assertEqual(revisit.load(d, "block", y_block)[0], {"v": b"A"})
+                revisit.GENS = "bake"
+                revisit.store(d, "roads", revisit.key("roads", *y, 1), {"v": b"B"})
+                revisit.GENS = "on"
+                self.assertEqual(revisit.load(d, "roads", revisit.key("roads", *y, 1))[0], {"v": b"A"})
+        finally:
+            revisit._code[:], revisit.GENS = saved
+            revisit._gen_of.clear()
+
     def test_the_key_holds_the_code(self):
         self.assertEqual(revisit.key("roads", 1, 2), revisit.key("roads", 1, 2))
         self.assertNotEqual(revisit.key("roads", 1, 2), revisit.key("roads", 1, 3))

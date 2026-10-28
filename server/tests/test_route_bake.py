@@ -115,6 +115,24 @@ class DriveTest(unittest.TestCase):
             self.assertTrue(run["complete"])
             self.assertEqual(run["legs"][0]["summary"]["km"], 93.0)
 
+    def test_mark_keeps_a_complete_bake_after_a_code_change(self):
+        """mark: a bake made before revisit.py's generations stays in use after an update."""
+        import revisit
+        with tempfile.TemporaryDirectory() as d:
+            rc, _ = self.bake(d, [], lambda cmd: (0, {"complete": True, "km": 93.0}))
+            self.assertEqual(rc, 0)
+            bd = os.path.join(d, "world", "bake")
+            with open(os.path.join(bd, "anchors.json")) as f:
+                anchors = json.load(f)["anchors"]
+            args = ["--cache-dir", os.path.join(d, "cache"), "--world-dir", os.path.join(d, "world")]
+            with contextlib.redirect_stdout(io.StringIO()):
+                self.assertEqual(rb.main(["mark"] + args), 0)
+            gd = os.path.join(bd, revisit.GENS_SUBDIR, revisit.code_key())
+            self.assertEqual(len([f for f in os.listdir(gd) if f != "started"]), len(anchors))
+            with contextlib.redirect_stdout(io.StringIO()):
+                self.assertEqual(rb.main(["status"] + args), 0, "gens/ is not a kind")
+            self.assertNotIn(revisit.GENS_SUBDIR, rb.sizes(bd))
+
     def test_a_ghost_drive_that_did_not_finish_fails_the_bake(self):
         with tempfile.TemporaryDirectory() as d:
             rc, cmds = self.bake(d, [], lambda cmd: (1, {"complete": False}))

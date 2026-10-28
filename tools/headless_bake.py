@@ -96,7 +96,9 @@ def server_command(user_dir, port=0, cache_dir=None, win=IS_WIN):
 
 def start_server(cmd, log_path, timeout=START_S):
     """(process, port): cmd started at idle priority, its output to log_path, once it listens."""
-    env = dict(os.environ, BNGEARTH_PARENT=str(os.getpid()), PYTHONUNBUFFERED="1")
+    # (BNE_REVISIT_GENS=bake: builds what an older generation baked anew and marks the anchors it bakes, revisit.py
+    # "Generations"; not in the code key)
+    env = dict(os.environ, BNGEARTH_PARENT=str(os.getpid()), PYTHONUNBUFFERED="1", BNE_REVISIT_GENS="bake")
     kw = {"cwd": ROOT, "env": env}
     if IS_WIN:
         kw["creationflags"] = subprocess.IDLE_PRIORITY_CLASS | subprocess.CREATE_NEW_PROCESS_GROUP

@@ -22,8 +22,10 @@ How (revisit.py, blockcache.py, the mod's routepins.lua):
           keeping everything it builds. The first drive after a code
           change builds; the next one is the benchmark (its summary: fps, 1% lows, hitches). Needs the game with the
           MCP server on and the companion server running (launcher.py).
-  clean   a code change makes every baked item unreachable (revisit's key holds the code); after a complete drive
-          the items it did not touch (older than its start) are removed.
+  mark    the last complete drive's anchors as baked under its code (one made before revisit.py "Generations"),
+          so the game keeps using it after a code change
+  clean   after a code change the game keeps using the older bake (revisit.py "Generations") until a bake run
+          replaces it; after a complete drive the items it did not touch (older than its start) are removed.
 """
 import argparse
 import json
@@ -250,12 +252,13 @@ def cmd_plan(a):
 
 def sizes(folder):
     """{kind: (files, bytes)} under folder."""
+    import revisit
     out = {}
     if not os.path.isdir(folder):
         return out
     for kind in sorted(os.listdir(folder)):
         p = os.path.join(folder, kind)
-        if not os.path.isdir(p):
+        if not os.path.isdir(p) or kind == revisit.GENS_SUBDIR:
             continue
         n = b = 0
         for d, _, files in os.walk(p):
@@ -291,7 +294,8 @@ def cmd_status(a):
     if last is None:
         print("  not baked yet (route_bake.py drive)")
     elif last.get("code") != revisit.code_key():
-        print(f"  STALE: baked {last.get('ended')} with other server code; drive again to re-bake, then clean")
+        print(f"  OLDER CODE: baked {last.get('ended')} with other server code; the game uses that bake until a "
+              f"headless_bake.py run replaces it anchor by anchor; then clean")
     else:
         print(f"  baked {last.get('ended')} with this code")
     return 0
@@ -402,6 +406,21 @@ def _drive_leg(cmd):
     return p
 
 
+def cmd_mark(a):
+    import revisit
+    bd = bake_dir(a)
+    man = read_json(os.path.join(bd, MANIFEST), {})
+    last = next((r for r in reversed(man.get("runs") or []) if r.get("complete")), None)
+    data = read_json(os.path.join(bd, revisit.ANCHORS), {})
+    if last is None or not last.get("code") or not data.get("anchors"):
+        print("no complete drive (or no plan) yet: nothing marked")
+        return 1
+    for lat, lon in data["anchors"]:
+        revisit.mark_anchor(bd, last["code"], (round(float(lat), 7), round(float(lon), 7)), last.get("start_ts"))
+    print(f"marked {len(data['anchors'])} anchors as baked with code {last['code']} (the drive of {last['started']})")
+    return 0
+
+
 def cmd_clean(a):
     bd = bake_dir(a)
     man = read_json(os.path.join(bd, MANIFEST), {})
@@ -420,6 +439,17 @@ def cmd_clean(a):
                     n += 1
                     if not a.dry_run:
                         os.remove(p)
+    import revisit
+    import shutil
+    gd = os.path.join(bd, revisit.GENS_SUBDIR)       # (older generations' anchor marks: revisit.py "Generations")
+    for code in (os.listdir(gd) if os.path.isdir(gd) else ()):
+        try:
+            with open(os.path.join(gd, code, "started")) as f:
+                started = float(f.read().strip() or 0)
+        except (OSError, ValueError):
+            continue
+        if code != last.get("code") and started < cut and not a.dry_run:
+            shutil.rmtree(os.path.join(gd, code), ignore_errors=True)
     print(f"{'would remove' if a.dry_run else 'removed'} {n} items, {b / 1e9:.2f} GB, older than the drive of "
           f"{last['started']}")
     return 0
@@ -427,7 +457,7 @@ def cmd_clean(a):
 
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("command", choices=("plan", "drive", "status", "clean"))
+    ap.add_argument("command", choices=("plan", "drive", "status", "mark", "clean"))
     ap.add_argument("--routes", default=",".join(ROUTES), help=f"comma list of {', '.join(ROUTES)}")
     ap.add_argument("--cache-dir", default=None, help="the server's cache (default: the server's)")
     ap.add_argument("--world-dir", default=None,
@@ -448,7 +478,8 @@ def main(argv=None):
     a.cache_dir = a.cache_dir or default_cache_dir()
     a.world_dir = a.world_dir or default_world_dir()
     a.user_dir = a.user_dir or default_user_dir()
-    return {"plan": cmd_plan, "drive": cmd_drive, "status": cmd_status, "clean": cmd_clean}[a.command](a)
+    return {"plan": cmd_plan, "drive": cmd_drive, "status": cmd_status, "mark": cmd_mark,
+            "clean": cmd_clean}[a.command](a)
 
 
 if __name__ == "__main__":
