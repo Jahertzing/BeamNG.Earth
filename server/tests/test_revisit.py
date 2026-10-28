@@ -89,6 +89,8 @@ class RevisitTest(unittest.TestCase):
             self.assertTrue(where(cell, revisit.SUBDIR), "not an anchor's item: not pinned")
             self.assertEqual(revisit.load(d, "roads", on)[0], {"a": b"x"})
             self.assertEqual(revisit.load(d, "roads", off)[0], {"a": b"x"})
+            self.assertTrue(revisit.has(d, "roads", on) and revisit.has(d, "roads", off))
+            self.assertFalse(revisit.has(d, "roads", revisit.key("roads", 1.0, 2.0)))
             with open(os.path.join(d, revisit.PIN_SUBDIR, revisit.ANCHORS), "w") as f:
                 json.dump({"anchors": [[40.1, -104.94], [40.11, -104.94]]}, f)
             os.utime(os.path.join(d, revisit.PIN_SUBDIR, revisit.ANCHORS), ns=(1, 10 ** 18))
