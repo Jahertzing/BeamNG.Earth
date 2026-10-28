@@ -119,8 +119,8 @@ T.check(veh.cmds[1] and veh.cmds[1]:find("'throttle', 0") and veh.cmds[1]:find("
   'zeroInputs: throttle 0, parking brake on')
 
 -- teleport / progress
-local tp = B.teleport({ lat = 46.5935, lon = 7.9089 })
-T.check(tp.ok and tp.anchorBefore == 4 and teleports[1][1] == 46.5935 and teleports[1][2] == 7.9089, 'teleport')
+local tp = B.teleport({ lat = 36.5785, lon = -118.2923 })    -- (the place is the anchor: e / n are from both)
+T.check(tp.ok and tp.anchorBefore == 4 and teleports[1][1] == 36.5785 and teleports[1][2] == -118.2923, 'teleport')
 local pr = B.progress()
 T.check(pr.mod and pr.anchorId == 4 and pr.far.live == 900 and pr.far.exactMiss == 3 and pr.player.z == 1500,
   'progress: anchor, far stats, player')
@@ -152,6 +152,14 @@ r = B.view({ lat = lat, lon = lon, alt = h, dir = { x = 0, y = 1, z = 0 } })
 T.near(cam.pos.x, 200, 1e-6, 'view lat/lon: east')
 T.near(cam.pos.y, -300, 1e-6, 'view lat/lon: north')
 T.near(cam.pos.z, 1600, 1e-6, 'view lat/lon/alt: the ENU height')
+
+-- a place km from the anchor (a teleport near a baked route lands on its anchor, routepins.lua): e / n from the place
+local plat, plon = st.anchor:enuToGeodetic(3000, 4000, 0)
+B.teleport({ lat = plat, lon = plon })
+B.view({ e = 10, n = -12, agl = 2, dir = { x = 0, y = 1, z = 0 } })
+T.near(cam.pos.x, 3010, 0.01, 'view on a pinned anchor: e from the place')
+T.near(cam.pos.y, 3988, 0.01, 'view on a pinned anchor: n from the place')
+B.teleport({ lat = 36.5785, lon = -118.2923 })
 
 -- perfmon: loaded for the run, unloaded by restore (it was not loaded before)
 T.check(B.perfStart().ok and loaded.beamngEarth_perfmon, 'perfStart loads perfmon')
