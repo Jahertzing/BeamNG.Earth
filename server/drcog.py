@@ -186,8 +186,9 @@ class Drcog:
         """A widths(fid, lonlat) function for roads._measured_widths: the edges' width, else fallback's (the
         buildings' measure: roadwidth.RoadWidths.get)."""
         import mapcells
+        memo, lock = {}, threading.Lock()
 
-        def get(fid, lonlat):
+        def measure(fid, lonlat):
             fb = fallback(fid, lonlat) if fallback is not None else None
             ll = np.asarray(lonlat, np.float64)
             if len(ll) < 2:
@@ -201,10 +202,20 @@ class Drcog:
             except Exception as ex:         # (the buildings' measure, as without the source)
                 log.debug("drcog edges: %s: %s", type(ex).__name__, ex)
                 return fb
-            w = measure_width(ll, e["coords"], e["off"])
+            w = measure_width(ll, e["coords"], e["off"], edge_index(e))
             if w is None:
                 return fb
             return (w, fb[1] if fb is not None else 2.5)
+
+        def get(fid, lonlat):
+            # decided once per road per run, as the buildings' measure (roadwidth.RoadWidths.get): every consumer
+            # (the ground photos' painted roads, road tiles, the road graph) asks for the same roads again
+            with lock:
+                if fid in memo:
+                    return memo[fid]
+            got = measure(fid, lonlat)
+            with lock:
+                return memo.setdefault(fid, got)
         return get
 
 
@@ -293,21 +304,85 @@ def merge_buildings(feats, roof):
     return out, len(keep_r)
 
 
-def measure_width(ll, coords, off):
+def _segments(coords, off):
+    """(a, b) (m, 2) the start and end of every segment of the lines coords / off (no segment across two lines)."""
+    if len(coords) < 2:
+        return np.zeros((0, 2)), np.zeros((0, 2))
+    starts = np.repeat(np.arange(len(off) - 1), np.diff(off))
+    same = np.r_[starts[1:] == starts[:-1], False]          # segment k -> k + 1 within one line
+    return coords[:-1][same[:-1]], coords[1:][same[:-1]]
+
+
+# The edges of a cell on a lon / lat grid, so a road's width is measured against the segments near it only: against all
+# of a Denver cell's (~10^5) it cost ~5-10 ms a road, the first painted ground photo or road tile of a downtown cell
+# measuring thousands of roads (Jeff's drive into Denver 2026-10-28: 15-21 s of "roads" in a block's base photo).
+INDEX_CELL_DEG = 0.0005     # ~43 m east-west, ~55 m north-south at 40 N
+_GRID_OFF = 1 << 20         # (grid indices made non-negative for the packed key)
+
+
+class EdgeIndex:
+    """A cell's edge-of-pavement segments (lon / lat) by grid square: near(box) -> the indices of every segment whose
+    bounding box meets the box's squares (a superset of those that meet the box)."""
+
+    def __init__(self, coords, off):
+        self.a, self.b = _segments(np.asarray(coords, np.float64), np.asarray(off, np.int64))
+        lo = np.floor(np.minimum(self.a, self.b) / INDEX_CELL_DEG).astype(np.int64)
+        hi = np.floor(np.maximum(self.a, self.b) / INDEX_CELL_DEG).astype(np.int64)
+        nx, ny = hi[:, 0] - lo[:, 0] + 1, hi[:, 1] - lo[:, 1] + 1
+        cnt = nx * ny
+        seg = np.repeat(np.arange(len(self.a)), cnt)
+        k = np.arange(int(cnt.sum())) - np.repeat(np.cumsum(cnt) - cnt, cnt)    # each square of a segment's box
+        gx = np.repeat(lo[:, 0], cnt) + k % np.repeat(nx, cnt)
+        gy = np.repeat(lo[:, 1], cnt) + k // np.repeat(nx, cnt)
+        key = self._key(gx, gy)
+        order = np.argsort(key, kind="stable")
+        self.keys, self.segs = key[order], seg[order]
+
+    @staticmethod
+    def _key(gx, gy):
+        return (np.asarray(gx, np.int64) + _GRID_OFF) * (2 * _GRID_OFF) + (np.asarray(gy, np.int64) + _GRID_OFF)
+
+    def near(self, x0, y0, x1, y1):
+        cx0, cx1 = int(math.floor(x0 / INDEX_CELL_DEG)), int(math.floor(x1 / INDEX_CELL_DEG))
+        cy0, cy1 = int(math.floor(y0 / INDEX_CELL_DEG)), int(math.floor(y1 / INDEX_CELL_DEG))
+        parts = []
+        for gx in range(cx0, cx1 + 1):          # (a column's squares are one run of the sorted keys)
+            i = np.searchsorted(self.keys, self._key(gx, cy0), side="left")
+            j = np.searchsorted(self.keys, self._key(gx, cy1), side="right")
+            if j > i:
+                parts.append(self.segs[i:j])
+        if not parts:
+            return np.zeros(0, np.int64)
+        return np.unique(np.concatenate(parts))
+
+
+def edge_index(edges):
+    """The EdgeIndex of a cell's edges dict (Drcog.edges), made once and kept in it (in memory only)."""
+    got = edges.get("_index")
+    if got is None:
+        got = edges["_index"] = EdgeIndex(edges["coords"], edges["off"])
+    return got
+
+
+def measure_width(ll, coords, off, index=None):
     """The carriageway width (m) of a road (centreline ll (k, 2) lon/lat) between the nearest edge of pavement lines
     either side of it: at WIDTH_SAMPLES of its length, the nearest crossing each side within WIDTH_REACH_M of a line
     square to it; the median of the samples where both sides have one (WIDTH_MIN_SAMPLES at least), else None.
-    Pure."""
+    index (the lines' EdgeIndex): only the segments near the road are looked at (the same result). Pure."""
     if len(coords) == 0 or len(ll) < 2:
         return None
     lat0 = float(ll[:, 1].mean())
     kx, ky = 111320.0 * math.cos(math.radians(lat0)), 110540.0
     lon0 = float(ll[:, 0].mean())
     P = np.c_[(ll[:, 0] - lon0) * kx, (ll[:, 1] - lat0) * ky]
-    E = np.c_[(coords[:, 0] - lon0) * kx, (coords[:, 1] - lat0) * ky]
-    starts = np.repeat(np.arange(len(off) - 1), np.diff(off))
-    same = np.r_[starts[1:] == starts[:-1], False]          # segment k -> k + 1 within one line
-    A, B = E[:-1][same[:-1]], E[1:][same[:-1]]
+    if index is not None:       # a crossing within the reach of a sample lies within the reach of the road's box
+        rx, ry = (WIDTH_REACH_M + 1.0) / kx, (WIDTH_REACH_M + 1.0) / ky
+        near = index.near(ll[:, 0].min() - rx, ll[:, 1].min() - ry, ll[:, 0].max() + rx, ll[:, 1].max() + ry)
+        a, b = index.a[near], index.b[near]
+    else:
+        a, b = _segments(np.asarray(coords, np.float64), np.asarray(off, np.int64))
+    A = np.c_[(a[:, 0] - lon0) * kx, (a[:, 1] - lat0) * ky]
+    B = np.c_[(b[:, 0] - lon0) * kx, (b[:, 1] - lat0) * ky]
     seg = np.diff(P, axis=0)
     L = np.hypot(seg[:, 0], seg[:, 1])
     cum = np.r_[0.0, np.cumsum(L)]
