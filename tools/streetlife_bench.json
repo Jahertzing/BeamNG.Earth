@@ -34,33 +34,33 @@
     },
     {
      "name": "mailbox",
-     "lat": 40.0986588,
-     "lon": -104.9354375,
-     "heading": 325.5,
+     "lat": 40.0987898,
+     "lon": -104.936546,
+     "heading": 55.3,
      "agl": 1.7,
      "pitch": -8,
      "fov": 60,
-     "note": "frederick_old_town: mailbox 156 m from the place"
+     "note": "frederick_old_town: mailbox 87 m from the place"
     },
     {
      "name": "mailcbu",
-     "lat": 40.099558,
-     "lon": -104.937581,
-     "heading": 325.2,
+     "lat": 40.1002113,
+     "lon": -104.9365355,
+     "heading": 55.3,
      "agl": 1.7,
      "pitch": -8,
      "fov": 60,
-     "note": "frederick_old_town: mailcbu 55 m from the place"
+     "note": "frederick_old_town: mailcbu 95 m from the place"
     },
     {
      "name": "cart_trash",
-     "lat": 40.0995371,
-     "lon": -104.9376241,
-     "heading": 325.8,
+     "lat": 40.0995236,
+     "lon": -104.9358533,
+     "heading": 143.0,
      "agl": 1.7,
      "pitch": -8,
      "fov": 60,
-     "note": "frederick_old_town: cart_recycle 58 m from the place"
+     "note": "frederick_old_town: cart_recycle 102 m from the place"
     }
    ]
   },
@@ -83,23 +83,23 @@
     },
     {
      "name": "mailbox",
-     "lat": 40.1090736,
-     "lon": -104.9603793,
-     "heading": 6.5,
+     "lat": 40.1082341,
+     "lon": -104.9600918,
+     "heading": 321.9,
      "agl": 1.7,
      "pitch": -8,
      "fov": 60,
-     "note": "frederick_subdivision: mailbox 191 m from the place"
+     "note": "frederick_subdivision: mailbox 204 m from the place"
     },
     {
      "name": "cart_trash",
-     "lat": 40.1088493,
-     "lon": -104.9599158,
-     "heading": 325.8,
+     "lat": 40.1082384,
+     "lon": -104.9600607,
+     "heading": 320.7,
      "agl": 1.7,
      "pitch": -8,
      "fov": 60,
-     "note": "frederick_subdivision: cart_trash 219 m from the place"
+     "note": "frederick_subdivision: cart_recycle 206 m from the place"
     }
    ]
   },
@@ -122,23 +122,23 @@
     },
     {
      "name": "mailcbu",
-     "lat": 39.9279364,
-     "lon": -104.9610667,
-     "heading": 145.8,
+     "lat": 39.9279975,
+     "lon": -104.9629089,
+     "heading": 324.8,
      "agl": 1.7,
      "pitch": -8,
      "fov": 60,
-     "note": "thornton_128th: mailcbu 141 m from the place"
+     "note": "thornton_128th: mailcbu 63 m from the place"
     },
     {
      "name": "cart_trash",
-     "lat": 39.9272928,
-     "lon": -104.962872,
-     "heading": 322.5,
+     "lat": 39.9279702,
+     "lon": -104.9634166,
+     "heading": 147.2,
      "agl": 1.7,
      "pitch": -8,
      "fov": 60,
-     "note": "thornton_128th: cart_recycle 132 m from the place"
+     "note": "thornton_128th: cart_recycle 99 m from the place"
     }
    ]
   },
@@ -161,33 +161,33 @@
     },
     {
      "name": "mailbox",
-     "lat": 39.7337214,
-     "lon": -104.9766363,
-     "heading": 324.7,
+     "lat": 39.7323299,
+     "lon": -104.9764312,
+     "heading": 234.8,
      "agl": 1.7,
      "pitch": -8,
      "fov": 60,
-     "note": "denver_capitol_hill: mailbox 216 m from the place"
+     "note": "denver_capitol_hill: mailbox 228 m from the place"
     },
     {
      "name": "cart_trash",
-     "lat": 39.7327362,
-     "lon": -104.9788645,
-     "heading": 325.5,
+     "lat": 39.7329575,
+     "lon": -104.9804684,
+     "heading": 53.1,
      "agl": 1.7,
      "pitch": -8,
      "fov": 60,
-     "note": "denver_capitol_hill: cart_recycle 25 m from the place"
+     "note": "denver_capitol_hill: cart_trash 120 m from the place"
     },
     {
      "name": "bussign",
-     "lat": 39.7352067,
+     "lat": 39.7352143,
      "lon": -104.9789774,
      "heading": 325.3,
      "agl": 1.7,
      "pitch": -8,
      "fov": 60,
-     "note": "denver_capitol_hill: bussign 251 m from the place"
+     "note": "denver_capitol_hill: bussign 252 m from the place"
     },
     {
      "name": "uspsbox",
@@ -201,13 +201,13 @@
     },
     {
      "name": "bikerack",
-     "lat": 39.7325516,
-     "lon": -104.9776146,
-     "heading": 324.8,
+     "lat": 39.7332525,
+     "lon": -104.9787007,
+     "heading": 144.8,
      "agl": 1.7,
      "pitch": -8,
      "fov": 60,
-     "note": "denver_capitol_hill: bikerack 123 m from the place"
+     "note": "denver_capitol_hill: bikerack 37 m from the place"
     }
    ]
   },
@@ -230,13 +230,13 @@
     },
     {
      "name": "bussign",
-     "lat": 39.7470739,
-     "lon": -104.9946351,
+     "lat": 39.7471116,
+     "lon": -104.9945935,
      "heading": 10.6,
      "agl": 1.7,
      "pitch": -8,
      "fov": 60,
-     "note": "denver_downtown_16th: bussign 42 m from the place"
+     "note": "denver_downtown_16th: bussign 37 m from the place"
     },
     {
      "name": "uspsbox",
@@ -279,9 +279,9 @@
     },
     {
      "name": "mailcbu",
-     "lat": 39.5481895,
-     "lon": -104.9710292,
-     "heading": 150.6,
+     "lat": 39.5482175,
+     "lon": -104.970902,
+     "heading": 330.6,
      "agl": 1.7,
      "pitch": -8,
      "fov": 60,
@@ -289,13 +289,13 @@
     },
     {
      "name": "cart_trash",
-     "lat": 39.5486661,
-     "lon": -104.9715736,
-     "heading": 27.7,
+     "lat": 39.5481213,
+     "lon": -104.970707,
+     "heading": 347.8,
      "agl": 1.7,
      "pitch": -8,
      "fov": 60,
-     "note": "highlands_ranch: cart_trash 154 m from the place"
+     "note": "highlands_ranch: cart_trash 65 m from the place"
     }
    ]
   },
@@ -317,34 +317,24 @@
      "fov": 70
     },
     {
-     "name": "mailbox",
-     "lat": 39.3720831,
-     "lon": -104.8531679,
-     "heading": 235.5,
-     "agl": 1.7,
-     "pitch": -8,
-     "fov": 60,
-     "note": "castle_rock_downtown: mailbox 247 m from the place"
-    },
-    {
      "name": "mailcbu",
-     "lat": 39.3707711,
-     "lon": -104.8548315,
-     "heading": 50.7,
+     "lat": 39.3717574,
+     "lon": -104.8549886,
+     "heading": 230.9,
      "agl": 1.7,
      "pitch": -8,
      "fov": 60,
-     "note": "castle_rock_downtown: mailcbu 192 m from the place"
+     "note": "castle_rock_downtown: mailcbu 105 m from the place"
     },
     {
      "name": "cart_trash",
-     "lat": 39.3719813,
-     "lon": -104.8555993,
-     "heading": 233.6,
+     "lat": 39.3716217,
+     "lon": -104.8562732,
+     "heading": 232.5,
      "agl": 1.7,
      "pitch": -8,
      "fov": 60,
-     "note": "castle_rock_downtown: cart_trash 47 m from the place"
+     "note": "castle_rock_downtown: cart_recycle 71 m from the place"
     }
    ]
   }
