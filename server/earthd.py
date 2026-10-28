@@ -4855,6 +4855,9 @@ def main():
     ap.add_argument("--skyline", choices=("on", "off"), default="on",
                     help="the tall buildings out to 40 km (skyline.py; with --buildings on): towers of >= 50 m or "
                          "15 floors, all of >= 20 m or 6 floors within 6 km, as simple tinted prisms")
+    ap.add_argument("--lidar-heights", choices=("on", "off"), default="off",
+                    help="US building heights from USGS 3DEP lidar (lidarheights.py: the Planetary Computer's height-"
+                         "above-ground rasters) where the map has none or a machine-learned one; public domain")
     ap.add_argument("--gas-stations", choices=("on", "off"), default="off",
                     help="gas stations with refuelling at real stations (gasstations.py; Overture places, needs "
                          "--roads on): West Coast USA's pumps and canopies, the stock refuel prompt")
@@ -4891,6 +4894,8 @@ def main():
                          "never what this session used within the hour, the gravity model or netstats/")
     ap.add_argument("-v", "--verbose", action="store_true")
     args = ap.parse_args()
+    if args.lidar_heights == "on":      # (every process reads it: mapdata.MapData.lidar; the revisit keys hold BNE_* too)
+        os.environ["BNE_LIDAR_HEIGHTS"] = "1"
     args.cells = resolve_cells(args.cells, args.near_visual)
     args.block = resolve_block(args.block, args.near_visual)
     args.horizon = resolve_horizon(args.horizon, args.near_visual)

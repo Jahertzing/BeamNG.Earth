@@ -257,6 +257,17 @@ class MapData:
         return {"pipeline": VERSION, "overture": self.release, "worldcover": maprasters.WORLDCOVER_RELEASE,
                 "canopy": maprasters.CHM_RELEASE}
 
+    def lidar(self):
+        """lidarheights.Lidar when the lidar heights are on (BNE_LIDAR_HEIGHTS=1: earthd --lidar-heights on), else
+        None."""
+        import lidarheights
+        if not lidarheights.enabled():
+            return None
+        with self._lock:
+            if getattr(self, "_lidar", None) is None:
+                self._lidar = lidarheights.Lidar(self.raw_dir, self.fetcher)
+            return self._lidar
+
     def regional(self):
         """osmtags.Regional over this cache's regional tables (tools/osm_tag_table.py), made when first asked for."""
         with self._lock:
@@ -269,6 +280,9 @@ class MapData:
         source, release = _source(layer, self.release)
         lv = LAYER_VERSIONS.get(layer)
         name = layer if lv is None else f"{layer}.{lv}"
+        if layer == "buildings" and self.lidar() is not None:
+            import lidarheights
+            name = f"{name}.{lidarheights.TAG}"     # (--lidar-heights on: 3DEP heights in, kept under their own name)
         if layer == "roads":
             tag = self.regional().covering(key.bounds())
             if tag is not None:         # a cell inside a regional OSM table: built with its tags, kept under its tag
@@ -352,6 +366,18 @@ class MapData:
             # the roads' OpenStreetMap tags are read alongside Overture's (each half a fresh cell's wait)
             osm = self._osm_pool().submit(self._osm_cell, key, kind) if layer == "roads" else None
             feats, sources = self.overture.query(layer, key, kind)
+            if layer == "buildings" and self.lidar() is not None and len(feats):
+                import lidarheights
+                try:
+                    feats, n = lidarheights.apply(feats, self.lidar().heights(feats, key, kind))
+                except DEFERRED:
+                    raise
+                except Exception as e:      # (outside 3DEP, the service down: the heights as they were)
+                    log.warning("mapdata: lidar heights of %s: %s: %s", key, type(e).__name__, e)
+                    n = 0
+                if n:                       # (credited with the cell's datasets: credits.FEATURES)
+                    sources = dict(sources)
+                    sources[(lidarheights.DATASET, lidarheights.LICENSE)] = n
             if osm is not None:
                 feats = self._osm(feats, osm.result())
                 tag = self.regional().covering(key.bounds())

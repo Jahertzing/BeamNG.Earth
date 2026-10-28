@@ -177,6 +177,10 @@ POLICIES = {
                                             offline_ok=True, miss_ttl=None, max_attempts=1, timeout=30.0, optional=True),
     # map data (mapdata.py; §3.3 / §5.2 "Overture / WorldCover / CHM S3, Azure": 20/s, 40, 4 at once):
     # range reads of immutable release files, kept forever; the STAC index is small JSON on CloudFront
+    # the Planetary Computer's STAC search and tile service (lidarheights.py, --lidar-heights on): 17 requests a map
+    # cell (one search, 16 PNG tiles of ~8 KB), cached
+    "planetarycomputer.microsoft.com": HostPolicy(rate=4.0, burst=8.0, max_conc=4, daily_budget=20000,
+                                                  allow_prefetch=True, offline_ok=True, timeout=60.0),
     "stac.overturemaps.org": HostPolicy(rate=5.0, burst=10.0, max_conc=2, daily_budget=5000,
                                         allow_prefetch=True, offline_ok=True, timeout=20.0),
     **{h: HostPolicy(rate=20.0, burst=40.0, max_conc=4, daily_budget=None, allow_prefetch=True,

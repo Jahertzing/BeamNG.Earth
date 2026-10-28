@@ -1553,6 +1553,13 @@ The user: "make the world look alive ... look like a professionally made map".
   - churches (class or name): a tall gabled nave and a square tower with a slate spire; brick row houses
     get white marble stoops (two steps, the door raised to them); in dense cores (> 35 % cover) small
     buildings are row houses even where Overture's footprints leave gaps.
+- **Lidar heights** (`server/lidarheights.py`, `--lidar-heights on`, off by default; 2026-10-28): in the US, a
+  building whose height is missing or machine-learned takes the median of the USGS 3DEP height-above-ground
+  inside its footprint (spikes over 1.5 x median + 4 m dropped): the Planetary Computer's `3dep-lidar-hag`
+  rasters (LERC COGs) read as its tile service's z16 PNGs (0-127.5 m, 0.5 m steps, ~8 KB a tile, 16 a map
+  cell, cached per cell); layer file `buildings.lidar1`; credited "USGS 3DEP". Denver: vs Overture's own USGS
+  lidar heights +0.4 m median, MAE 2.2 m; Frederick: 80 % of buildings get one (the rest newer than 2013).
+  Roof types from the lidar: not yet.
 - **Facade kit** (`server/facadekit.py`, 2026-10-28; near tiles' full detail only): thin quads in front of the
   textured walls: sill, head and jambs round each laid-over sash window of a house, shutters on 30 % of pitched
   houses, a frame round the front door, a white-siding garage door (2.7 m, or 4.9 m on 55 % of walls >= 11 m)
