@@ -39,4 +39,25 @@ local r1, h1 = ng.glowSize(1)
 local r7 = ng.glowSize(7)
 T.check(r1 > r7 and h1 >= ng.GLOW_H_MIN_M, 'a big city glows wider than a town')
 T.check(ng.glowSize(99) == ng.GLOW_R[ng.GLOW_RANK_MAX], 'ranks past the last: the last size')
+-- the glows only at night (by day the fog pass lit their additive cylinders: pale rings in the sky)
+local S = dofile(dir .. '/stubs.lua')
+readFile = function() return 'export default {};' end
+jsonDecode = function() return { places = { { 'Denver', -104.99, 39.74, 1, 1 } } } end
+core_camera = { getPosition = function() return vec3(0, 0, 1600) end }
+local anchor = { geodeticToEnu = function(_, lat, lon, h) return (lon + 104.99) * 85000, (lat - 39.74) * 111000, h end }
+local function glows() local n = 0 for _, o in ipairs(S.liveOf('TSStatic')) do
+  if o.fields.shapeName == ng.GLOW_SHAPE then n = n + 1 end end return n end
+ng.reset()
+ng.update(anchor, 1, false)
+T.check(glows() == 0, 'by day: no glow')
+ng.reset()
+ng.update(anchor, 1, true)
+T.check(glows() == 1, 'at night: the near city glows: ' .. glows())
+ng.update(anchor, 1, false)
+T.check(glows() == 1, 'checked every CHECK_S only')
+os.clockhp = function() return 10 end
+ng.update(anchor, 1, false)
+T.check(glows() == 0, 'day again: the glow goes')
+ng.update(anchor, 1, nil)
+T.check(glows() == 0, 'unknown (the menu): no glow')
 T.done('test_nightlights')

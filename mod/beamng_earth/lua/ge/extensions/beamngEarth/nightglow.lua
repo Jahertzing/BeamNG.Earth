@@ -76,8 +76,10 @@ local function make(key, shape, x, y, z, sx, sy, sz)
   return o:getID()
 end
 
--- Every frame (core.lua; the work every CHECK_S): the glows and the star near the camera, in anchor's frame.
-function M.update(anchor, anchorId)
+-- Every frame (core.lua; the work every CHECK_S): the glows and the star near the camera, in anchor's frame. The
+-- glows only at night (night: nightlights.lua's state): by day their additive cylinders still take the fog pass's
+-- in-scattered light (haze.lua's aerosol, the height fog), so each one drew as a pale ring kilometres wide.
+function M.update(anchor, anchorId, night)
   local now = os.clockhp()
   if now - lastCheck < M.CHECK_S then return end
   lastCheck = now
@@ -93,7 +95,7 @@ function M.update(anchor, anchorId)
     if e then drop(key) end
     return x, y, z
   end
-  if M.enabled then
+  if M.enabled and night == true then
     for i, p in ipairs(loadPlaces()) do
       local R, H = M.glowSize(p.rank)
       local key = 'glow' .. i
@@ -105,6 +107,8 @@ function M.update(anchor, anchorId)
         if id then objs[key] = { id = id, anchorId = anchorId } else M.errors = M.errors + 1 end
       end
     end
+  end
+  if M.enabled then
     local s = M.STAR
     local x, y, z = want_('star', s.lat, s.lon, s.h, s.near)
     if x then

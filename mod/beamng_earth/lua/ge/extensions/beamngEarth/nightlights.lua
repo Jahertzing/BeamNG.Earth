@@ -243,7 +243,7 @@ end
 -- Every frame (core.lua; cheap: the materials looked at every CHECK_S, the lights every LIGHTS_S). anchor, anchorId:
 -- the frame (nightglow.lua's objects are placed by latitude and longitude).
 function M.update(anchor, anchorId)
-  pcall(nightglow.update, anchor, anchorId)
+  pcall(nightglow.update, anchor, anchorId, M.night)
   local now = os.clockhp()
   if now - lastCheck >= M.CHECK_S then
     lastCheck = now
