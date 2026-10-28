@@ -1298,7 +1298,9 @@ class Server:
             return roadsmod.block_arch_raise(anchor.tunnels, cell_fn, anchor.frame, la, lo, elev(la, lo),
                                              (box[0] - 8, box[1] - 8, box[2] + 8, box[3] + 8))
         cover = []                      # the ground carriageways for the decks' parapets (roadmesh.deck ground=)
+        pocket_cells = [cell_fn(k) for k in roadsmod.cells_of_tile(anchor.frame, tx, ty, roadsmod.POCKET_REACH_M)]
         chunks = roadsmod.build_tile(anchor.frame, tx, ty, cells, elev, urban, walks=walks, deck_context=ctx, bridges=anchor.bridges,
+                                     pocket_cells=pocket_cells,     # (the segments going on: their tapers)
                                      walk_cuts=fuel_cuts,    # (the stations' made-up driveways: no sidewalk across them)
                                      widths=self.road_widths, props=props, lines=lines, wires=wires, town=town, park=park,
                                      left_hand=self.left_hand(anchor), mph=self.mph(anchor), buried=self.buried(anchor),

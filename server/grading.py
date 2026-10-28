@@ -225,6 +225,27 @@ class Plan:
         self.bbox = (xy[:, 0].min() - pad, xy[:, 1].min() - pad, xy[:, 0].max() + pad, xy[:, 1].max() + pad)
 
 
+POCKET_CORE_M = 0.5     # m of flat ground kept beyond a turn pocket's edge (widen_plan)
+
+
+def widen_plan(plan, wd):
+    """A plan's core half width out to the widest edge of its road's profile (roads.Widening) + POCKET_CORE_M where
+    that lies past its flat shoulder: the pocket on the graded ground, not on the fill's slope. The whole road's core
+    (a plan has one half width; a pocket is the last ~85 m of a short way)."""
+    s =np.asarray(roadsmod.widen_knots(wd), np.float64)
+    if not len(s):
+        return plan
+    el, er = roadsmod.widen_edges(wd, s)
+    e = float(max(el.max(), er.max()))
+    if e <= 0.0 or plan.road_half + e + POCKET_CORE_M <= plan.half:
+        return plan
+    plan.half = plan.road_half + e + POCKET_CORE_M
+    pad = plan.half + T_MAX
+    xy = plan.xy
+    plan.bbox = (xy[:, 0].min() - pad, xy[:, 1].min() - pad, xy[:, 0].max() + pad, xy[:, 1].max() + pad)
+    return plan
+
+
 def clip_polyline(xy, box):
     """The runs (each (k, 2), k >= 2) of polyline xy (k, 2) inside box (x0, y0, x1, y1), segments cut at its edges
     (Liang-Barsky). Pure."""
@@ -635,6 +656,11 @@ class Grader:
                     plans.append((fid, p))
                     pspecs.append(part[1])
                     pclip.append(cl)
+            if plans:                   # a turn pocket past the flat shoulder: the core out to it (pocket_profiles)
+                wids = roadsmod.pocket_profiles([feats], None, self.widths)
+                for fid, p in plans:
+                    if fid in wids:
+                        widen_plan(p, wids[fid])
             if APPROACH_ON and plans:
                 try:
                     self._lift_approaches(key, plans, pspecs)
