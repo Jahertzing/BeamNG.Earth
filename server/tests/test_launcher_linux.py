@@ -335,7 +335,10 @@ class DirectStartAdoptsOptionsTest(unittest.TestCase):
                 calls.append((argv, kw["env"]))   # the game's spawn; a later one is the through-Steam fallback
             return mock.Mock(poll=lambda: 0)      # "ended at once": the launcher then goes through Steam instead
 
-        with mock.patch.object(launcher, "linux_game_exe", return_value="/g/BeamNG/BinLinux/BeamNG.drive.x64"), \
+        # (IS_WIN off: on Windows start_game otherwise takes its Windows path and really starts the game through
+        # Steam, 2026-10-27)
+        with mock.patch.object(launcher, "IS_WIN", False), \
+                mock.patch.object(launcher, "linux_game_exe", return_value="/g/BeamNG/BinLinux/BeamNG.drive.x64"), \
                 mock.patch.object(launcher, "sandboxed_game", return_value=False), \
                 mock.patch.object(launcher, "steam_running", return_value=True), \
                 mock.patch.object(launcher, "gcpatch_lib", return_value=None), \

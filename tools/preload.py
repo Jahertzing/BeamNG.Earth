@@ -915,6 +915,8 @@ def host_rate(net, host, workers, sec):
     the host's rate."""
     p = net.policy(host)
     conc = min(workers, p.max_conc or workers)
+    if sec <= 0:                    # (nothing left to fetch in that lane: map cells all cached, 2026-10-27 dry run)
+        return p.rate or 1e9
     return min(p.rate or 1e9, conc / sec)
 
 
