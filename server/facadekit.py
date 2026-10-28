@@ -88,6 +88,20 @@ FIN_END_M = 0.3                     # m: no fin this close to a wall's corner
 LEDGE_H, LEDGE_D = 0.2, 0.15        # m: a floor line's spandrel ledge, its height and depth
 OFFICE_BANDS = ((0, 5), (1, 4))
 FIN_UV = (202 / 1024, 208 / 1024, 1.0 - 230 / 1024, 1.0 - 20 / 1024)   # band 0's bay-edge mullion (unlit at night)
+# Masonry trim (masonry_sills(), belts(), 2026-10-28: LoDo's and Castle Rock's brick and plaster blocks): on the plaster
+# sheet's buildings a stone sill under and a flat lintel over every recessed window (the same caps), and belt courses
+# at the floor lines of 2-6 storey blocks with a cornice. In the facade's own slot: on brick the sheet's light grey
+# painted sill (a precast / limestone look against the brick, the building's tint over it), on plaster the band's
+# own plain plaster (the same colour, its shape catching the light).
+MASONRY_TRIM = True                 # False: none
+MSILL_OUT, MSILL_T, MSILL_EXT = 0.06, 0.08, 0.06   # m: a sill stands out, its thickness, past the opening each side
+LINTEL_H, LINTEL_OUT, LINTEL_EXT = 0.2, 0.03, 0.04
+LINTEL_MIN_H = 0.08                 # m: a lintel squeezed under a belt course lower than this is left out
+BELT_H, BELT_OUT = 0.18, 0.05       # m: a belt course's height (centred on the floor line), how far it stands out
+BELT_FLOORS = (2, 6)
+BELT_CLEAR_M = 0.01                 # m between a belt course and a sill / lintel
+STONE_UV = (70 / 1024, 140 / 1024, 1.0 - 730 / 1024, 1.0 - 722 / 1024)   # band 2's painted sill: even light grey
+BRICK_BAND = 3                      # buildings.BAND_BRICK's band
 # House fronts (2026-10-28, Frederick's suburban streets): the pitched roofs' overhang closed (a soffit and a fascia:
 # the roof planes are one-sided, the overhang showed the sky from below), gutters and downspouts, and a stone veneer
 # across a share of the US houses' fronts (eaves(), gutters(), veneer()).
@@ -391,29 +405,37 @@ def awning(m, spec, ring, base, mat_idx):
     _front(m, p1, q1, z - AWNING_DROP - AWNING_VALANCE, z - AWNING_DROP, mat)                     # the valance
 
 
-def balconies(m, spec, ring, z_eave, mat_idx):
-    """Balconies on every other bay of an apartment block's street wall (spec.door's), from the second floor up: a
-    concrete slab and a steel railing (front and sides)."""
+def balcony_bays(spec, ring):
+    """balconies()' choice: (its wall's edge, [(s0, s1)] its balconies' spans along it), or None."""
     lo, hi = BALCONY_FLOORS
     if not spec.door or not (lo <= spec.floors <= hi) or (spec.cls or "") not in APARTMENT_CLASSES or spec.wall \
             or spec.plain or not spec.band or B._hash01(spec.seed, "balcony") >= BALCONY_SHARE:
-        return
+        return None
     w = _wall(ring, spec.door[0])
     if w is None:
-        return
-    a, d, out, L = w
+        return None
+    L = w[3]
     bay = B.TILE_PX_M / spec.band[1]
     nb = int(round(L / bay))
     if nb < 3:
-        return
+        return None
     bw = L / nb
+    return spec.door[0], [(k * bw + 0.15 * bw, (k + 1) * bw - 0.15 * bw) for k in range(1, nb - 1, 2)]
+
+
+def balconies(m, spec, ring, z_eave, mat_idx):
+    """Balconies on every other bay of an apartment block's street wall (spec.door's), from the second floor up: a
+    concrete slab and a steel railing (front and sides)."""
+    got = balcony_bays(spec, ring)
+    if got is None:
+        return
+    a, d, out, L = _wall(ring, got[0])
     base = z_eave - spec.floors * spec.floor_h
     slab = mat_idx["bne_precast"]
     rail = mat_idx[BALCONY_STEEL]
     for f in range(1, spec.floors):
         z = base + f * spec.floor_h
-        for k in range(1, nb - 1, 2):
-            s0, s1 = k * bw + 0.15 * bw, (k + 1) * bw - 0.15 * bw
+        for s0, s1 in got[1]:
             _ledge(m, a, d, out, s0, s1, z - BALCONY_SLAB, z, BALCONY_DEPTH, slab)
             p, q = a + d * s0 + out * BALCONY_DEPTH, a + d * s1 + out * BALCONY_DEPTH
             _front(m, p, q, z, z + RAIL_H, rail)
@@ -843,7 +865,153 @@ def recess(spec, ring, z_eave, P, UV, mid):
                     np.stack([np.c_[Um, vb + dv], np.c_[Up, vb + dv], np.c_[Up, vb], np.c_[Um, vb]], 1)]
         slot = None
     out = _cut(F, hq, hs0, hs1, hz0, hz1, D, glass, B.WIN_OUT_M, reveals, slot)
+    if out is not None and sb is not None and MASONRY_TRIM:
+        extra = masonry_sills(spec, F, hq, hs0, hs1, hz0, hz1, sb, z_eave)
+        if extra is not None:
+            out = (out[0] + extra[0], out[1] + extra[1], out[2] + extra[2])
     return (P, UV, mid) if out is None else out
+
+
+def _faces(F, qi, s0, s1, z0, z1, w1, faces, uv):
+    """Faces of boxes on quads qi's walls (arrays: s0..s1 along, z0..z1, from the face out to w1): faces from f(ront),
+    t(op), u(nderside), l(eft end, -d), r(ight end, +d). (P (k, 12), UV (k, 8))."""
+    k = len(qi)
+    zero, W = np.zeros(k), np.full(k, w1)
+    corners = {"f": ((s0, z0, W), (s1, z0, W), (s1, z1, W), (s0, z1, W)),
+               "t": ((s0, z1, zero), (s0, z1, W), (s1, z1, W), (s1, z1, zero)),
+               "u": ((s0, z0, zero), (s1, z0, zero), (s1, z0, W), (s0, z0, W)),
+               "l": ((s0, z0, zero), (s0, z0, W), (s0, z1, W), (s0, z1, zero)),
+               "r": ((s1, z0, W), (s1, z0, zero), (s1, z1, zero), (s1, z1, W))}
+    Ps, Us = [], []
+    for f in faces:
+        p_, t_ = F.quads(qi, corners[f], uv)
+        Ps.append(p_)
+        Us.append(t_)
+    return np.concatenate(Ps), np.concatenate(Us)
+
+
+def _trim_uv(spec, sb, k, v=None):
+    """k quads' UVs for masonry trim: on brick the sheet's light painted sill, on plaster its plain plaster at v (the
+    band's middle if None)."""
+    if sb[0] == BRICK_BAND:
+        return _patch(k, *STONE_UV)
+    pu = SHEET_PLAIN_U[sb[0]]
+    if v is None:
+        v0, v1 = B._band_v(spec.band, sb[0])
+        v = np.full(k, (v0 + v1) / 2)
+    e = 4 / 1024
+    return np.stack([np.c_[np.full(k, pu), v - e], np.c_[np.full(k, pu + 2 * e), v - e],
+                     np.c_[np.full(k, pu + 2 * e), v + e], np.c_[np.full(k, pu), v + e]], 1)
+
+
+def has_belts(spec):
+    """belts()' choice: a 2-6 storey plaster sheet block with a cornice (buildings.build: a flat roof, not plain)."""
+    lo, hi = BELT_FLOORS
+    return (MASONRY_TRIM and sheet_band(spec) is not None and lo <= spec.floors <= hi and spec.roof == "flat"
+            and not spec.plain and spec.cls not in B.BRIDGE_CLASSES and not spec.deck and (spec.min_h or 0.0) <= 0.5)
+
+
+def masonry_sills(spec, F, hq, hs0, hs1, hz0, hz1, sb, z_eave):
+    """A stone sill (its front and top, as the kit's house trims: ~36 vertices an opening with the underside and ends,
+    LoDo's tile came near the kit's budget) under and a flat lintel (front, underside) over each recessed
+    sheet window (quad hq, s0..s1, z0..z1: the measured opening, so they sit on the painted sill and head), a little
+    wider than it, within its quad; no lintel into the cornice, none (or a lower one) into a belt course. (P, UV, mid)
+    lists to append, or None."""
+    k = len(hq)
+    if not k:
+        return None
+    L = F.L[hq]
+    vm = F.v0[hq] + ((hz0 + hz1) / 2 - F.za[hq]) * F.vz[hq]
+    base = z_eave - spec.floors * spec.floor_h
+    fh = spec.floor_h
+    s0, s1 = np.maximum(hs0 - MSILL_EXT, 0.0), np.minimum(hs1 + MSILL_EXT, L)
+    sz0 = hz0 - MSILL_T
+    top = hz1 + LINTEL_H
+    keep_s = np.ones(k, bool)
+    if has_belts(spec):                                 # clear of the belt courses at the floor lines
+        below = base + np.floor((hz0 - base) / fh + 1e-6) * fh
+        keep_s = (sz0 >= below + BELT_H / 2 + BELT_CLEAR_M) | (below <= base + 1e-6)
+        above = base + np.ceil((hz1 - base) / fh - 1e-6) * fh
+        top = np.where(above < z_eave - 1e-6, np.minimum(top, above - BELT_H / 2 - BELT_CLEAR_M), top)
+    if spec.roof == "flat" and not spec.plain and spec.floors <= 6:     # (buildings.build's cornice)
+        top = np.where(top > z_eave - B.CORNICE_DOWN_M, -np.inf, top)
+    keep_l = top - hz1 >= LINTEL_MIN_H
+    uv = _trim_uv(spec, sb, k, vm)
+    P_, U_ = [], []
+    if keep_s.any():
+        p_, t_ = _faces(F, hq[keep_s], s0[keep_s], s1[keep_s], sz0[keep_s], hz0[keep_s], MSILL_OUT, "ft", uv[keep_s])
+        P_.append(p_)
+        U_.append(t_)
+    if keep_l.any():
+        l0, l1 = np.maximum(hs0 - LINTEL_EXT, 0.0), np.minimum(hs1 + LINTEL_EXT, L)
+        p_, t_ = _faces(F, hq[keep_l], l0[keep_l], l1[keep_l], hz1[keep_l], top[keep_l], LINTEL_OUT, "fu",
+                        uv[keep_l])
+        P_.append(p_)
+        U_.append(t_)
+    if not P_:
+        return None
+    Pn, Un = np.concatenate(P_), np.concatenate(U_)
+    return Pn.ravel().tolist(), Un.ravel().tolist(), [0] * len(Pn)
+
+
+def belts(spec, ring, z_eave, P, UV, mid):
+    """Belt courses (MASONRY_TRIM, has_belts): a band BELT_H tall standing out BELT_OUT at each floor line of every
+    wall (front, top, underside; mitred round the corners), up to RECESS_STREET_MAX_Z on the street wall and
+    RECESS_MAX_Z on the others, under the cornice; none over a shopfront's sign boxes and awning (its sign wall's first
+    floor line), broken round the balconies. In the facade's slot (_trim_uv). (P, UV, mid) with them appended."""
+    if not len(mid) or not has_belts(spec):
+        return P, UV, mid
+    sb = sheet_band(spec)
+    base = z_eave - spec.floors * spec.floor_h
+    st = street_edge(spec)
+    bal = balcony_bays(spec, ring)
+    h, bo = BELT_H / 2, BELT_OUT
+    quads = []
+    for i in range(len(ring)):
+        wl = _wall(ring, i)
+        if wl is None or wl[3] < 1.0:
+            continue
+        a, d, n, L = wl
+        cap = base + (RECESS_STREET_MAX_Z if i == st else RECESS_MAX_Z)
+        N, Dv = _out3(n), _out3(d)
+
+        def p(s, w, z):
+            q = a + d * s + n * w
+            return float(q[0]), float(q[1]), float(z)
+        for f in range(1, spec.floors):
+            z = base + f * spec.floor_h
+            if z + h > cap or z + h > z_eave - B.CORNICE_DOWN_M - 0.05:
+                break
+            if f == 1 and spec.shop and spec.sign == i:
+                continue                                # (the sign boxes and the awning there)
+            spans = [(0.0, L)]
+            if bal is not None and bal[0] == i:
+                for b0, b1 in bal[1]:
+                    spans = [x for s0, s1 in spans for x in ((s0, min(s1, b0 - 0.05)), (max(s0, b1 + 0.05), s1))
+                             if x[1] - x[0] > 0.05]
+            z0, z1 = z - h, z + h
+            for s0, s1 in spans:
+                e0, e1 = (bo if s0 <= 1e-9 else 0.0), (bo if s1 >= L - 1e-9 else 0.0)    # (round a corner)
+                quads.append(([p(s0 - e0, bo, z0), p(s1 + e1, bo, z0), p(s1 + e1, bo, z1), p(s0 - e0, bo, z1)], N))
+                quads.append(([p(s0, 0.0, z1), p(s0 - e0, bo, z1), p(s1 + e1, bo, z1), p(s1, 0.0, z1)], _UP))
+                quads.append(([p(s0, 0.0, z0), p(s1, 0.0, z0), p(s1 + e1, bo, z0), p(s0 - e0, bo, z0)], _DOWN))
+                if not e0:
+                    quads.append(([p(s0, 0.0, z0), p(s0, bo, z0), p(s0, bo, z1), p(s0, 0.0, z1)], -Dv))
+                if not e1:
+                    quads.append(([p(s1, bo, z0), p(s1, 0.0, z0), p(s1, 0.0, z1), p(s1, bo, z1)], Dv))
+    if not quads:
+        return P, UV, mid
+    Pq = []
+    for pts, want in quads:                             # (each facing its way)
+        q = np.asarray(pts, np.float64)
+        if float(np.dot(np.cross(q[1] - q[0], q[2] - q[0]), want)) < 0:
+            q = q[::-1]
+        Pq.append(q.ravel())
+    k = len(Pq)
+    Un = _trim_uv(spec, sb, k).reshape(-1, 8)
+    M = (np.frombuffer(bytes(mid), np.uint8) if isinstance(mid, (bytes, bytearray)) else np.asarray(mid)).astype(np.int64)
+    return (np.r_[np.asarray(P, np.float64), np.concatenate(Pq)].tolist(),
+            np.r_[np.asarray(UV, np.float64), Un.ravel()].tolist(), np.r_[M, np.zeros(k, np.int64)].tolist())
 
 
 def has_awning(spec):
@@ -950,10 +1118,11 @@ def fins(spec, ring, z_eave, P, UV, mid):
 
 
 def depth(spec, ring, z_eave, P, UV, mid):
-    """All of the walls' depth (buildings._walls, with the kit, never lite): recessed windows, set-back shopfronts,
-    curtain walls' fins and ledges."""
+    """All of the walls' depth (buildings._walls, with the kit, never lite): recessed windows (with masonry sills and
+    lintels), set-back shopfronts, belt courses, curtain walls' fins and ledges."""
     P, UV, mid = recess(spec, ring, z_eave, P, UV, mid)
     P, UV, mid = shopfronts(spec, ring, z_eave, P, UV, mid)
+    P, UV, mid = belts(spec, ring, z_eave, P, UV, mid)
     return fins(spec, ring, z_eave, P, UV, mid)
 
 
