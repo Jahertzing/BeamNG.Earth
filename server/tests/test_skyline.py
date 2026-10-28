@@ -254,6 +254,25 @@ class BuildTest(unittest.TestCase):
         self.assertAlmostEqual(float(P[:, 2].max()), 1600.0 + 120.0, places=3)
         self.assertAlmostEqual(float(P[:, 2].min()), 1600.0 - skyline.SKIRT_M - buildings.SKIRT_LITE_M, places=3)
 
+    def test_walls_lit_at_night_as_upstreams_skyline(self):
+        # upstream 1.7.0's skyline material (bne_bld_sky: its windows lit by nightlights.lua) on the walls, the roof
+        # plain; the window map's u in bays along the walls, v in storeys
+        f = geodesy.EnuFrame(*ANCHOR)
+        items = skyline.tile_items(f, boxes_layer(f, [(10, 10, 30, 20, 120.0, 40)]), None, flat_ground(), 0, 0)
+        P, UV, T, M, mats, C = skyline.mesh(items)
+        names = {mats[int(k)] for k in M}
+        self.assertIn(buildings.SKY_WALL, names)
+        self.assertEqual(names, {buildings.SKY_WALL, buildings.MARBLE})
+        self.assertGreater(float(UV[:, 0].max()), 0.5)       # (100 m of wall round it over a 56 m map: > 1 repeat)
+
+    def test_a_part_over_another_starts_at_its_own_bottom(self):
+        spec = buildings.Spec(ring=np.array([(0, 0), (10, 0), (10, 10), (0, 10)], np.float64), floors=3, floor_h=3.0,
+                              height=9.0, roof="flat", roof_mat=buildings.ROOF_FLAT + "|0",
+                              facade=buildings.FACADE_TINTS[0], seed=0.5, min_h=30.0, windows=True, cls="")
+        P = skyline.mesh([(spec, 100.0, 100.0)])[0]
+        self.assertAlmostEqual(float(P[:, 2].min()), 130.0, places=3)
+        self.assertAlmostEqual(float(P[:, 2].max()), 139.0, places=3)
+
 
 class MidRingTest(unittest.TestCase):
     def setUp(self):
@@ -295,10 +314,14 @@ class MidRingTest(unittest.TestCase):
         want, _ = tr.wanted(f, 0.0, 0.0)
         self.assertTrue(want)
         self.assertTrue(all(w[2] == "mid" and w[1].z == skyline.MID_ZOOM for w in want))
-        self.assertTrue(all(w[3] <= skyline.MID_SEND_M for w in want))
-        for _, key, _, d in want:               # none lies wholly under the far building tiles
+        sky = buildings.SKY_SEND_M > buildings.FAR_SEND_M      # (upstream 1.7.0's skyline squares, on by default)
+        send = skyline.MID_SKY_SEND_M if sky else skyline.MID_SEND_M
+        inner = buildings.SKY_SEND_M if sky else buildings.FAR_SEND_M - 256.0
+        self.assertTrue(all(w[3] <= send for w in want))
+        self.assertTrue(any(w[3] > skyline.MID_SEND_M for w in want) or not sky)
+        for _, key, _, d in want:               # none lies wholly under the far building tiles (or the bldsky squares)
             x0, y0, x1, y1 = tr.boxes[key]
-            self.assertGreaterEqual(max(abs(x0), abs(x1), abs(y0), abs(y1)), buildings.FAR_SEND_M - 256.0)
+            self.assertGreaterEqual(max(abs(x0), abs(x1), abs(y0), abs(y1)), inner)
         # a cell within the mid ring is in a z12 cell of the "tall" tier (the two filters meet exactly)
         for _, key, _, d in want:
             parent = key.parent(skyline.ZOOM)
