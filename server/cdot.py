@@ -74,6 +74,11 @@ COLUMNS = ("cdot_lanes_f", "cdot_lanes_b", "cdot_lanes_c", "cdot_lane_w", "cdot_
 MEM_CELLS = 48
 
 
+def _cross2(u, v):
+    """The z of u x v for 2-D vectors (NumPy 2 refuses np.cross on 2-D vectors)."""
+    return float(u[0] * v[1] - u[1] * v[0])
+
+
 def enabled():
     return os.environ.get(ENV, "1") != "0"
 
@@ -324,7 +329,7 @@ def match(feats, g):
             k = int(np.flatnonzero(ok)[np.argmin(dist[ok])])
             got.append(int(rec[near[k]]))
             along.append(1 if cosang[k] > 0 else -1)
-            offs.append(float(np.cross(d[k] / Ld[near[k]], p - q[k])))
+            offs.append(_cross2(d[k] / Ld[near[k]], p - q[k]))
         if not got or len(set(along)) != 1:
             continue
         ex = _express(str(names[i]) if names is not None else "", tag)
@@ -337,7 +342,7 @@ def match(feats, g):
         t = np.clip(((pt - a) * d).sum(1) / L2[on], 0.0, 1.0)
         q = a + d * t[:, None]
         k = int(np.argmin(np.hypot(*(pt - q).T)))
-        return float(np.cross(d[k] / Ld[on[k]], pt - q[k]))
+        return _cross2(d[k] / Ld[on[k]], pt - q[k])
     # the express roadways among the carriageways under managed lanes (see the docstring): compared at one place (its
     # middle and the nearest point of the other: CDOT's line is not always the median's middle)
     express = {i for i, f in found.items() if f[3]}
