@@ -108,8 +108,10 @@ CAR_Z = 0.5                 # the car's position over the ground (the pose's z)
 SAMPLE_S = 1.0              # a samples.jsonl line this often
 LISTEN_RE = re.compile(r"earthd listening on 127\.0\.0\.1:(\d+)")
 MOD_VERSION = re.search(r"MOD_VERSION = '([^']+)'", (modsim.MOD_DIR / "core.lua").read_text()).group(1)
-THROTTLE = ["--workers", "1", "--road-processes", "1", "--load-boost", "off", "--map-tiles", "off"]   # --mode game
-QUIET = ["--load-boost", "off", "--map-tiles", "off"]       # both modes: never the game's cores, no map tiles
+# both modes: never the game's cores, no map tiles, and no AI road graph (navgraph: 1.2 s a block in the road processes,
+# a quarter of their CPU in the bake of 2026-10-28 13:18, and nothing keeps it: the game builds its own as it drives)
+QUIET = ["--load-boost", "off", "--map-tiles", "off", "--traffic", "off"]
+THROTTLE = ["--workers", "1", "--road-processes", "1"] + QUIET      # --mode game
 GAME_EXES = ("BeamNG.drive.x64.exe", "BeamNG.drive.x64")    # the game itself (not its launcher BeamNG.drive.exe)
 FAR_PER_JOB = (1, 3)        # --mode alone: far workers per server, least and most (geometry 20 ms a tile; textures
                             # render in the server process while de-shadowing is on: more workers buy nothing)
