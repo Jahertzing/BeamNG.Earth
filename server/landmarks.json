@@ -16,10 +16,14 @@
     {"name": "Republic Plaza", "osm": ["w52959755"], "at": [39.743496, -104.988647],
      "set": {"facade_look": "bne_granite"}},
     {"name": "Wells Fargo Center", "osm": ["w53085815"], "at": [39.743567, -104.985449], "set": {}},
+    {"name": "Wells Fargo Center top (OSM round_skillion, which Overture does not carry)", "osm": ["w587631333"],
+     "set": {"roof_shape": "round", "roof_height": 10.0}},
     {"name": "Denver City and County Building", "osm": ["r4661432"], "at": [39.739241, -104.991019],
      "set": {"facade_look": "bne_granite"}},
     {"name": "Cathedral Basilica of the Immaculate Conception", "osm": ["w91933848"],
-     "at": [39.740405, -104.981981], "set": {}}
+     "at": [39.740405, -104.981981], "set": {"facade_look": "bne_limestone"}},
+    {"name": "Cathedral Basilica spires", "osm": ["w529588800", "w529711215"],
+     "set": {"facade_look": "bne_limestone", "roof_look": "bne_limestone"}}
   ],
   "pieces": [
     {"name": "Castle Rock Star", "kind": "star", "at": [39.378817, -104.856786], "size_m": 15.0, "lift_m": 2.0,

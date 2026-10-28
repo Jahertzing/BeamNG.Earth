@@ -96,7 +96,7 @@ LOOKS = {
     # the landmarks' (landmarks.py): gold leaf, verdigris copper, a lit tube, grey granite
     "bne_gold": (GOLD_LEAF, (1.0, 0.77, 0.34)), "bne_copper": (ROOF_METAL, (0.52, 0.74, 0.64)),
     "bne_glow": (GLOW, (1.0, 0.95, 0.82)), "bne_granite": (STONE, (0.80, 0.80, 0.80)),
-    "bne_sandstone": (STONE, (0.96, 0.86, 0.70)),
+    "bne_sandstone": (STONE, (0.96, 0.86, 0.70)), "bne_limestone": (STONE, (0.95, 0.93, 0.88)),
 }
 ROOF_TINTS = {               # per roof material: the colours a building's roof takes (hashed)
     ROOF_FLAT: ((0.85, 0.85, 0.85), (0.62, 0.62, 0.64), (0.95, 0.93, 0.88), (0.45, 0.45, 0.46), (0.75, 0.70, 0.64)),
@@ -520,6 +520,7 @@ def plan(ring, attrs, neighbours=0, lat=None, lon=None, look=None, town=False, d
             nf = 2 + int(seed * 3)
     roof_given = (attrs.get("roof_shape") or "").lower()
     curved = landmarks.curved_shape(roof_given, attrs, area, hl, hw)
+    curved_rise = None
     if curved:
         roof = curved                               # a dome, an onion, a spire (landmarks.curved_roof)
     elif roof_given in ("gabled", "hipped", "flat"):
@@ -580,7 +581,9 @@ def plan(ring, attrs, neighbours=0, lat=None, lon=None, look=None, town=False, d
         if attrs.get("roof_height") and np.isfinite(attrs["roof_height"]) and roof != "flat":
             h = max(2.5, h - float(attrs["roof_height"]))
         elif curved:
-            h = max(2.5, h - landmarks.default_rise(curved, area, hw))     # (the mapped height is the top's)
+            # the mapped height is the top's; a short part (a dome's cap on its posts) keeps a fifth of it as walls
+            curved_rise = min(landmarks.default_rise(curved, area, hw), 0.8 * h)
+            h = max(0.2 * h, h - curved_rise)
         elif roof != "flat":
             # the mapped height is the ridge's: the walls stop the drawn roof's rise under it (a skeleton roof's
             # ridge is its outline's innermost point, lower than the oriented box's half width on an L or a T)
@@ -702,7 +705,8 @@ def plan(ring, attrs, neighbours=0, lat=None, lon=None, look=None, town=False, d
     if curved:      # a curved roof: its mapped look (gold, copper), else grey metal; its rise
         roof_mat = landmarks.look_of(attrs) or f"{ROOF_METAL}|{int(_hash01(seed, 'roof') * 2)}"
         rh_ = attrs.get("roof_height")
-        rise = float(rh_) if rh_ is not None and np.isfinite(rh_) and rh_ > 0 else landmarks.default_rise(curved, area, hw)
+        rise = float(rh_) if rh_ is not None and np.isfinite(rh_) and rh_ > 0 else \
+            curved_rise if curved_rise is not None else landmarks.default_rise(curved, area, hw)
     if attrs.get("facade_look") in LOOKS:           # the landmark table's facade (the Capitol's granite)
         facade, plain, wall = attrs["facade_look"], False, attrs["facade_look"]
     if attrs.get("roof_look") in LOOKS:
@@ -715,6 +719,9 @@ def plan(ring, attrs, neighbours=0, lat=None, lon=None, look=None, town=False, d
             facade = f"{SIDING}|w{int(_hash01(seed, 'wc') * len(WOOD_TINTS))}"
         else:
             facade = f"{SIDING}|{int(_hash01(seed, 'sc') * (len(tints) - 2))}"
+    if curved and area < landmarks.SMALL_CURVED_M2 and attrs.get("facade_look") not in LOOKS:
+        # a lantern, a spire's base, a dome's cap: plain grey stone, not a shed's or a house's siding
+        facade, band, plain, wall = f"{STONE}|3", None, True, None
     # a front porch (the photos of Lancaster, Ocean City, Frederick, Moab: most houses have one): pitched-roof
     # houses, a regional share; doors() puts it on the front door's wall
     porch = (house and roof != "flat" and not barn and not shed and area < 300

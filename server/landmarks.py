@@ -41,6 +41,7 @@ SHALLOW_RISE = 0.18         # ... rising this share of its radius
 BIG_SPIRE_R = 12.0          # m: a cone / onion this wide without a mapped rise is a dome's height at most
 SPIRE_ASPECT = 1.3          # a mapped pyramidal roof on a footprint at most this elongated (long / short side) ...
 SPIRE_STEEP = 1.2           # ... rising more than this x its half width: a spire (a cone over the square)
+SMALL_CURVED_M2 = 150.0     # m2: a curved-roofed footprint this small has plain stone walls (a lantern, a spire's base)
 DOME_STEPS = 10             # profile rings of a dome (the eaves to the top)
 DENSIFY_M = 4.0             # m: the outline's edges cut into pieces at most this long (a smooth curved surface)
 DENSIFY_MAX = 96            # ... up to this many corners

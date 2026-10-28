@@ -116,6 +116,13 @@ class CurvedRoofTest(unittest.TestCase):
                                   {"class": "", "height": 20.0, "roof_shape": "round"}).roof, "flat",
                          "no vault on an L-shaped outline")
 
+    def test_a_short_cap_stays_under_its_mapped_top(self):
+        # the D&F Tower's gold cap: a 2 m part (98-100 m) with a dome roof; a lantern's walls are plain stone
+        s = bld.plan(disc(0, 0, 1.2, 12), {"class": "", "height": 2.0, "roof_shape": "dome"})
+        self.assertAlmostEqual(s.height + s.rise, 2.0, places=6)
+        self.assertTrue(s.plain)
+        self.assertTrue(s.facade.startswith(bld.STONE))
+
     def test_looks(self):
         self.assertEqual(landmarks.look_of({"roof_color": "gold"}), landmarks.GOLD)
         self.assertEqual(landmarks.look_of({"roof_color": "#D4AF37"}), landmarks.GOLD)
