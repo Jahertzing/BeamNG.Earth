@@ -2,8 +2,10 @@
 rebase hint, when the car moves on, the heightmap's height, a drive against a stand-in server (teleport, rebases onto
 the planned anchors, terrain-follow, poses) and its server's start and stop."""
 import argparse
+import json
 import os
 import socket
+import subprocess
 import sys
 import tempfile
 import threading
@@ -410,6 +412,79 @@ class CommandTest(unittest.TestCase):
             self.assertEqual(run["jobs"], 2)
             self.assertEqual([(lg["route"], lg["back"], lg["rc"], lg["summary"]["complete"]) for lg in run["legs"]],
                              [("t", False, 0, True), ("t", True, 0, False)])
+
+
+class ProfileTest(unittest.TestCase):
+    """--profile: the server's -v, the workers' CPU lines summed by job kind (the last, cumulative line of each
+    process), the sampler over a process tree, and the summary line."""
+    LOG = ("2026-10-28 10:20:00,000 DEBUG earthd: worker 100 cpu: roads_tile 10 jobs 20.0 s\n"
+           "2026-10-28 10:20:30,000 DEBUG earthd: worker 100 cpu: roads_tile 25 jobs 61.5 s; shared road plans read 5\n"
+           "2026-10-28 10:20:31,000 DEBUG earthd: worker 200 cpu: far_geometry 300 jobs 12.0 s, far_tile 300 jobs 30.0 s\n"
+           "2026-10-28 10:20:32,000 DEBUG earthd: worker 300 cpu: build 8 jobs 9.5 s, base_photo 8 jobs 20.0 s\n"
+           "2026-10-28 10:20:33,000 INFO earthd: terrain (1, 0.0, 0.0) z16 in 1.0 s (heights 0.5 grading 0.1)\n")
+
+    def test_v_only_with_profile(self):
+        with tempfile.TemporaryDirectory() as user:
+            self.assertNotIn("-v", hb.server_command(user, 0, "/c", win=True))
+            self.assertEqual(hb.server_command(user, 0, "/c", win=True, profile=True)[-1], "-v")
+        a = argparse.Namespace(speed=80.0, roads_q=1, backlog_q=4, edge_m=160.0, max_wait=180.0, ground_wait=20.0,
+                               cache_dir=None, world_dir=None, user_dir=None, rebase_m=None, profile=True)
+        self.assertEqual(hb.child_command(a, [("i25", False)], "/o", "alone", 1, 1)[-1], "--profile")
+        a.profile = False
+        self.assertNotIn("--profile", hb.child_command(a, [("i25", False)], "/o", "alone", 1, 1))
+
+    def test_cpu_by_kind_takes_each_workers_last_line(self):
+        with tempfile.TemporaryDirectory() as d:
+            p = os.path.join(d, "server.log")
+            with open(p, "w", encoding="utf-8") as f:
+                f.write(self.LOG)
+            kinds, roles = hb.cpu_by_kind(p)
+            self.assertEqual(kinds, {"roads_tile": (25, 61.5), "far_geometry": (300, 12.0), "far_tile": (300, 30.0),
+                                     "build": (8, 9.5), "base_photo": (8, 20.0)})
+            self.assertEqual(roles, {100: "roads", 200: "far", 300: "block"})
+            self.assertEqual(hb.cpu_by_kind(os.path.join(d, "none.log")), ({}, {}))
+
+    def test_sampler_over_a_process_tree(self):
+        try:
+            import psutil  # noqa: F401
+        except ImportError:
+            self.skipTest("psutil not installed")
+        child = ("import subprocess, sys, time\n"
+                 "p = subprocess.Popen([sys.executable, '-c', 't=time.time()\\nwhile time.time()-t<2: pass'] if False else"
+                 " [sys.executable, '-c', 'import time\\nt=time.time()\\nwhile time.time()-t<2: pass'])\n"
+                 "t = time.time()\n"
+                 "while time.time() - t < 2: pass\n"
+                 "p.wait()\n")
+        proc = subprocess.Popen([sys.executable, "-c", child])
+        self.addCleanup(lambda: proc.poll() is None and proc.kill())
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "cpu.jsonl")
+            s = hb.CpuSampler(proc.pid, path, every=0.2, say=lambda *x, **k: None).start()
+            time.sleep(1.5)
+            s.stop()
+            with open(os.path.join(d, "server.log"), "w", encoding="utf-8") as f:
+                f.write(self.LOG)
+            p = s.summary(os.path.join(d, "server.log"))
+            self.assertGreaterEqual(len(p["by_pid"]), 1)
+            self.assertIn(proc.pid, p["by_pid"], "the root process")
+            self.assertGreater(p["cpu_s"], 0.3, "two busy loops over 1.5 s")
+            self.assertEqual(p["by_kind"]["roads_tile"], [25, 61.5])
+            self.assertIn("server", p["by_role"], "the busiest process without jobs")
+            with open(path, encoding="utf-8") as f:
+                rows = [json.loads(line) for line in f if line.strip()]
+            self.assertGreaterEqual(len(rows), 3)
+            self.assertIn(str(proc.pid), rows[-1]["cpu"])
+            text = hb.profile_text(p)
+            self.assertTrue(text.startswith("profile: ") and "cores used" in text and "roads_tile 25 in 62 s" in text,
+                            text)
+        proc.wait(20)
+
+    def test_summary_without_samples(self):
+        s = hb.CpuSampler(1, "/nonexistent/cpu.jsonl", say=lambda *x, **k: None)
+        s.psutil = None
+        p = s.summary(None)
+        self.assertEqual((p["cpu_s"], p["by_pid"], p["by_role"], p["by_kind"]), (0.0, {}, {}, {}))
+        self.assertTrue(hb.profile_text(p).startswith("profile: 0.00 cores used"))
 
 
 if __name__ == "__main__":

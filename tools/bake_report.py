@@ -21,6 +21,9 @@ TERRAIN = re.compile(r"terrain \((\d+), (-?[\d.]+), (-?[\d.]+)\) z\d+ in ([\d.]+
 BASE = re.compile(r"base photo \((\d+), (-?[\d.]+), (-?[\d.]+)\) r\d+ in ([\d.]+) s")
 ANCHOR = re.compile(r"anchor (\d+) \((-?[\d.]+), (-?[\d.]+)\) ready in ([\d.]+) s")
 FAR = re.compile(r"anchor (\d+) far field done: (\d+) tiles \((\d+) sent, (\d+) swaps in ([\d.]+) s")
+# a worker process's CPU seconds by job (blockworker, -v; cumulative: its last line counts)
+WORKER_CPU = re.compile(r"worker (\d+) cpu: (.*)")
+JOB = re.compile(r"(\w+) (\d+) jobs ([\d.]+) s")
 
 
 def stages(text):
@@ -37,7 +40,7 @@ def stages(text):
 
 def scan(paths, since=None, until=None):
     """The log lines' events between since and until (strings comparable with the lines' stamps)."""
-    ev = {"read": [], "built": [], "base": [], "anchors": [], "far": []}
+    ev = {"read": [], "built": [], "base": [], "anchors": [], "far": [], "cpu": {}}
     for path in paths:
         with open(path, encoding="utf-8", errors="replace") as f:
             for line in f:
@@ -55,6 +58,8 @@ def scan(paths, since=None, until=None):
                                           float(m.group(4))))
                 elif (m := FAR.search(line)):
                     ev["far"].append((t, int(m.group(1)), int(m.group(2)), float(m.group(5))))
+                elif (m := WORKER_CPU.search(line)):
+                    ev["cpu"][int(m.group(1))] = m.group(2)
     return ev
 
 
@@ -92,6 +97,15 @@ def report(ev, runs=()):
     if ev["far"]:
         s = [f[3] for f in ev["far"]]
         out.append(f"far fields done: {len(s)}, median {pct(s, 0.5):.1f} s, max {max(s):.1f} s")
+    if ev.get("cpu"):
+        kinds = {}
+        for text in ev["cpu"].values():
+            for name, n, sec in JOB.findall(text.split(";")[0]):
+                k0, s0 = kinds.get(name, (0, 0.0))
+                kinds[name] = (k0 + int(n), s0 + float(sec))
+        out.append(f"worker CPU by job ({len(ev['cpu'])} processes, -v lines): " + ", ".join(
+            f"{k} {n} in {s:.0f} s ({s / max(n, 1):.2f} s each)" for k, (n, s) in
+            sorted(kinds.items(), key=lambda kv: -kv[1][1])))
     for d in runs:
         for p in sorted(glob.glob(os.path.join(d, "**", "summary.json"), recursive=True)):
             try:
