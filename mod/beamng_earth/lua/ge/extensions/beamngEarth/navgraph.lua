@@ -661,6 +661,19 @@ function M.routeKept(id, why)
 end
 
 local paced = {}        -- car id -> its pace factor (set in its Lua)
+local installedAt = {}  -- car id -> os.clock() its pace and keep-route Lua were last sent
+
+-- The pace and keep-route Lua go to a car once it is active (a pooled car's Lua does not run, and a command sent to it
+-- may never arrive), and again every INSTALL_S (both are idempotent): a car whose Lua was loaded again (a respawn with
+-- another model) gets them back. Sent once while inactive, as before, on 7ba24af not one route was reported kept or
+-- dropped in a whole bench drive (bench5, 2026-10-28: 31 applies, 7 cars).
+M.INSTALL_S = 5
+
+-- Pure: are a car's pace and keep-route Lua due (last sent at `at`, nil never; active: the car simulates)?
+function M.dueInstall(at, now, active)
+  if not active then return false end
+  return at == nil or now - at >= M.INSTALL_S
+end
 
 -- Traffic cars the block left behind (or all, after a teleport), and stuck ones, are respawned on the graph.
 local stillSince = {}   -- car id -> os.clock() it stopped moving
@@ -679,10 +692,11 @@ local function guard(b, all)
   for id in pairs(gt.getTrafficData() or {}) do
     if id ~= me then
       local o = getObjectByID(id)
-      if o and not paced[id] and o.queueLuaCommand then
-        paced[id] = M.paceFactor(math.random(), math.random(), math.random())
+      if o and o.queueLuaCommand and M.dueInstall(installedAt[id], now, o:getActive()) then
+        paced[id] = paced[id] or M.paceFactor(math.random(), math.random(), math.random())
         o:queueLuaCommand(M.paceLua(paced[id]))
         if M.KEEP_ROUTE then o:queueLuaCommand(M.keepRouteLua()) end
+        installedAt[id] = now
       end
       if o and o:getActive() then
         local p = o:getPosition()
@@ -1183,6 +1197,7 @@ function M.reset()
   seenAt = {}
   putAhead = {}
   paced = {}
+  installedAt = {}
   cuts = {}
   cutNames = {}
   lastNodes, capped, lastMerge = nil, {}, -math.huge

@@ -318,6 +318,13 @@ do
   T.check(math.abs(fast2.speedLimit - 29.0 * 1.1) < 1e-9, 'paceLua: a new map scaled as it comes (setMap wrapped once)')
   mapmgr = nil
 end
+-- the pace and keep-route Lua: sent once a car is active, and again every INSTALL_S (bench5: sent while inactive, lost)
+do
+  T.check(N.dueInstall(nil, 10, true), 'dueInstall: an active car never sent to: due')
+  T.check(not N.dueInstall(nil, 10, false), 'dueInstall: an inactive (pooled) car: not yet')
+  T.check(not N.dueInstall(8, 10, true), 'dueInstall: sent 2 s ago: not again yet')
+  T.check(N.dueInstall(10 - N.INSTALL_S, 10, true), 'dueInstall: INSTALL_S since: again')
+end
 -- how near a cut a car is respawned: fresh cars far off, unless this module put them ahead along the player's way
 do
   T.check(N.cutReach(1, 10, nil) == N.CUT_FRESH_M, 'cutReach: a fresh car (the stock respawn): CUT_FRESH_M')
