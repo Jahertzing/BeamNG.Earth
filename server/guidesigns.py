@@ -1235,8 +1235,14 @@ def _lanes(spec):
 def match(roads, xy, bvec, link=False, max_d=25.0):
     """The carriageway an item stands by: the nearest road of HIGHWAY_MAIN (a ramp when link) within max_d of xy whose
     travel runs along bvec. A dict: fid, spec, line, s, pt (3,), t (travel, unit 2D), sgn (travel along the geometry:
-    +1 / -1), hw (half width), lanes; None when none."""
-    best = None
+    +1 / -1), hw (half width), lanes, d (its distance); None when none."""
+    got = candidates(roads, xy, bvec, link, max_d)
+    return min(got, key=lambda m: m["d"]) if got else None
+
+
+def candidates(roads, xy, bvec, link=False, max_d=25.0):
+    """Every carriageway match() chooses from (its dicts, in roads' order)."""
+    out = []
     for fid, spec, line, _ in roads:
         if spec.cls not in HIGHWAY_MAIN or bool(spec.link) != link or len(line) < 2:
             continue
@@ -1247,10 +1253,9 @@ def match(roads, xy, bvec, link=False, max_d=25.0):
         t = tan * sgn
         if float(np.dot(t, bvec)) < 0.75:
             continue
-        if best is None or d < best["d"]:
-            best = {"d": d, "fid": fid, "spec": spec, "line": line, "s": s, "pt": pt, "t": t, "sgn": sgn,
-                    "hw": spec.width / 2, "lanes": _lanes(spec)}
-    return best
+        out.append({"d": d, "fid": fid, "spec": spec, "line": line, "s": s, "pt": pt, "t": t, "sgn": sgn,
+                    "hw": spec.width / 2, "lanes": _lanes(spec)})
+    return out
 
 
 def _right(t, left_hand=False):
@@ -1361,31 +1366,46 @@ def gore(mesh, col, roads, it, xy, ground, left_hand=False):
     bl = np.array([math.sin(math.radians(it["brg"])), math.cos(math.radians(it["brg"]))])
     bm = np.array([math.sin(math.radians(it["mbrg"])), math.cos(math.radians(it["mbrg"]))])
     ml = match(roads, xy, bl, link=True, max_d=40.0)
-    mm = match(roads, xy, bm, link=False, max_d=30.0)
-    if ml is None or mm is None:
+    # the carriageway the ramp leaves: every one at the gore running its way, the nearest at each point along the ramp.
+    # Where the motorway's ways split at the exit (a lane dropped into it) the junction is the end of one and the start
+    # of the next; matched to the one ending there, the gap grew toward that end point, along the road, and the EXIT sign
+    # stood in the continuing lanes (I-25 at 39.9884,-104.9873: the bake's autodrive drove into it, 2026-10-28)
+    mains = candidates(roads, xy, bm, link=False, max_d=30.0)
+    if ml is None or not mains:
         return None
-    line, sgn = ml["line"], ml["sgn"]
+    line, sgn, s0, k0, hwl = ml["line"], ml["sgn"], ml["s"], 0, ml["hw"]
     painted, sign_at = [], None
     last_stripe = -1e9
+    used, tan = {ml["fid"]}, ml["t"]
     for k in range(0, 260):
-        s = ml["s"] + sgn * k
-        q, tan = _point_at(line, s)
+        q, tan_k = _point_at(line, s0 + sgn * (k - k0))
         if q is None:
-            break
-        dm, _, pm, _ = _project(mm["line"], q)
-        gap = dm - mm["hw"] - ml["hw"]
+            # on along the ramp's next way (a ramp split into short ways: the first can end before the gap opens)
+            end = line[-1] if sgn > 0 else line[0]
+            nxt = [m for m in candidates(roads, end[:2], tan, link=True, max_d=1.0) if m["fid"] not in used]
+            if not nxt:
+                break
+            m = min(nxt, key=lambda c: c["d"])
+            used.add(m["fid"])
+            line, sgn, s0, k0, hwl = m["line"], m["sgn"], m["s"], k, m["hw"]
+            q, tan_k = _point_at(line, s0)
+            if q is None:
+                break
+        tan = tan_k * sgn
+        gap, dm, pm, mm = min(((d - m["hw"] - hwl, d, p, m) for m in mains
+                               for d, _, p, _ in (_project(m["line"], q),)), key=lambda g: g[0])
         if gap > 12.0:
             break
         if GORE_PAINT_M[0] <= gap <= GORE_PAINT_M[1] and k - last_stripe >= CHEVRON_EVERY_M:
             last_stripe = k
-            painted.append((q, pm, dm))
+            painted.append((q, pm, dm, mm["hw"]))
         if gap >= GORE_SIGN_GAP_M and sign_at is None:
-            sign_at = (q, pm, dm, gap)
+            sign_at = (q, pm, dm, gap, mm["hw"])
             break
-    tv = mm["t"]
-    for q, pm, dm in painted:
+    tv = min(mains, key=lambda m: m["d"])["t"]
+    for q, pm, dm, hw in painted:
         across = (q[:2] - pm[:2]) / max(dm, 1e-6)
-        em = pm[:2] + across * mm["hw"]
+        em = pm[:2] + across * hw
         el = q[:2] - across * ml["hw"]
         span = float(np.linalg.norm(el - em))
         if span < 0.3:
@@ -1399,9 +1419,9 @@ def gore(mesh, col, roads, it, xy, ground, left_hand=False):
             pts = pts[::-1]
         mesh.quad(*pts, M_PAINT, WHITE)
     if sign_at is not None:
-        q, pm, dm, gap = sign_at
+        q, pm, dm, gap, hw = sign_at
         across = (q[:2] - pm[:2]) / max(dm, 1e-6)
-        mid = pm[:2] + across * (mm["hw"] + gap / 2)
+        mid = pm[:2] + across * (hw + gap / 2)
         face, size = gore_face(it.get("ref"))
         gz = _gz(ground, mid[0], mid[1], (q[2] + pm[2]) / 2)
         R = _right(tv, left_hand)

@@ -206,6 +206,25 @@ class Tile(unittest.TestCase):
         paint = P[np.unique(T[M == gs.M_PAINT])]
         self.assertGreater(paint[:, 0].min(), 7.0)                        # chevrons right of the motorway's edge
 
+    def test_gore_sign_beside_the_continuing_carriageway(self):
+        """The motorway's ways split at the exit (a lane dropped into it): the junction ends one way and starts the next.
+        The EXIT sign stands in the gore right of the continuing lanes, not in them (I-25 at 39.9884,-104.9873, where
+        the gore was measured to the end of the way ending there: the bake's autodrive drove into the sign)."""
+        _, spec, mline, lon = self.roads[0]
+        i = int(np.argmin(np.abs(mline[:, 1])))                            # the junction: y = 0
+        four = roads.Spec(19.0, "paved", False, "motorway", True, 2.5, 1, median=40.0, lanes=4)
+        split = [("a_ends_here", four, mline[:i + 1], lon), ("b_goes_on", spec, mline[i:], lon), self.roads[1]]
+        gore = [x for x in self.items if x[0]["k"] == "gore"][:1]
+        for rs in (self.roads, split):
+            box = (-128.0, -128.0, 128.0, 128.0)
+            out = gs.tile(self.frame, rs, box, items=gore)
+            P, T, _, _, M = out["mesh"]
+            P = P + np.array([box[0], box[1], 0.0])
+            text = P[np.unique(T[M == gs.M_TEXT])]                            # the gore's EXIT sign
+            self.assertTrue(len(text))
+            self.assertGreater(text[:, 0].min(), 8.0, "right of the continuing carriageway's edge")
+            self.assertGreater(text[:, 1].min(), 30.0, "where the ramp has left, not at the junction")
+
     def test_text_faces_viewer(self):
         out = gs.tile(self.frame, self.roads, (-128.0, -128.0, 128.0, 128.0), items=self.items)
         P, T, _, _, M = out["mesh"]
