@@ -14,7 +14,8 @@ images DIR/<place>__<hour>__<view>__<variant>.jpg, DIR/run.json and DIR/index.ht
 column per variant).
 
 Variants file: [{"name": "base"}, {"name": "mie4", "sky": {"atmoMieScattering": [0.016, 0.016, 0.016]}}, ...]
-(look.lua apply(): sky, level, objects, consts, lua).
+(look.lua apply(): sky, level, objects, consts, lua; "undo": lua run after the shot, for a variant whose lua
+changed a module's own state).
 """
 import argparse
 import html
@@ -118,6 +119,8 @@ def main(argv=None):
                         dest = b.screenshot(str(out / stem))
                         row["shots"][var["name"]] = os.path.basename(dest)
                         look(game, "reset")
+                        if var.get("undo"):         # a variant that changed a module's state in its lua
+                            look(game, "apply", {"lua": var["undo"]})
                     rows.append(row)
                     write_index(out, rows, variants)
     finally:
