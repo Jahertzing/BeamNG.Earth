@@ -250,7 +250,11 @@ class StadiumTest(TableCase):
         span_x = (tri[:, :, 0].min(1) < 0) & (tri[:, :, 0].max(1) > 0)
         span_y = (tri[:, :, 1].min(1) < 0) & (tri[:, :, 1].max(1) > 0)
         self.assertFalse((span_x & span_y).any(), "no triangle over the field's centre")
-        self.assertAlmostEqual(P[:, 2].max(), 1602.0 + 45.0, places=3)
+        lamp = bld.MATERIALS.index(bld.STADIUM_LIGHT)          # (its floodlight banks stand on masts over the rim)
+        mast = bld.MATERIALS.index(bld.LOOKS["bne_bridge_steel"][0])
+        rim = P[np.unique(T[(M != lamp) & (M != mast)])][:, 2].max()
+        self.assertAlmostEqual(rim, 1602.0 + 45.0, places=3)
+        self.assertGreaterEqual(int((M == lamp).sum()) // 12, 4, "floodlight banks on the rim")
         # the stands face up and in
         n, mid = normals(P, T)
         stands = M == bld.MATERIALS.index(bld.PANEL)

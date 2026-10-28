@@ -25,8 +25,5 @@
     {"name": "Cathedral Basilica spires", "osm": ["w529588800", "w529711215"],
      "set": {"facade_look": "bne_limestone", "roof_look": "bne_limestone"}}
   ],
-  "pieces": [
-    {"name": "Castle Rock Star", "kind": "star", "at": [39.378817, -104.856786], "size_m": 15.0, "lift_m": 2.0,
-     "yaw_deg": 90.0}
-  ]
+  "pieces": []
 }

@@ -611,16 +611,65 @@ def under_decks(rows, decks, wires=None):
     return out
 
 
+# OpenStreetMap's lit tag (osmtags.py; the user, 2026-10-28: "drive into denver at night and see the lights"): a road
+# tagged lit gets lamps where the class rules give it none (a lit motorway out of built-up land, a lit country road),
+# one tagged unlit none. Other values (or none) leave the class rules.
+LIT_YES = {"yes", "24/7", "automatic", "limited", "interval", "sunset-sunrise", "dusk-dawn"}
+LIT_NO = {"no", "disused"}
+# A lit road's lamps along its carriageway (no sidewalk; highways: place's own highway lamps): one side, hashed
+LIT_SPACING = {"primary": 42.0, "secondary": 42.0, "tertiary": 45.0}
+LIT_SPACING_OTHER = 45.0
+LIT_OFF_M = 1.2             # m beyond the carriageway's edge
+
+
+def lit_tag(v):
+    """True (lit), False (unlit) or None (not tagged / not understood) for an OpenStreetMap lit value."""
+    v = str(v if v is not None else "").strip().lower()
+    return True if v in LIT_YES else (False if v in LIT_NO else None)
+
+
+def lit_lamps(roads, box, lits, done, others):
+    """Lamp rows along the carriageway of the roads tagged lit that have none yet (done: their fids, these added), as
+    place's rows; not highways (HIGHWAY_CLASSES: place lights a lit one as its own). lits: fid -> lit_tag."""
+    x0, y0, x1, y1 = box
+    rows = []
+    for fid, spec, line, _ in roads:
+        if fid in done or lits.get(fid) is not True or spec.cls in HIGHWAY_CLASSES or len(line) < 2:
+            continue
+        done.add(fid)
+        spacing = LIT_SPACING.get(spec.cls, LIT_SPACING_OTHER)
+        side = 1 if _h01(fid, "litside") < 0.5 else -1
+        phase = _h01(fid, "litphase") * spacing
+        L = _arclen(line)[-1]
+        s = phase + spacing * np.arange(0, int(max(L - phase, 0.0) // spacing) + 1)
+        s = s[(s > END_CLEAR_M) & (s < L - END_CLEAR_M)]
+        if not len(s):
+            continue
+        P, D = _at(line, s)
+        for p, d in zip(P, D):
+            n = np.array([-d[1], d[0]]) * side
+            q = p[:2] + n * (spec.width / 2 + LIT_OFF_M)
+            if not (x0 <= q[0] < x1 and y0 <= q[1] < y1):
+                continue
+            if not _clear(np.array([q[0], q[1], p[2]]), others, fid):
+                continue
+            rows.append([G_LAMP, round(float(q[0]), 2), round(float(q[1]), 2), round(float(p[2]), 2),
+                         round(_yaw(-n[0], -n[1]), 1), 1.0, 9.0, 0.0])
+    return rows
+
+
 def place(roads, walks, box, curb_h=0.15, wires=None, town=False, left_hand=False, speeds=None, mph=True, decks=(),
-          signals=None, buried=0.0, region=None):
+          signals=None, buried=0.0, region=None, lits=None):
     """Rows [group, x, y, z, yaw, scale, height, rank] (trees.lua's tile rows) of the lamps and poles of a
     tile box (x0, y0, x1, y1). roads: build_tile's (fid, spec, centreline (k, 3), lon); walks: its sidewalk
     runs (dicts with fid, pts, side, w); decks: the bridge decks over the tile [(centreline (k, 3), half
     width)]: nothing tall under them (under_decks). buried: the share of the country's low-voltage lines that are
     underground (buried_share): that share of the roads (hashed) get no utility poles (a town's street its lamps
-    instead). region: lamp_region's (the lamps' spacing)."""
+    instead). region: lamp_region's (the lamps' spacing). lits: fid -> OpenStreetMap's lit tag (lit_tag: lamps
+    along a lit road without sidewalk lamps, none on an unlit one)."""
     spacing_of = lamp_spacing(region, dense=not town)
     x0, y0, x1, y1 = box
+    lits = {fid: lit_tag(v) for fid, v in (lits or {}).items()}
     by_fid = {fid: (spec, pts) for fid, spec, pts, _ in roads}
 
     def overhead(fid):          # does this road's line run on poles (not buried)?
@@ -664,11 +713,13 @@ def place(roads, walks, box, curb_h=0.15, wires=None, town=False, left_hand=Fals
                         rows.append([G_POLE, round(float(q[0]), 2), round(float(q[1]), 2), round(float(p[2]), 2),
                                      round(yaw, 1), 1.0, 9.2, 0.0])
                         k = int(round((float(_project(line, q[None])[0]) - ph) / TOWN_POLE_SPACING))
-                        if pole_lamp(spec.cls, k, region):
+                        if pole_lamp(spec.cls, k, region) and lits.get(fid) is not False:
                             rows.append([G_POLELAMP, round(float(q[0]), 2), round(float(q[1]), 2),
                                          round(float(p[2]) + POLE_LAMP_Z, 2), round(yaw, 1), 1.0, 1.1, 0.0])
                 if wires is not None and len(run_poles) > 1:
                     wires.extend(_own_spans(run_poles, box))
+            rule = None
+        if lits.get(fid) is False:
             rule = None
         if rule is not None:
             spacing, both = rule
@@ -697,6 +748,7 @@ def place(roads, walks, box, curb_h=0.15, wires=None, town=False, left_hand=Fals
             put(G_BENCH, BENCH_SPACING, _h01(fid, side, "bench") * BENCH_SPACING, w - 0.45, 0.9,
                 lambda out: _yaw(-out[0], -out[1]) + BENCH_YAW)
             put(G_BIN, BIN_SPACING, _h01(fid, side, "bin") * BIN_SPACING, 0.7, 1.1, lambda out: _yaw(-out[0], -out[1]))
+    rows.extend(lit_lamps(roads, box, lits, lit, others))
     rows.extend(junction_props(roads, box, curb_h, left_hand, decks, signals))
     if speeds:
         rows.extend(speed_signs(roads, speeds, box, left_hand, mph))
@@ -705,8 +757,10 @@ def place(roads, walks, box, curb_h=0.15, wires=None, town=False, left_hand=Fals
             continue
         # a street in built-up land (spec.urban: the land cover; the tile's `town` is only "not a dense core", true in
         # the countryside too) with no sidewalk run: lit from its edge; a country road: utility poles alone
-        highway = spec.cls in HIGHWAY_CLASSES and highway_lit(region, spec.link, spec.urban)
-        lamps = highway or (spec.urban and spec.cls in TOWN_POLE_CLASSES)
+        # (OpenStreetMap's lit tag over the rules: lit_tag)
+        highway = (spec.cls in HIGHWAY_CLASSES and lits.get(fid) is not False
+                   and (lits.get(fid) is True or highway_lit(region, spec.link, spec.urban)))
+        lamps = highway or (spec.urban and spec.cls in TOWN_POLE_CLASSES and lits.get(fid) is not False)
         poles = not highway and overhead(fid) and (lamps or (not spec.urban and spec.cls in POLE_CLASSES))
         if not (lamps or poles):
             continue

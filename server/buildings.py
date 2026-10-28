@@ -79,8 +79,9 @@ CONCRETE = "bne_bridge_concrete"  # plain concrete (tunnel.materials.json): a pr
 SKY_WALL = "bne_bld_sky"    # the skyline's walls: plain (vertex colours), their windows lit at night (_sky_mesh)
 GOLD_LEAF = "bne_bld_gold"  # smooth metal in its vertex colour (landmarks.py: the Capitol's gold dome), floodlit at night
 GLOW = "bne_bld_glow"       # lit at night only (nightlights.lua; landmarks.py: the Castle Rock Star)
+STADIUM_LIGHT = "bne_stadium_light"     # a stadium's floodlight banks (stadium_lights; lit on evenings: nightlights.lua)
 MATERIALS = (FACADE, SHOP, OFFICE, ROOF_FLAT, ROOF_SLATE, ROOF_SHINGLE, SIDING, STUCCO, ROOF_METAL, PANEL, METALWALL,
-             STONE, MARBLE, BRICK_WALL, CONCRETE, SKY_WALL, GOLD_LEAF, GLOW)
+             STONE, MARBLE, BRICK_WALL, CONCRETE, SKY_WALL, GOLD_LEAF, GLOW, STADIUM_LIGHT)
 LOOKS = {
     "bne_bridge_steel": (METALWALL, (0.50, 0.52, 0.54)),
     "bne_marble": (MARBLE, (1.0, 1.0, 1.0)),
@@ -97,6 +98,7 @@ LOOKS = {
     "bne_gold": (GOLD_LEAF, (1.0, 0.77, 0.34)), "bne_copper": (ROOF_METAL, (0.52, 0.74, 0.64)),
     "bne_glow": (GLOW, (1.0, 0.95, 0.82)), "bne_granite": (STONE, (0.80, 0.80, 0.80)),
     "bne_sandstone": (STONE, (0.96, 0.86, 0.70)), "bne_limestone": (STONE, (0.95, 0.93, 0.88)),
+    STADIUM_LIGHT: (STADIUM_LIGHT, (0.78, 0.79, 0.80)),
 }
 ROOF_TINTS = {               # per roof material: the colours a building's roof takes (hashed)
     ROOF_FLAT: ((0.85, 0.85, 0.85), (0.62, 0.62, 0.64), (0.95, 0.93, 0.88), (0.45, 0.45, 0.46), (0.75, 0.70, 0.64)),
@@ -896,6 +898,7 @@ def _walls(m, spec, ring, z0, z_eave, mat_idx, lite=False):
     if mid and spec.wall and spec.windows is not False and getattr(spec, "drive", None) and not lite:
         P, UV, mid = _garage_windows_out(spec, ring, z_eave, P, UV, mid)
     if mid:
+        UV = _night_shift(spec, P, UV, mid, z_eave)
         m.quads(P, UV, mid, [mat_idx[spec.facade], mat_idx[SHOP] if (spec.shop or spec.wall) else None,
                              mat_idx["bne_bld_fac_white"] if spec.wall else None])
 
@@ -936,6 +939,29 @@ def _garage_windows_out(spec, ring, z_eave, P, UV, mid):
     k = np.flatnonzero(keep)
     return (np.asarray(P, np.float64).reshape(-1, 12)[k].ravel().tolist(),
             np.asarray(UV, np.float64).reshape(-1, 8)[k].ravel().tolist(), M[k].tolist())
+
+
+def _night_shift(spec, P, UV, mid, z_eave):
+    """The walls' UV (_walls' kernel output: 4 corners a quad, mid its material slot) with each floor of the window
+    sheet started a hashed whole number of bays along. The night maps light the same cells of a band wherever it is
+    used (tools/build_night_windows.py), so every floor lit the same columns: vertical stripes of lit windows up every
+    building at night (2026-10-28). Bands of equal bays only (their windows the same in every bay: the tall band's
+    uneven bays and the sash band's hand-picked good bays are left as they are); slot 0 (the facade) only."""
+    band = spec.band
+    if not band or len(band) > 2 or band[1] < 4 or spec.plain or spec.wall or spec.floors < 2:
+        return UV
+    bpt = band[1]
+    q = len(mid)
+    zb = np.asarray(P, np.float64).reshape(q, 4, 3)[:, :, 2].min(1)
+    f = np.floor((zb - (z_eave - spec.floors * spec.floor_h)) / spec.floor_h + 1e-3).astype(np.int64)
+    slot = np.frombuffer(mid, np.uint8) if isinstance(mid, (bytes, bytearray)) else np.asarray(mid)    # (the kernel: bytes)
+    sel = (slot == 0) & (f >= 0)
+    if not sel.any():
+        return UV
+    shift = np.array([int(_hash01(spec.seed, "nightbay", k) * bpt) for k in range(spec.floors)], np.float64) / bpt
+    U = np.asarray(UV, np.float64).reshape(q, 4, 2)
+    U[sel, :, 0] += shift[np.minimum(f[sel], spec.floors - 1)][:, None]
+    return U.ravel().tolist()
 
 
 PLAIN_STRIP = 0.3           # of a bay: the plain wall between two windows of a sheet's band (centred on a bay edge)
@@ -1632,6 +1658,44 @@ GARAGE_DRIVE_W = 6.5        # m: a garage entrance's two lanes
 GARAGE_DRIVE_MAX_M = 25.0   # m from the outline to a road's edge at most
 
 
+# A stadium's floodlights (the user, 2026-10-28: Denver at night; Coors Field, Empower Field and Ball Arena's
+# neighbours light the sky on a game night): banks of lamps standing on the rim of its stands, one every
+# STADIUM_BANK_EVERY_M of the rim, their lit faces glowing after dusk (STADIUM_LIGHT), seen from across the city.
+STADIUM_CLASSES = {"stadium", "grandstand", "stadium_bowl"}   # (stadium_bowl: landmarks.stadium's open bowl)
+STADIUM_MIN_M2 = 2500.0
+STADIUM_MIN_H = 8.0
+STADIUM_BANK_EVERY_M = 45.0
+STADIUM_BANK = (6.0, 0.8, 3.0)      # m: along the rim, across it, tall
+STADIUM_BANK_UP_M = 2.0             # m its foot stands over the eave (on its mast)
+
+
+def stadium_lights(m, spec, ring, z_eave, mat_idx):
+    """Floodlight banks on the rim of a stadium's stands (STADIUM_CLASSES, big and tall enough): along each edge, one
+    per STADIUM_BANK_EVERY_M of the perimeter (at least four), each on a mast over the eave."""
+    if spec.cls not in STADIUM_CLASSES or spec.height < STADIUM_MIN_H:
+        return
+    ring = np.asarray(ring, np.float64)[:, :2]
+    if abs(_area2(ring)) / 2 < STADIUM_MIN_M2:
+        return
+    edges = [(ring[i], ring[(i + 1) % len(ring)]) for i in range(len(ring))]
+    lens = np.array([float(math.hypot(*(b - a))) for a, b in edges])
+    per = float(lens.sum())
+    n = max(4, int(per // STADIUM_BANK_EVERY_M))
+    lamp, mast = mat_idx[STADIUM_LIGHT], mat_idx["bne_bridge_steel"]
+    hx, hy, hz = STADIUM_BANK[0] / 2, STADIUM_BANK[1] / 2, STADIUM_BANK[2]
+    cum = np.concatenate([[0.0], np.cumsum(lens)])
+    for k in range(n):
+        s_ = (k + 0.5) * per / n
+        i = int(min(np.searchsorted(cum, s_, side="right") - 1, len(edges) - 1))
+        a, b = edges[i]
+        if lens[i] < STADIUM_BANK[0]:
+            continue
+        d = (b - a) / lens[i]
+        c = a + d * (s_ - cum[i])
+        _box(m, c, d, hx, hy, z_eave + STADIUM_BANK_UP_M, z_eave + STADIUM_BANK_UP_M + hz, lamp)
+        _box(m, c, d, 0.15, 0.15, z_eave, z_eave + STADIUM_BANK_UP_M, mast)
+
+
 def build(specs_and_ground, lite=False, kit=True):
     """The tile's mesh from [(Spec, ground z min, ground z max)] with rings in the tile's local frame:
     (positions, uvs, tris, tri material indices, MATERIALS) or None if empty. lite (far tiles): no
@@ -1647,6 +1711,7 @@ def build(specs_and_ground, lite=False, kit=True):
         if spec.cls == "stadium_bowl":
             import landmarks
             landmarks.stadium(m, spec, gmin, gmax, mat_idx.__getitem__, lite, gmin - (SKIRT_LITE_M if lite else SKIRT_M))
+            stadium_lights(m, spec, drawn_ring(spec), base_z(spec, gmin, gmax) + spec.height, mat_idx)
             continue
         ring = drawn_ring(spec)
         mh = spec.min_h or 0.0
@@ -1664,6 +1729,7 @@ def build(specs_and_ground, lite=False, kit=True):
             _clutter(m, spec, ring, z_eave, mat_idx)
         if spec.steeple:
             _steeple(m, spec, z_eave, mat_idx)
+        stadium_lights(m, spec, ring, z_eave, mat_idx)
         if spec.stoop and not lite:
             _stoop(m, spec, ring, gmin, gmax, mat_idx)
         if spec.porch and spec.door and not lite:
@@ -1737,6 +1803,7 @@ def collision_mesh(specs_and_ground):
         if spec.cls == "stadium_bowl":          # its walls and stands as drawn (the field open)
             import landmarks
             landmarks.stadium(m, spec, gmin, gmax, lambda _n: tok, lite=True, z0=gmin - FOUNDATION_M)
+            stadium_lights(m, spec, drawn_ring(spec), base_z(spec, gmin, gmax) + spec.height, _Looks(spec.seed))
             continue
         ring = np.asarray(drawn_ring(spec), np.float64)       # (the walls as drawn: the outline or its box)
         if _area2(ring) < 0:
@@ -3324,6 +3391,7 @@ def _sky_mesh(items):
         m.poly([(p[0], p[1], z1) for p in ring], [uv] * n, roof)
         if mh > 0.5:                                # (its underside)
             m.poly([(p[0], p[1], z0) for p in ring[::-1]], [uv] * n, wall)
+        stadium_lights(m, spec, ring, z1, _Looks(spec.seed))
     if not m.n:
         return None
     P, UV, T, M, C = m.arrays()

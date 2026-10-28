@@ -5,6 +5,8 @@
 -- the stock maps' night lights follow), checked every CHECK_S: a material change twice a day, no per-frame cost.
 local M = {}
 
+local nightglow = require('beamngEarth/nightglow')     -- a city's sky glow, the Castle Rock star
+
 M.CHECK_S = 1.0
 -- the materials and their night glow (emissive factor, nits: West Coast USA's highrise windows glow at 200)
 M.MATERIALS = {
@@ -19,7 +21,32 @@ M.MATERIALS = {
   -- the landmarks (server/landmarks.py): the Capitol's gold dome floodlit, the Castle Rock Star's bulbs
   bne_bld_gold = { '1 0.80 0.48', 40 },
   bne_bld_glow = { '1 0.95 0.82', 3000 },
+  -- a stadium's floodlights (buildings.py stadium_lights): a game night's, on from dusk to STADIUM_OFF_H
+  bne_stadium_light = { '0.95 0.97 1', 3000, when = function(c) return c.night and M.evening(c.hour) end },
+  -- the Castle Rock star (nightglow.lua): its season
+  bne_star_bulb = { '1 0.96 0.86', 4000, when = function(c) return c.night and M.starSeason(c.year, c.month, c.day) end },
+  -- a city's sky glow (nightglow.lua): additive, a faint haze of light
+  bne_city_glow = { '1 1 1', 6 },
 }
+M.STADIUM_OFF_H = 23.0      -- local hour the stadiums' lights go out (a game is over by then)
+M.STAR_LAST = { 1, 25 }     -- the star goes off after the National Western Stock Show (month, day; mid to late January)
+
+-- Pure: is the local hour h (0..24) an evening (dusk to STADIUM_OFF_H; the small hours after midnight are not)?
+function M.evening(h)
+  return h ~= nil and h >= 12 and h < M.STADIUM_OFF_H
+end
+
+-- Pure: is the date in the Castle Rock star's season: from the Starlighting (the Saturday before Thanksgiving, the
+-- fourth Thursday of November) to the end of the Stock Show (M.STAR_LAST)?
+function M.starSeason(year, month, day)
+  if not (year and month and day) then return false end
+  if month == 12 then return true end
+  if month == 1 then return day <= M.STAR_LAST[2] end
+  if month ~= 11 then return false end
+  local wday = os.date('*t', os.time({ year = year, month = 11, day = 1, hour = 12 })).wday   -- 1 = Sunday
+  local thanksgiving = 1 + (5 - wday) % 7 + 21
+  return day >= thanksgiving - 5
+end
 
 -- The street lamps' light: a pool of LIGHTS_MAX spot lights (no shadows), every LIGHTS_S moved to the lamps nearest
 -- the camera (their lenses: the road tiles' lamplens rows, furniture.py), pointing down: within AROUND_M all round, and
@@ -58,17 +85,33 @@ function M.isNight()
   return st.isNight == true
 end
 
+-- The local clock and date of the level's TimeOfDay (sky.lua's convention: time 0 = noon), nil fields without one.
+local function clock()
+  local names = scenetree.findClassObjects and scenetree.findClassObjects('TimeOfDay')
+  local tod = names and names[1] and scenetree.findObject(names[1])
+  if not tod then return {} end
+  local t = tonumber(tod.time)
+  return { hour = t and ((t + 0.5) % 1.0) * 24 or nil, year = tonumber(tod.year), month = tonumber(tod.month),
+           day = tonumber(tod.day) }
+end
+
+local lit = {}           -- material name -> whether it was last lit
+
 local function apply(night)
+  local c = clock()
+  c.night = night
   for name, glow in pairs(M.MATERIALS) do
-    local m = scenetree.findObject(name)
+    local on = night
+    if glow.when then on = glow.when(c) == true end
+    local m = lit[name] ~= on and scenetree.findObject(name)
     if m then
       local ok = pcall(function()
-        m:setField('emissiveFactor', 0, night and glow[1] or '0 0 0')
-        m:setField('emissiveIntensityNits', 0, tostring(night and glow[2] or -1))
+        m:setField('emissiveFactor', 0, on and glow[1] or '0 0 0')
+        m:setField('emissiveIntensityNits', 0, tostring(on and glow[2] or -1))
         m:flush()
         m:reload()
       end)
-      if not ok then M.errors = M.errors + 1 end
+      if ok then lit[name] = on else M.errors = M.errors + 1 end
     end
   end
   -- the lamps' far glow (trees.lua's lampglow group, off by day)
@@ -197,13 +240,15 @@ local function stepLights(night)
   for _, e in ipairs(free) do if e.at then place(e, nil) end end
 end
 
--- Every frame (core.lua; cheap: the materials looked at every CHECK_S, the lights every LIGHTS_S).
-function M.update()
+-- Every frame (core.lua; cheap: the materials looked at every CHECK_S, the lights every LIGHTS_S). anchor, anchorId:
+-- the frame (nightglow.lua's objects are placed by latitude and longitude).
+function M.update(anchor, anchorId)
+  pcall(nightglow.update, anchor, anchorId)
   local now = os.clockhp()
   if now - lastCheck >= M.CHECK_S then
     lastCheck = now
     local night = M.isNight()
-    if night ~= nil and night ~= M.night then apply(night) end
+    if night ~= nil then apply(night) end       -- (a material changes only when its state does)
   end
   if now - lastLights >= M.LIGHTS_S and (M.night or #pool > 0) then
     lastLights = now
@@ -214,7 +259,9 @@ end
 
 -- A new level or session: the materials are new (applied again at the next check), the lights gone.
 function M.reset()
+  nightglow.reset()
   M.night, lastCheck, lastLights = nil, -1e9, -1e9
+  lit = {}
   for _, e in ipairs(pool) do
     local o = scenetree.findObjectById(e.id)
     if o then o:delete() end

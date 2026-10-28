@@ -1980,7 +1980,7 @@ local function onUpdate(dtReal, dtSim)
       or (gov.loading and trees.LOADING_FRAME_MS or trees.FRAME_MS))
     pcall(ambience.update, st.anchorId, sea)      -- (sound never stops the world's updates)
     pcall(pumpjacks.update)
-    pcall(nightlights.update)
+    pcall(nightlights.update, st.anchor, st.anchorId)   -- (and nightglow.lua's: the city glow, the star)
     t = mark('sea+trees', t)
     local pb = nil
     if st.block then

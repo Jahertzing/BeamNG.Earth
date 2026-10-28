@@ -160,6 +160,52 @@ class PoleTest(unittest.TestCase):
                          if any(x[0] == furniture.G_POLE for x in furniture.place([r], [], (0, 0, 256, 256), buried=0.5)))
         self.assertTrue(70 <= with_poles <= 130, with_poles)
 
+    def test_lit_tag_lights_a_highway_the_rules_leave_dark(self):
+        """A motorway mainline out of built-up land gets no lamps by the rules (highway_lit); tagged lit in
+        OpenStreetMap it gets the highway lamps along its outer edge, each with a lens; a built-up one tagged unlit,
+        none."""
+        pts = np.array([(-300.0, 50.0, 0.0), (600.0, 50.0, 0.0)])
+        rural = ("m", roads.Spec(11.0, "paved", False, "motorway", True, 2.5, 1, median=20.0), pts, 0.0)
+        lamps = lambda rows: [x for x in rows if x[0] == furniture.G_LAMP]     # noqa: E731
+        self.assertFalse(lamps(furniture.place([rural], [], (0, 0, 256, 256))))
+        rows = furniture.place([rural], [], (0, 0, 256, 256), lits={"m": "yes"})
+        self.assertGreaterEqual(len(lamps(rows)), 3)
+        self.assertEqual(sum(1 for x in rows if x[0] == furniture.G_LENS), len(lamps(rows)))
+        for x in lamps(rows):       # travelling +x: the outer edge on the right (-y)
+            self.assertAlmostEqual(x[2], 50.0 - 5.5 - furniture.LAMP_EDGE_M, places=1)
+        town = ("m", rural[1]._replace(urban=True), pts, 0.0)
+        self.assertTrue(lamps(furniture.place([town], [], (0, 0, 256, 256))))
+        self.assertFalse(lamps(furniture.place([town], [], (0, 0, 256, 256), lits={"m": "no"})))
+
+    def test_lit_country_road_gets_lamps(self):
+        """A country primary (no sidewalk, out of built-up land) tagged lit: lamps along one side at LIT_SPACING."""
+        pts = np.array([(-300.0, 50.0, 0.0), (600.0, 50.0, 0.0)])
+        r = ("p", roads.Spec(9.0, "paved", False, "primary", False), pts, 0.0)
+        self.assertFalse([x for x in furniture.place([r], [], (0, 0, 256, 256)) if x[0] == furniture.G_LAMP])
+        lamps = [x for x in furniture.place([r], [], (0, 0, 256, 256), lits={"p": "yes"}) if x[0] == furniture.G_LAMP]
+        self.assertGreaterEqual(len(lamps), 3)
+        self.assertEqual(len({round(x[2], 1) for x in lamps}), 1, "one side")
+        xs = sorted(x[1] for x in lamps)
+        self.assertTrue(all(abs(b - a - furniture.LIT_SPACING["primary"]) < 0.5 for a, b in zip(xs, xs[1:])))
+
+    def test_unlit_street_gets_no_lamps(self):
+        r = road("u", "residential", True)
+        rows = []
+        for side in (1, -1):
+            rows += furniture.place([r], LampTest.walks(None, r, side), (0, 0, 256, 256), lits={"u": "no"})
+        self.assertFalse([x for x in rows if x[0] in (furniture.G_LAMP, furniture.G_POLELAMP, furniture.G_LENS)])
+        # a lit street with its sidewalk lamps gets no second row
+        both = LampTest.walks(None, r, 1) + LampTest.walks(None, r, -1)
+        lit_rows = furniture.place([r], both, (0, 0, 256, 256), lits={"u": "yes"})
+        plain = furniture.place([r], both, (0, 0, 256, 256))
+        self.assertTrue([x for x in plain if x[0] == furniture.G_LAMP])
+        self.assertEqual(sorted(map(str, lit_rows)), sorted(map(str, plain)))
+
+    def test_lit_tag_values(self):
+        for v, want in (("yes", True), ("24/7", True), ("automatic", True), ("no", False), ("disused", False),
+                        ("", None), (None, None), ("nan", None)):
+            self.assertIs(furniture.lit_tag(v), want, v)
+
     def test_buried_town_street_gets_lamps(self):
         r = road("t", "residential", True)
         rows = []
