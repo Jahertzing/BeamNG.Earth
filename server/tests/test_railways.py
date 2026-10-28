@@ -113,6 +113,22 @@ class RailwayTest(unittest.TestCase):
         hw = roads.road_specs(f)[1].width / 2
         self.assertFalse(((x > 120 - hw) & (x < 120 + hw)).any(), "nothing on the road")
 
+    def test_level_crossing_cuts_the_track_over_the_widest_copy_of_the_road(self):
+        """A road in two cells, the first copy without what its width comes from (I-25's CDOT lanes, 11.8 m against
+        19 m drawn: the rails stood on its outer lanes, Erie, CO, 2026-10-28): the track is cut over its full width,
+        and the street track rails.py lays across it spans it."""
+        lines = [[(0.0, 100.0), (250.0, 100.0)], [(120.0, 0.0), (120.0, 250.0)]]
+        narrow = features(lines, ["standard_gauge", "secondary"], subtypes=["rail", "road"])
+        wide = features(lines, ["standard_gauge", "secondary"], subtypes=["rail", "road"], widths=[(1, 19.0)])
+        P, T, UV, mats, M = railways.tile_mesh(FRAME, 0, 0, [narrow, wide], flat)
+        x = P[np.unique(T)][:, 0]
+        self.assertLess(roads.road_specs(narrow)[1].width, 15.0)
+        self.assertFalse(((x > 120 - 9.5) & (x < 120 + 9.5)).any(), "nothing on the road's 19 m")
+        import rails
+        street = [c for c in rails.tile_chunks(FRAME, 0, 0, [narrow, wide]) if c["m"] == rails.STREET_TRACK["m"]]
+        xs = [p[0] for c in street for p in c["n"]]
+        self.assertTrue(xs and min(xs) < 112.0 and max(xs) > 128.0, "the street track across the 19 m (11.8: 114.7 to 124.6)")
+
     def test_short_tunnel_under_a_road_is_track_and_abandoned_lines_are_worn(self):
         """The line under a road bridge tagged is_tunnel for 12 m (OSM's habit) is track; a long tunnel is left out;
         an abandoned line beside it is drawn worn (Joensuu, 2026-10-25; the user, 2026-10-27: abandoned lines shown,

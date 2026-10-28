@@ -481,23 +481,30 @@ def _pieces(feats, i):
 
 
 def crossings(frame, cells, box, reach=REACH_M):
-    """[(xy (k, 2), half width)]: the ground roads near box (their carriageways cut the track at grade)."""
+    """[(xy (k, 2), half width)]: the ground roads near box (their carriageways cut the track at grade). A road in
+    several cells takes its widest spec: a cell's copy of a road it does not own can lack the attributes its width
+    comes from (I-25's CDOT lanes and shoulders, 11.8 m instead of the 19 m drawn: an abandoned line's rails stood on
+    its outer lanes and every drive crashed there, Erie, CO, 2026-10-28)."""
     near = (box[0] - reach, box[1] - reach, box[2] + reach, box[3] + reach)
-    seen, out = set(), []
+    got = {}                                        # fid -> [parts, half width]
     for feats in cells:
         if feats is None or len(feats) == 0:
             continue
         specs = roads.road_specs(feats)
         fb = feats.boxes(frame)
         for i, sp in enumerate(specs):
-            fid = str(feats.ids[i])
-            if sp is None or fid in seen or not _box_hit(fb[i], near):
+            if sp is None or not _box_hit(fb[i], near):
                 continue
-            seen.add(fid)
+            fid = str(feats.ids[i])
+            if fid in got:
+                got[fid][1] = max(got[fid][1], sp.width / 2)
+                continue
+            parts_ = []
             for ring in roads.ground_parts(feats, i):
                 e, n = mapgeom.enu_xy(feats, frame, ring)
-                out.append((np.c_[e, n], sp.width / 2))
-    return out
+                parts_.append(np.c_[e, n])
+            got[fid] = [parts_, sp.width / 2]
+    return [(xy, hw) for parts_, hw in got.values() for xy in parts_]
 
 
 def _resample(xy, step):
