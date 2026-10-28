@@ -798,7 +798,9 @@ def far_bridge_tile(aid, lat, lon, zoom, tx, ty, out_dir, vfs_dir):
                          lambda path, extra: (path, int(extra.get("n", 0))))
 
 
-def skyline_tile(aid, lat, lon, key, tier, out_dir, vfs_dir):
+# (named skyline_tile too until 2026-10-28: it hid the far buildings' one above, and every bldsky tile failed with a
+# TypeError)
+def skyline_cell_tile(aid, lat, lon, key, tier, out_dir, vfs_dir):
     """earthd.Server.build_skyline_tile here (the far building pool): skyline.build_tile of z12 cell key (z, x, y) at
     tier, from the revisit cache when built in this anchor's place before."""
     import mapcells

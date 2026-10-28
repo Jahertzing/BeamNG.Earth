@@ -1205,7 +1205,7 @@ class Server:
         if anchor is None or self.mapdata is None or not self.skyline:
             return None
         if self.far_bld_pool is not None:
-            return self.far_bld_pool.submit(blockworker.skyline_tile, aid, anchor.lat, anchor.lon, tuple(key), tier,
+            return self.far_bld_pool.submit(blockworker.skyline_cell_tile, aid, anchor.lat, anchor.lon, tuple(key), tier,
                                             self.out_dir, self.vfs_dir).result()
         return skylinemod.build_tile(anchor.frame, key, tier, self.mapdata,
                                      lambda la, lo: self.dem.sample(la, lo, skylinemod.DEM_ZOOM),
