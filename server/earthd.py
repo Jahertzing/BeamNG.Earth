@@ -4628,6 +4628,8 @@ async def main_async(args):
     net = netfetch.Fetcher(stats_dir=os.path.join(args.cache_dir, "netstats"), offline=args.offline)
     disk = cachemod.Cache(args.cache_dir, args.cache_cap)
     log.info("%s", worldvol.summary(cachemod.world_dir()))
+    if cachemod.world_dir():
+        threading.Thread(target=scan_world, args=(cachemod.world_dir(),), daemon=True, name="world-size").start()
     threading.Thread(target=prune_own_caches, args=(args.cache_dir,), daemon=True, name="cache-prune").start()
     # map data (mapdata.py): land cover for the surfaces, roads; one instance shares its cache locks
     mapdata = (mapdatamod.MapData(args.cache_dir, fetcher=net)
@@ -4935,10 +4937,39 @@ def default_world_dir():
         return os.path.join(os.path.expanduser("~"), "beamng-earth", "world")
 
 
+_world_info = {}        # the world folder's size and regions, from scan_world (the settings page)
+
+
+def scan_world(world_dir):
+    """The world folder's size, files and installed regions for the settings page (app_paths), once at start (a
+    background walk: only the pre-load, migrate and import change it, with the server closed)."""
+    try:
+        regions = [{"name": r["slug"], "title": str(r["meta"].get("title") or "")[:200], "keys": len(r["tokens"]),
+                    "last": time.strftime("%Y-%m-%d", time.localtime(r["mtime"])) if r["mtime"] else "",
+                    "complete": r["meta"].get("complete") is not False} for r in worldvol.regions(world_dir)]
+        _world_info.update(dir=world_dir, regions=regions)
+        n = b = 0
+        for _, size, _ in worldvol.walk(world_dir):
+            n, b = n + 1, b + size
+        _world_info.update(files=n, bytes=b)
+        log.info("world folder: %.2f GB in %d files, %d regions", b / 1e9, n, len(regions))
+    except Exception as e:          # (the page then shows the folder only)
+        log.warning("world folder not counted: %s: %s", type(e).__name__, e)
+
+
+def world_fields(world_dir):
+    """app_paths' world folder fields: worldDir, worldBytes / worldFiles (-1 while counting), worldRegions."""
+    if not world_dir:
+        return {}
+    w = _world_info if _world_info.get("dir") == world_dir else {}
+    return {"worldDir": world_dir, "worldBytes": int(w.get("bytes", -1)), "worldFiles": int(w.get("files", -1)),
+            "worldRegions": list(w.get("regions", []))}
+
+
 def app_paths_message(cache_dir, result):
     """app_paths for the settings page: the cache folder in use and the one kept for the next start, the BeamMP
-    launcher (the player's choice, else the one found), whether a window is open (picking), and result: the answer to
-    the last choice ({what, ok, text})."""
+    launcher (the player's choice, else the one found), the world folder (its size and installed regions: never
+    cleared), whether a window is open (picking), and result: the answer to the last choice ({what, ok, text})."""
     try:
         ap, bm = _app_modules()
         dd = ap.data_dir()
@@ -4949,6 +4980,7 @@ def app_paths_message(cache_dir, result):
         saved, launcher = cache_dir, ""
     m = {"type": "app_paths", "cacheDir": os.path.abspath(cache_dir), "cacheNext": os.path.abspath(saved),
          "beammp": launcher}
+    m.update(world_fields(cachemod.world_dir()))
     if result:
         m["result"] = result
     return m

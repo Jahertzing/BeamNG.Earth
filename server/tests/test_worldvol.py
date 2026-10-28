@@ -334,5 +334,34 @@ class MigrateTest(WorldCase):
         self.assertEqual(self.files(fresh), self.files(self.world))
 
 
+class SettingsPageTest(WorldCase):
+    def test_app_paths_world_fields(self):
+        """app_paths carries the world folder's path, size (-1 until counted) and regions, in the protocol table's
+        types; without a world folder, none of them."""
+        import earthd
+        import test_protocol_agreement as pa
+        put(self.world, "imagery/usgs/16/1/1.jpg", b"x" * 100)
+        put(self.world, "regions/front-range.done", b"dem 15/1/2\nxyz usgs/16/1/1\n")
+        worldvol.write_meta(self.world, "front-range", title="Front Range", complete=False)
+        self.addCleanup(earthd._world_info.clear)
+        earthd._world_info.clear()
+        self.assertNotIn("worldDir", earthd.app_paths_message(self.cache, None))
+        self.serve()
+        m = earthd.app_paths_message(self.cache, None)
+        self.assertEqual((m["worldBytes"], m["worldFiles"], m["worldRegions"]), (-1, -1, []))
+        earthd.scan_world(cache.world_dir())
+        m = earthd.app_paths_message(self.cache, None)
+        self.assertEqual(m["worldDir"], os.path.abspath(self.world))
+        self.assertEqual(m["worldFiles"], 3)            # (the tile, the manifest and its description)
+        self.assertGreater(m["worldBytes"], 100)
+        self.assertEqual(m["worldRegions"], [{"name": "front-range", "title": "Front Range", "keys": 2,
+                                              "last": time.strftime("%Y-%m-%d"), "complete": False}])
+        table = pa.SERVER_TO_MOD["app_paths"]
+        for k, v in m.items():
+            if k != "type":
+                self.assertIn(k, table)
+                self.assertIsInstance(v, table[k][0])
+
+
 if __name__ == "__main__":
     unittest.main()
