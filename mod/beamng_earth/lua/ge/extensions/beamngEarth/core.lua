@@ -320,6 +320,8 @@ end
 -- that frame. -> lat, lon, dx, dy
 local function rebaseAnchor(lat, lon)
   if not M.SNAP_TELEPORTS then return lat, lon, 0, 0 end
+  local pLat, pLon, px, py = require('beamngEarth/routepins').pin(lat, lon)    -- a baked route's anchor
+  if pLat then return pLat, pLon, px, py end
   local sLat, sLon = geodesy.snapAnchor(lat, lon)
   local dx, dy = geodesy.newAnchor(sLat, sLon):geodeticToEnu(lat, lon, 0)
   return sLat, sLon, dx, dy
@@ -2192,7 +2194,8 @@ teleportTo = function(lat, lon, name, kind)
   elseif M.SNAP_TELEPORTS then
     -- the anchor on its grid (geodesy.snapAnchor), the car at its real spot in that frame: the server's revisit cache
     -- keeps what it built per anchor, so a place visited again (a game started where it was left) loads from it
-    local sLat, sLon = geodesy.snapAnchor(lat, lon)
+    local sLat, sLon = require('beamngEarth/routepins').pin(lat, lon)     -- (a baked route's anchor first)
+    if not sLat then sLat, sLon = geodesy.snapAnchor(lat, lon) end
     if sLat ~= lat or sLon ~= lon then
       local x, y = geodesy.newAnchor(sLat, sLon):geodeticToEnu(lat, lon, 0)
       aLat, aLon, place = sLat, sLon, { x = x, y = y }

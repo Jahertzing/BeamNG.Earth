@@ -100,6 +100,7 @@ import grading as gradingmod  # noqa: E402
 import roadmesh as roadmeshmod  # noqa: E402
 import roadwidth as roadwidthmod  # noqa: E402
 import revisit as revisitmod  # noqa: E402
+import blockcache  # noqa: E402
 import mapdata as mapdatamod  # noqa: E402
 import dem as demmod  # noqa: E402
 import mapcells  # noqa: E402
@@ -1554,10 +1555,41 @@ class Server:
     def make_heightmap(self, anchor, cx, cy, progress, lane=LANE_REQUEST, queued_at=None):
         """Worker thread: build and write one 1024² terrain. The follow / prefetch blocks (no progress
         callback) build in the block process when there is one; the anchor's first block here, so its
-        DEM download reports progress."""
+        DEM download reports progress. A block built in this anchor's place before (heights, surface masks, .ter
+        and base photo) comes from the revisit cache (blockcache.py)."""
         t0 = time.perf_counter()
         if queued_at is not None and t0 - queued_at > 0.2:
             log.debug("terrain %s waited %.2f s for a heightmap worker", (anchor.id, cx, cy), t0 - queued_at)
+        bk = self._block_key(anchor, cx, cy)
+        info = blockcache.load(self, anchor, cx, cy, bk)
+        if info is not None:
+            fb = anchor.first_base
+            if fb is not None and fb[0] == (cx, cy):    # (the provisional block's photo: not needed now)
+                anchor.first_base = None
+            info["seconds"] = time.perf_counter() - t0
+            return info
+        f0 = revisitmod.faults()
+        info = self._make_heightmap_built(anchor, cx, cy, progress, lane, t0)
+        blockcache.store(self, anchor, cx, cy, bk, info, f0)
+        return info
+
+    def _block_key(self, anchor, cx, cy):
+        """The revisit cache's key of a block built here: the anchor's place, the block and every setting that
+        changes its heights, surface or base photo."""
+        im = self.imagery
+        photo = None
+        if self.near_visual == "detail" and im is not None:
+            photo = (tuple(s.name for s in im.chain), self.tone, im.leaf_on, im.season_mode, BASE_PX, BASE_AO,
+                     self.deshadow is not None, self.colormatch is not None,
+                     bool(self.buildings and self.mapdata is not None), roadsmod.ROADS_IN_GROUND)
+        return revisitmod.key(
+            "block", round(float(anchor.lat), 7), round(float(anchor.lon), 7), float(cx), float(cy),
+            self.layout.block, anchor.hm_zoom, float(self.anchor_q(anchor)), self.near_visual, photo,
+            self.mapdata.versions() if self.mapdata is not None else None, self.surface is not None,
+            self.road_widths is not None, self.grading, self.sea is not None, self.airports is not None,
+            repr(self.block_fuel_pads(anchor, cx, cy, self.layout.block)))
+
+    def _make_heightmap_built(self, anchor, cx, cy, progress, lane, t0):
         q = self.anchor_q(anchor)
         fb, base = anchor.first_base, None
         if fb is not None and fb[0] == (cx, cy):        # the provisional first block's photo (make_provisional)

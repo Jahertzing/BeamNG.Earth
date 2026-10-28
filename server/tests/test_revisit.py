@@ -71,6 +71,30 @@ class RevisitTest(unittest.TestCase):
             finally:
                 revisit.CACHE_DIR = old
 
+    def test_a_baked_routes_items_are_pinned(self):
+        """An item built in a baked route's anchor goes to the pinned folder (never cut back), another to the cache;
+        one kept before its route was baked moves there when read; both read back."""
+        with tempfile.TemporaryDirectory() as d:
+            os.makedirs(os.path.join(d, revisit.PIN_SUBDIR))
+            with open(os.path.join(d, revisit.PIN_SUBDIR, revisit.ANCHORS), "w") as f:
+                json.dump({"anchors": [[40.1, -104.94]]}, f)
+            on = revisit.key("roads", round(40.1, 7), round(-104.94, 7), 1, -2)
+            off = revisit.key("roads", 40.11, -104.94, 1, -2)
+            cell = revisit.key("cellfacts", "roads", "14/1/2")
+            for k in (on, off, cell):
+                self.assertTrue(revisit.store(d, "roads", k, {"a": b"x"}))
+            where = lambda k, sub: os.path.exists(os.path.join(d, sub, "roads", k[:2], k + ".zip"))  # noqa: E731
+            self.assertTrue(where(on, revisit.PIN_SUBDIR) and not where(on, revisit.SUBDIR))
+            self.assertTrue(where(off, revisit.SUBDIR) and not where(off, revisit.PIN_SUBDIR))
+            self.assertTrue(where(cell, revisit.SUBDIR), "not an anchor's item: not pinned")
+            self.assertEqual(revisit.load(d, "roads", on)[0], {"a": b"x"})
+            self.assertEqual(revisit.load(d, "roads", off)[0], {"a": b"x"})
+            with open(os.path.join(d, revisit.PIN_SUBDIR, revisit.ANCHORS), "w") as f:
+                json.dump({"anchors": [[40.1, -104.94], [40.11, -104.94]]}, f)
+            os.utime(os.path.join(d, revisit.PIN_SUBDIR, revisit.ANCHORS), ns=(1, 10 ** 18))
+            self.assertEqual(revisit.load(d, "roads", off)[0], {"a": b"x"})
+            self.assertTrue(where(off, revisit.PIN_SUBDIR) and not where(off, revisit.SUBDIR), "moved when read")
+
     def test_the_key_holds_the_code(self):
         self.assertEqual(revisit.key("roads", 1, 2), revisit.key("roads", 1, 2))
         self.assertNotEqual(revisit.key("roads", 1, 2), revisit.key("roads", 1, 3))
