@@ -111,6 +111,25 @@ def summary(d):
     return kinds
 
 
+def list_exits(d, route):
+    """The exit direction signs whose through sign carries route, north to south: number, shields, destinations."""
+    import guidesigns
+    want = guidesigns.parse_ref(route)[:2]
+    rows = []
+    for it in guidesigns.plan(d):
+        if it["k"] != "exit_dir":
+            continue
+        thr = [tuple(s[:2]) for s in (it.get("thr") or {}).get("sh", [])]
+        if want not in thr:
+            continue
+        card = [s[2] for s in it["thr"]["sh"] if tuple(s[:2]) == want][0]
+        sh = ", ".join(f"{n} {r}{(' ' + c) if c else ''}" for n, r, c in it["sh"])
+        rows.append((-it["lat"], f"{card:5} exit {it['ref'] or '-':5} {sh:24} {' / '.join(it['dst'])}"
+                                 f"{'  (left)' if it['left'] else ''}  {it['lat']:.4f},{it['lon']:.4f}"))
+    for _, r in sorted(rows):
+        print(r)
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("--region", help="a region of tools/regions.json (its bounding box)")
@@ -118,6 +137,7 @@ def main():
     ap.add_argument("--name", help="the file's name (default: the region's)")
     ap.add_argument("--pad-km", type=float, default=5.0, help="km added round the region's box")
     ap.add_argument("--check", action="store_true", help="print the existing file's plan counts")
+    ap.add_argument("--exits", metavar="REF", help="with --check: list the exits signed on this route (e.g. \"I 25\")")
     a = ap.parse_args()
     if a.region:
         import regions
@@ -136,6 +156,8 @@ def main():
         with gzip.open(path, "rt", encoding="utf-8") as f:
             d = json.load(f)
         print(f"{path}: {len(d['ways'])} ways, {len(d['junctions'])} junctions, OSM {d['stamp']}: {summary(d)}")
+        if a.exits:
+            list_exits(d, a.exits)
         return
     print(f"Overpass: motorways, trunks and exits in {bbox}")
     d = compact(fetch(bbox), name, bbox)
