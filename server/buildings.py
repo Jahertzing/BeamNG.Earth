@@ -2979,6 +2979,8 @@ MAIN_STREET_SHOPS = 0.75     # the share of such buildings that do
 
 
 DRIVEWAY_W = 3.2            # m
+DRIVE_FRONT_M = 7.0         # a house this wide along its front wall's line has a driveway (doors)
+DRIVE_DOOR_GAP_M = 0.8      # m between the driveway's edge and the front door
 DRIVEWAY = {"m": "road_asphalt_2lane", "tl": 11.0, "p": 19}     # a road tile chunk's look (roads.LOOK)
 
 
@@ -3069,10 +3071,26 @@ def doors(items, lines, x0, y0, drives=None):
         # brick row houses (an eastern city's): white marble steps up to the door
         if narrow and spec.band == BAND_BRICK and spec.roof == "flat" and _hash01(spec.seed, "stoop") < STOOP_SHARE:
             spec.stoop = (edge, Le * f)
+        p0 = None
         if drives is not None and spec.wall and Le >= 7.0:
             # the driveway beside the door, straight out to the road's edge
             g = 0.82 if f <= 0.5 else 0.18
             p0 = a + d * (Le * g) + out * 0.2
+        elif drives is not None and spec.wall:
+            # a front wall too short for the garage beside the door, on a house wide enough for one (DRCOG's
+            # roofprints: porches, bump-outs and bays cut a 12 m front into 3-5 m walls; on OSM an L-plan's wings):
+            # the driveway at the far end of the house's whole front from the door, on the front wall's line
+            sp = (ring - a) @ d
+            s0, s1, sd = float(sp.min()), float(sp.max()), Le * f
+            if s1 - s0 >= DRIVE_FRONT_M:
+                half_w = DRIVEWAY_W / 2 + 0.3
+                sg = s1 - half_w if s1 - sd > sd - s0 else s0 + half_w
+                if abs(sg - sd) >= DRIVEWAY_W / 2 + DRIVE_DOOR_GAP_M:
+                    p0 = a + d * sg + out * 0.2
+                    # (not out through a wing that stands forward of the front wall there: a car parked in it)
+                    if any(_inside(ring, p0 + out * k) for k in (1.0, 3.0, 5.0, 7.0, 9.0)):
+                        p0 = None
+        if p0 is not None:
             t = float(np.clip(((p0 - A[kseg]) * D[kseg]).sum() / L2[kseg], 0, 1))
             q = A[kseg] + t * D[kseg]
             v = p0 - q
@@ -3083,7 +3101,8 @@ def doors(items, lines, x0, y0, drives=None):
                 pts = [p0 + (p1 - p0) * (j / (n - 1)) for j in range(n)]
                 drives.append({"m": DRIVEWAY["m"], "w": DRIVEWAY_W, "tl": DRIVEWAY["tl"], "p": DRIVEWAY["p"],
                                "n": [[round(float(pp[0]), 3), round(float(pp[1]), 3), 0.0] for pp in pts]})
-                spec.drive = (edge, Le * g)     # the garage door where it meets the house (facadekit.garage)
+                if Le >= 7.0:
+                    spec.drive = (edge, Le * g)     # the garage door where it meets the house (facadekit.garage)
         if spec.roof != "flat" and not narrow and _hash01(spec.seed, "fence") < FENCE_SHARE:
             rows.extend(_front_fence(spec, a, d, Le, f, A[kseg], D[kseg], L2[kseg], SHALF[kseg], gmin,
                                      drives is not None and spec.wall and Le >= 7.0, (A, B, SHALF)))
