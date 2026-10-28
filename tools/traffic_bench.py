@@ -1,12 +1,11 @@
 #!/usr/bin/env python3
 """AI traffic on a motorway drive at several amounts (the I-25 traffic tuning, 2026-10-28): for each mode the traffic is
-set up again (off: none; light / normal / busy: navgraph.lua modeAmount of the game's own amount), the car is put on the
-start and drives itself to the goal (tools/autodrive_perf.py: fps, frame times, CPU), and every TRAFFIC_S the traffic is
+set up again at the start once the car is there (off: none; light / normal / busy: navgraph.lua modeAmount of the
+game's own amount), the car is put on the start and drives itself to the goal (tools/autodrive_perf.py: fps, frame times, CPU), and every TRAFFIC_S the traffic is
 sampled: active cars, how many near the player, off the road, their speeds (the pace spread), the AI graph's status
 and the rebases. One mode may get a short rebase distance (--rebase-in) so a rebase happens during it.
 
-  python tools/traffic_bench.py --from 40.090,-104.985 --to 39.93,-104.985 --minutes 4 --out bench
-  python tools/traffic_bench.py ... --modes off,normal,busy --pace --rebase-in normal --rebase-m 4000
+  python tools/traffic_bench.py --from 40.090,-104.985 --to 39.74,-104.99 --minutes 12 --pace --out bench
 
 Writes <out>/<mode>/ (autodrive_perf's samples.jsonl, summary.json) plus traffic.jsonl, and <out>/report.json. The
 game's MCP server must be on and the companion server running. Restores the rebase distance and leaves the traffic
@@ -173,11 +172,13 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--from", dest="start", required=True)
     ap.add_argument("--to", required=True)
-    ap.add_argument("--minutes", type=float, default=4.0)
-    ap.add_argument("--settle", type=float, default=30.0)
+    ap.add_argument("--minutes", type=float, default=10.0)
+    ap.add_argument("--settle", type=float, default=45.0)
     ap.add_argument("--modes", default="off,normal,busy")
     ap.add_argument("--pace", action="store_true", help="give each traffic car its pace (navgraph.lua paceLua)")
-    ap.add_argument("--rebase-in", default="", help="the mode during which the rebase distance is short")
+    ap.add_argument("--rebase-in", default="", help="the mode during which the rebase distance is short (a distance "
+                    "shorter than the route pins' spacing rebased ~390 times in 5 min, bench2: better a drive long "
+                    "enough for the 15 km one)")
     ap.add_argument("--rebase-m", type=float, default=4000.0)
     ap.add_argument("--snap-kmh", type=float, default=90.0)
     ap.add_argument("--out", required=True)
@@ -191,21 +192,41 @@ def main():
             os.makedirs(d, exist_ok=True)
             auto = json.loads(lua(SETUP_LUA)).get("auto")
             n = mode_amount(mode, auto)
-            if n:
-                print(mode, "traffic:", n, "(game's own:", auto, ")", lua(START_LUA % n), flush=True)
             if mode == a.rebase_in:
                 lua("require('beamngEarth/rebase').setDistance(%r) return 1" % a.rebase_m)
             stop = threading.Event()
+            aid0 = lua("return tostring(beamngEarth_core._state().anchorId)").strip()
 
-            def pace_later():
-                # once the cars have spawned and been placed on the new place's graph
-                if stop.wait(a.settle + 40):
+            def traffic_later():
+                # set up at the start, not before the teleport (bench2: set up at the old place, the cars stayed
+                # 'spawning' there or went 'off' at the teleport, and normal and busy drove with none): once the car
+                # has arrived (a new anchor, as autodrive_perf) and the new place's graph is in (most of the settle)
+                t_end = time.time() + 300
+                while not stop.is_set() and time.time() < t_end:
+                    try:
+                        if lua("return tostring(beamngEarth_core._state().anchorId)").strip() != aid0:
+                            break
+                    except (Exception, SystemExit):
+                        pass
+                    stop.wait(2)
+                if stop.wait(max(5.0, a.settle - 15)):
                     return
-                print("paced", lua(PACE_LUA), "cars", flush=True)
+                print(mode, "traffic:", n, "(game's own:", auto, ")", lua(START_LUA % n), flush=True)
+                for _ in range(45):
+                    if stop.wait(2):
+                        return
+                    try:
+                        if lua("return gameplay_traffic.getState()").strip() == "on":
+                            break
+                    except (Exception, SystemExit):
+                        pass
+                print(mode, "traffic state:", lua("return gameplay_traffic.getState()").strip(), flush=True)
+                if a.pace and not stop.wait(20):
+                    print("paced", lua(PACE_LUA), "cars", flush=True)
             th = threading.Thread(target=poller, args=(os.path.join(d, "traffic.jsonl"), stop), daemon=True)
             th.start()
-            if a.pace and n:
-                threading.Thread(target=pace_later, daemon=True).start()
+            if n:
+                threading.Thread(target=traffic_later, daemon=True).start()
             subprocess.run([sys.executable, os.path.join(HERE, "autodrive_perf.py"), "--from", a.start, "--to", a.to,
                             "--minutes", str(a.minutes), "--settle", str(a.settle), "--snap-kmh", str(a.snap_kmh),
                             "--keep-going", "--out", d], check=False)
