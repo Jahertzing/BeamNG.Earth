@@ -29,10 +29,14 @@ PER_POSE = 2                # tiles building at once
 MATERIAL = "bngEarthGrassCard"      # levels/beamng_earth/art/shapes/beamngEarth/grasscards.materials.json
 SPACING_M = 3.0             # the candidate grid (one card each at most)
 KEEP = 0.5                  # share of the candidates kept where the grass mask is full
-HEIGHT_M = (0.5, 0.9)       # card height, uniform
+HEIGHT_M = (0.6, 1.1)       # card height, uniform (in game 2026-10-28, 0.5-0.9 m: barely seen past ~300 m)
 ASPECT = 2.0                # card width / height (the texture's)
 SINK_M = 0.15
 MASK_PX = 128               # the grass mask over the tile (2 m texels)
+# WorldCover class -> card weight: surface.GRASS_WEIGHT without cropland (in game 2026-10-28 an irrigated field's
+# cards took its soil rows' colour: reddish-brown speckles on green)
+CARD_WEIGHT = {30: 1.0, 100: 0.8, 20: 0.6, 10: 0.3}
+PHOTO_BLUR_PX = 2           # box blur radius of the photo the colours come from (20 m: no single rows or roofs)
 PHOTO_PX = 64               # the photo the cards take their colour from (4 m texels)
 BRIGHT = 1.25               # vertex colour = photo colour x this (the blades' texture averages ~0.78 grey)
 FALLBACK_RGB = (118, 112, 84)   # no photo at hand: dry grass
@@ -70,6 +74,19 @@ def sample(img, x, y, x0, y0, size):
     c = np.clip(((x - x0) / size * w).astype(np.int64), 0, w - 1)
     r = np.clip(((y0 + size - y) / size * h).astype(np.int64), 0, h - 1)
     return img[r, c]
+
+
+def blur(img, r):
+    """Box blur (2r + 1 texels) of an (h, w, c) image, its edges clamped."""
+    if r <= 0:
+        return img
+    h, w = img.shape[:2]
+    p = np.pad(img, ((r, r), (r, r), (0, 0)), mode="edge")
+    out = np.zeros_like(img)
+    for dy in range(2 * r + 1):
+        for dx in range(2 * r + 1):
+            out += p[dy:dy + h, dx:dx + w]
+    return out / (2 * r + 1) ** 2
 
 
 def cards(x, y, z, hsize, yaw, rgb):
@@ -111,7 +128,7 @@ def build(frame, x0, y0, size, mask, ground, photo=None, origin_xy=(0.0, 0.0)):
     h = np.asarray(ground(la, lo), np.float64)
     z = np.asarray(frame.geodetic_to_enu(la, lo, h)[2], np.float64) - SINK_M
     if photo is not None:
-        rgb = np.clip(sample(np.asarray(photo), x, y, x0, y0, size).astype(np.float64) * BRIGHT, 0, 255)
+        rgb = np.clip(sample(blur(np.asarray(photo, np.float64), PHOTO_BLUR_PX), x, y, x0, y0, size) * BRIGHT, 0, 255)
     else:
         rgb = np.tile(np.array(FALLBACK_RGB, np.float64), (len(x), 1))
     hsize = HEIGHT_M[0] + hs * (HEIGHT_M[1] - HEIGHT_M[0])

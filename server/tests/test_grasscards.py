@@ -93,6 +93,16 @@ class BuildTest(unittest.TestCase):
         self.assertTrue((south == np.round(np.array((80, 100, 40)) * gc.BRIGHT).astype(int)).all(axis=1).mean() > 0.95)
         self.assertTrue((north == np.minimum(255, (np.array((120, 110, 60)) * gc.BRIGHT)).astype(int)).all(axis=1).mean() > 0.95)
 
+    def test_photo_rows_averaged(self):
+        """A field's alternating 4 m rows (green crop, brown soil): the cards take their mean, not speckles of each."""
+        photo = np.zeros((gc.PHOTO_PX, gc.PHOTO_PX, 3), np.uint8)
+        photo[:, 0::2] = (60, 120, 40)
+        photo[:, 1::2] = (130, 90, 60)
+        P, UV, T, C, N = gc.build(self.frame, 0.0, 0.0, 256.0, self.mask, flat(0.0), photo)
+        cx = (P[0::8, 0] + P[1::8, 0]) / 2
+        cols = C[0::8, :3][(cx > 8) & (cx < 120)].astype(float)
+        self.assertLess(cols.std(axis=0).max(), 0.1 * 255 * gc.BRIGHT / 3, "no speckles")
+
     def test_no_grass_no_cards(self):
         self.assertIsNone(gc.build(self.frame, 0.0, 0.0, 256.0, np.zeros_like(self.mask), flat(0.0)))
 
@@ -211,6 +221,9 @@ class WorkerTest(unittest.TestCase):
         self.assertEqual(got[0], "/temp/bne/grfar_4_2_-1.json")
         self.assertGreater(got[1], 1000)
         self.assertEqual(files, ["grfar_4_2_-1.cdae", "grfar_4_2_-1.json"])
+
+    def test_no_cards_on_cropland(self):
+        self.assertEqual(self.run_tile(40)[0][1], 0)
 
     def test_bare_or_not_cached(self):
         self.assertEqual(self.run_tile(60), (("/temp/bne/grfar_4_2_-1.json", 0), ["grfar_4_2_-1.json"]))

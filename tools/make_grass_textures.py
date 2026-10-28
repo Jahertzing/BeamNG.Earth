@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Grass ground textures for the imagery tiles' grass layer (2026-10-28): mod/beamng_earth/art/beamngEarth/
-detail_grass.dds and detail_grass_nm.dds
+detail_grass.dds and detail_grass_nm.png
 
 The 3D grass (groundcover.lua) only grows on the physics block, ~300 m at most; past it the ground tiles' material
 gives grassy land (the server's grass mask, surface.grass_mask) a second layer over the same photo with these as
@@ -113,10 +113,13 @@ def main():
     with open(os.path.join(out, "detail_grass.dds"), "wb") as f:
         f.write(encode(lv))
     nl = normal_levels(normals(height))
-    with open(os.path.join(out, "detail_grass_nm.dds"), "wb") as f:
-        f.write(encode_rgb([n * 0.5 + 0.5 for n in nl]))
+    # (a PNG, the game making the mips: our R8G8B8A8 DDS drew grassland navy in game, 2026-10-28, as if its channels
+    # were read in BGRA order, a flat normal tipped far over. The grey maps don't mind the order.)
+    from PIL import Image
+    Image.fromarray(np.clip(np.rint((nl[0] * 0.5 + 0.5) * 255), 0, 255).astype(np.uint8)).save(
+        os.path.join(out, "detail_grass_nm.png"), optimize=True)
     print("detail_grass.dds:", len(lv), "levels; stds", [round(float(x.std()), 4) for x in lv[:11]])
-    print("detail_grass_nm.dds: mean tilt (deg) per level",
+    print("detail_grass_nm.png: mean tilt (deg) per level",
           [round(float(np.degrees(np.arccos(np.clip(n[..., 2], -1, 1))).mean()), 1) for n in nl[:11]])
 
 
