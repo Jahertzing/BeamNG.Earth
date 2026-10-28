@@ -78,6 +78,9 @@ NODATA_MAX, NODATA_SHARE = 6, 0.02   # an export tile with > 2 % texels this bla
 # (2026-10-27, Frederick CO: USDA's NAIP host did not resolve; the warm thread asked its first tile again every 30 s,
 # and warm(), called at every pose, put it first again: USGS's NAIP was never asked, the ground stayed USGS z16)
 WARM_RETRY_S = 120.0
+# warm(): a lazy source finer than the base photo's zoom (co_frederick, z18) also gets its finest tiles this far round
+# the path: the mesh's L-1 tiles (0.5 m texels, to ~150-400 m: farfield.NEAR_RADII) render from them
+WARM_FINE_M = 400.0
 NODATA_BLOCK = 8                   # px: inside a tile, a square this size all this black is outside the data
 NODATA_EDGE = 2                    # ... and this much round it (the JPEG's grey fringe on the black)
 NODATA_WHITE_MIN, NODATA_WHITE_SHARE = 250, 0.25   # ... or (nodata "white") > 25 % this white: white roofs
@@ -163,12 +166,13 @@ import imagery_regional  # noqa: E402
 # away) take USGS / Sentinel-2 (the user, 2026-10-22: "the world gen is really slow": Columbus's far field waited
 # 4 minutes on Ohio's cache at its 6 requests/s, ~1,000 tiles for the 2-4 km tiles: z15 / z14).  z16: L2 and nearer.
 REGIONAL_XYZ_MIN_ZOOM = 16
-for _n, (_url, _attr, _bounds, _kind, _leaf) in imagery_regional.REGIONAL.items():
+for _n, (_url, _attr, _bounds, _kind, _leaf, *_more) in imagery_regional.REGIONAL.items():
+    _max = _more[0] if _more else 17    # an export finer than 1 m texels (z18: one 1024 px image per z16 parent)
     if _kind == "xyz":          # a tile cache: also on the nearer far rings (REGIONAL_XYZ_MIN_ZOOM+)
-        SOURCES[_n] = Source(_n, _url, 17, _attr, probe_zooms=(12,), min_zoom=REGIONAL_XYZ_MIN_ZOOM, bounds=_bounds,
+        SOURCES[_n] = Source(_n, _url, _max, _attr, probe_zooms=(12,), min_zoom=REGIONAL_XYZ_MIN_ZOOM, bounds=_bounds,
                              leaf_off=_leaf)
     else:                       # a WMS / ArcGIS export: one 1024 px image per z15 parent, ahead of the player
-        SOURCES[_n] = Source(_n, _url, 17, _attr, min_zoom=17, export=2, lazy=True, bounds=_bounds, nodata="white",
+        SOURCES[_n] = Source(_n, _url, _max, _attr, min_zoom=17, export=2, lazy=True, bounds=_bounds, nodata="white",
                              leaf_off=_leaf)
 DEFAULT_CHAIN = ("md6in", *imagery_regional.REGIONAL, "naipusda", "naip", "usgs", "eox2023", "eox2016")
 # The line the mod shows (V1_3_SPEC §C), for the default chain: every source's own credit, EOX's in
@@ -849,18 +853,20 @@ class Imagery:
                     bs, bw, bn, be = src.bounds     # the regional chain: their per-tile loop cost the far field)
                     if la < bs - pad or la > bn + pad or lo < bw - pad or lo > be + pad:
                         continue
-                z = min(zoom_for(float(lat[0]), texel_m), src.max_zoom)
-                if z < src.min_zoom:
+                z0 = min(zoom_for(float(lat[0]), texel_m), src.max_zoom)
+                if z0 < src.min_zoom:
                     continue
                 k = src.export
-                r_px = radius / ground_res(float(la), z)
-                fx, fy = mercator_px(np.array([la]), np.array([lo]), z)
-                for ty in range(int((fy[0] - r_px) // TILE), int((fy[0] + r_px) // TILE) + 1):
-                    for tx in range(int((fx[0] - r_px) // TILE), int((fx[0] + r_px) // TILE) + 1):
-                        key = (src, z, (tx >> k) << k, (ty >> k) << k)   # one child per parent
-                        if key not in seen and in_bounds(*key):
-                            seen.add(key)
-                            want.append(key)
+                fine = [(src.max_zoom, min(radius, WARM_FINE_M))] if src.max_zoom > z0 else []
+                for z, r in [(z0, radius)] + fine:
+                    r_px = r / ground_res(float(la), z)
+                    fx, fy = mercator_px(np.array([la]), np.array([lo]), z)
+                    for ty in range(int((fy[0] - r_px) // TILE), int((fy[0] + r_px) // TILE) + 1):
+                        for tx in range(int((fx[0] - r_px) // TILE), int((fx[0] + r_px) // TILE) + 1):
+                            key = (src, z, (tx >> k) << k, (ty >> k) << k)   # one child per parent
+                            if key not in seen and in_bounds(*key):
+                                seen.add(key)
+                                want.append(key)
         with self._warm_cv:
             self._warm_want = want
             if self._warm_thread is None:
@@ -1115,6 +1121,17 @@ class Imagery:
         up = lambda a: np.asarray(Image.fromarray(a.astype(np.float32), "F").resize((px, px), Image.BILINEAR))
         return season.grade(rgb, up(xm - xm.min()) + float(xm.min()), up(ym - ym.min()) + float(ym.min()), amounts)
 
+    def _passes(self, zw):
+        """(chain index, source, zoom) in the order _render tries them for texels of zoom zw: each source at its
+        zoom, and a lazy source finer than its min_zoom (co_frederick, z18) also at its coarser zooms down to it, right
+        after: its z18 tiles exist only where warmed / pre-loaded, its z17 ones over the whole base photo."""
+        for i, src in enumerate(self.chain):
+            z = min(zw, src.max_zoom)
+            yield i, src, z
+            if src.lazy:
+                for zc in range(z - 1, src.min_zoom - 1, -1):
+                    yield i, src, zc
+
     def _render(self, frame, x0, y0, size, px, pending=None, skip_lazy=False):
         """Texture of the ENU square [x0, x0+size] x [y0, y0+size] (anchor `frame`), px x px,
         row 0 = north edge, column 0 = west edge (texel centres at (i + 0.5) * size / px).
@@ -1142,9 +1159,8 @@ class Imagery:
         filled = np.zeros((px, px), bool)
         relit = None if self.deshadow is None else np.zeros((px, px), bool)
         used, error = {}, None
-        for i, src in enumerate(self.chain):
+        for i, src, z in self._passes(zw):
             cm_keys = set() if self.colormatch is not None else None
-            z = min(zw, src.max_zoom)
             if z < src.min_zoom or (skip_lazy and src.lazy):
                 continue
             if src.bounds:                  # a regional source elsewhere: not even its mosaic's keys
@@ -1189,7 +1205,7 @@ class Imagery:
                 if relit is not None:
                     relit |= hit & (alpha == 254)
             if hit.any():
-                used[src.name] = int(hit.sum())
+                used[src.name] = used.get(src.name, 0) + int(hit.sum())
                 if cm_keys:
                     used["colormatch"] = used.get("colormatch", 0) + int(hit.sum())
             if filled.all():

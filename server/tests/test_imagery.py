@@ -8,6 +8,7 @@ import io
 import math
 import os
 import re
+import shutil
 import sys
 import tempfile
 import threading
@@ -521,7 +522,8 @@ class ExportTransport:
             z = round(math.log2(imagery.EARTH_CIRC / (x1 - x0)))
             tile = imagery.EARTH_CIRC / 2 ** z
             x, y = round((x0 + imagery.EARTH_CIRC / 2) / tile), round((imagery.EARTH_CIRC / 2 - y1) / tile)
-            name = "naipusda" if "fpac.usda.gov" in url else "md6in" if "mdgeodata" in url else "naip"
+            name = ("naipusda" if "fpac.usda.gov" in url else "md6in" if "mdgeodata" in url
+                    else "co_frederick" if "frederickco" in url else "naip")
             self.requests.append((name, z, x, y))
             status, body = (self.serve_export(z, x, y, int(size), name) if self.by_name
                             else self.serve_export(z, x, y, int(size)))
@@ -811,6 +813,71 @@ class ExportImageryTest(unittest.TestCase):
         self.assertGreaterEqual(len(parents), 2)            # both ends of the path
         _, used = im.render(self.frame, 3000.0, 0.0, 256.0, 256)
         self.assertEqual(set(used), {"naip"})               # on disk before any render
+
+
+class FinerExportTest(unittest.TestCase):
+    """co_frederick: a regional export source with max_zoom 18 (one 1024 px image per z16 parent). warm() fetches its
+    z17 tiles for the base photo and its z18 ones near the path; a texture of 0.5 m texels takes z18 where it is on
+    disk and the same source's z17 elsewhere (never USGS while the town's photo is there)."""
+    LAT, LON = 40.0992, -104.9372       # Frederick, CO
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.frame = g.EnuFrame(self.LAT, self.LON)
+        self.requests = []
+
+        def serve_export(z, x, y, size, name):
+            a = np.zeros((size, size, 3), np.uint8) + np.array((40 + 20 * (z - 14), 120, 60), np.uint8)
+            a[::2, ::2] += 3
+            b = io.BytesIO()
+            Image.fromarray(a).save(b, "JPEG", quality=95)
+            return 200, b.getvalue()
+
+        def serve_xyz(name, z, x, y):
+            a = np.zeros((256, 256, 3), np.uint8) + np.array((200, 30, 30), np.uint8)
+            a[::2, ::2] += 6
+            return 200, png(a)
+        net = netfetch.Fetcher(transport=ExportTransport(serve_export, serve_xyz, self.requests, by_name=True),
+                               sleep=lambda s: None, policies=FAST)
+        self.im = imagery.Imagery(self.tmp.name, ("co_frederick", "usgs"), fetcher=net, tone=0.0)
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def warm(self, points, radius=700.0):
+        im = self.im
+        im.warm(self.frame, points, radius, 1.0)
+        for _ in range(300):
+            with im._warm_cv:
+                if all(im._warm_done(k) for k in im._warm_want):
+                    return
+            time.sleep(0.02)
+        self.fail("warm did not finish")
+
+    def test_source(self):
+        src = imagery.SOURCES["co_frederick"]
+        self.assertEqual((src.max_zoom, src.min_zoom, src.export, src.lazy), (18, 17, 2, True))
+        self.assertIn("co_frederick", imagery.DEFAULT_CHAIN)
+        self.assertLess(imagery.DEFAULT_CHAIN.index("co_frederick"), imagery.DEFAULT_CHAIN.index("naipusda"))
+        self.assertIn("gis.frederickco.gov", netfetch.POLICIES)
+
+    def test_warm_both_zooms(self):
+        self.warm([(0.0, 0.0)])
+        town = [r for r in self.requests if r[0] == "co_frederick"]
+        self.assertEqual({r[1] for r in town}, {15, 16}, "z15 parents (z17 tiles) and z16 parents (z18 tiles)")
+        z16 = [r for r in town if r[1] == 16]
+        self.assertLessEqual(len(z16), 9, "the z18 tiles only within WARM_FINE_M")
+        _, used = self.im._render(self.frame, -64.0, -64.0, 128.0, 256)       # an L-1 tile: 0.5 m texels
+        self.assertEqual(set(used), {"co_frederick"})
+
+    def test_z17_stands_in_for_z18(self):
+        self.warm([(0.0, 0.0)])
+        src = imagery.SOURCES["co_frederick"]
+        shutil.rmtree(os.path.join(self.tmp.name, "co_frederick", "18"))
+        self.im._lru.clear()
+        rgb, used = self.im._render(self.frame, 600.0, 0.0, 128.0, 256)     # outside the z18 ring
+        self.assertEqual(set(used), {"co_frederick"}, "its z17 tiles, not USGS")
+        self.assertGreater(src.max_zoom, imagery.zoom_for(self.LAT, 1.0))
 
 
 class GutterTest(unittest.TestCase):

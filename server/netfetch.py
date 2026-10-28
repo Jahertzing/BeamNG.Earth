@@ -150,6 +150,12 @@ POLICIES = {
                                    allow_prefetch=True, offline_ok=True, miss_ttl=90 * DAY,
                                    binary=True, timeout=30.0, max_attempts=2, base_delay=2.0,
                                    breaker_threshold=6, breaker_window=120.0),
+    # The Town of Frederick, CO's 2024 orthophoto ImageServer (imagery_regional "co_frederick"): ~0.2 s a 1024² image
+    # (2026-10-27), but a small town's server: two at a time, a few a second (a 20 km pre-load is ~4,000 images)
+    "gis.frederickco.gov": HostPolicy(rate=4.0, burst=8.0, max_conc=2, daily_budget=20000,
+                                      allow_prefetch=True, offline_ok=True, miss_ttl=90 * DAY,
+                                      binary=True, timeout=30.0, max_attempts=2, base_delay=2.0,
+                                      breaker_threshold=6, breaker_window=120.0, optional=True),
     # NOAA NCEI's DEM global mosaic (bathymetry for the sea floor, seacarve.py): one export per map-data cell
     "gis.ngdc.noaa.gov": HostPolicy(rate=1.0, burst=4.0, max_conc=2, daily_budget=4000,
                                     allow_prefetch=True, offline_ok=True, miss_ttl=30 * DAY,
@@ -225,7 +231,7 @@ def _regional_policies():
     import urllib.parse
     import imagery_regional
     out = {}
-    for url, _attr, _bounds, kind, _leaf in imagery_regional.REGIONAL.values():
+    for url, _attr, _bounds, kind, _leaf, *_ in imagery_regional.REGIONAL.values():
         host = urllib.parse.urlsplit(url).hostname
         if host in POLICIES or host in out:
             continue

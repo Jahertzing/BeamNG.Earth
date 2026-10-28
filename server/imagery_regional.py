@@ -15,8 +15,10 @@ ARCGIS_EXPORT = "bbox={bbox}&bboxSR=3857&imageSR=3857&size={size},{size}&format=
 WMS_4326 = ("SERVICE=WMS&REQUEST=GetMap&VERSION=1.3.0&STYLES=&CRS=EPSG:4326&BBOX={bbox4326}&WIDTH={size}&HEIGHT={size}"
             "&FORMAT=image/jpeg")
 
-# name: (url, attribution, (south, west, north, east), kind, leaf_off)
+# name: (url, attribution, (south, west, north, east), kind, leaf_off[, max_zoom])
 #   kind "xyz": an XYZ / TMS cache; "export": a WMS / ArcGIS export (lazy)
+#   max_zoom: the finest zoom asked (default 17); an export at 18 is one 1024 px image per z16 parent, its z17 tiles
+#   still cover the base photo (imagery.Imagery._passes)
 REGIONAL = {
     # --- United States (state programmes; spring leaf-off flights) ---------------------------------------------
     "ct2023": ("https://cteco.uconn.edu/ctraster/rest/services/images/Ortho_2023_tiled/ImageServer/tile/{z}/{y}/{x}",
@@ -44,6 +46,13 @@ REGIONAL = {
                  "tile/{z}/{y}/{x}", "Delaware FirstMap 2024 imagery", (38.45, -75.79, 39.84, -75.04), "xyz", True),
     "vermont": ("https://maps.vcgi.vermont.gov/arcgis/rest/services/EGC_services/IMG_VCGI_CLR_WM_CACHE/ImageServer/"
                 "tile/{z}/{y}/{x}", "VCGI orthoimagery", (42.72, -73.44, 45.02, -71.46), "xyz", True),
+    # Colorado: the Town of Frederick's own 3-inch (0.25 ft) orthophotos, flown spring 2024 (leaf-off), ~38 x 21 km round
+    # Frederick, Firestone, Dacono and north Erie (black outside); the user, 2026-10-27, playing there: USGS NAIP is
+    # from 2019 at 0.6 m. The town's GIS terms: "copy, distribute, transmit and adapt ... freely", credit with a link to
+    # its open data catalog. z18 (0.46 m) for the mesh's L-1 tiles.
+    "co_frederick": ("https://gis.frederickco.gov/arcgis/rest/services/Aerial_2024/ImageServer/exportImage?bandIds=0,1,2&"
+                     + ARCGIS_EXPORT, "Town of Frederick, CO 2024 orthoimagery (town-frederickco.opendata.arcgis.com)",
+                     (40.04, -105.16, 40.23, -104.70), "export", True, 18),
     # --- Europe -------------------------------------------------------------------------------------------------
     "swiss": ("https://wmts.geo.admin.ch/1.0.0/ch.swisstopo.swissimage/default/current/3857/{z}/{x}/{y}.jpeg",
               "(c) swisstopo SWISSIMAGE", (45.80, 5.95, 47.81, 10.50), "xyz", False),
