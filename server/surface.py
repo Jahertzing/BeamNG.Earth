@@ -576,8 +576,17 @@ def grass_mask(frame, x0, y0, size, px, surface, widths=None):
     return grass_mask_ex(frame, x0, y0, size, px, surface, widths)[0]
 
 
-def grass_mask_ex(frame, x0, y0, size, px, surface, widths=None):
-    """(grass_mask's mask or None, complete): complete is False only when a land cover cell was not cached yet."""
+def grass_lut(weights):
+    """The class -> weight table of a {WorldCover class: weight} dict (grass_mask_ex's weights)."""
+    lut = np.zeros(256, np.float32)
+    for c, w in weights.items():
+        lut[c] = w
+    return lut
+
+
+def grass_mask_ex(frame, x0, y0, size, px, surface, widths=None, lut=None):
+    """(grass_mask's mask or None, complete): complete is False only when a land cover cell was not cached yet. lut:
+    another class -> weight table (grass_lut; the grass cards': no cropland)."""
     if surface is None:
         return None, True
     t = (np.arange(px) + 0.5) * (size / px)
@@ -587,7 +596,7 @@ def grass_mask_ex(frame, x0, y0, size, px, surface, widths=None):
     classes, complete = surface.classes(la, lo)
     if not complete:
         return None, False
-    w = _GRASS_LUT[classes]
+    w = (_GRASS_LUT if lut is None else lut)[classes]
     urban = classes == roadsmod.URBAN_CLASS
     if urban.any():
         w[urban] = np.where(lawns(la[urban], lo[urban]), GRASS_LAWN_WEIGHT, 0.0)

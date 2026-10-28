@@ -91,7 +91,7 @@ M.GRASS_FIELDS = {
   { 'detailMapUseUV', '1' },
   { 'detailScale', '0.0625 0.0625' },      -- UV1 is world metres / 2: one repeat per 32 m (the texture's)
   { 'detailBaseColorMapStrength', '1' },
-  { 'detailNormalMap', '/art/beamngEarth/detail_grass_nm.dds' },
+  { 'detailNormalMap', '/art/beamngEarth/detail_grass_nm.png' },
   { 'normalDetailMapUseUV', '1' },
   { 'detailNormalMapStrength', '1' },
   { 'roughnessFactor', '1' },

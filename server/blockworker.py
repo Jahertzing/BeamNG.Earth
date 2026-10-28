@@ -732,7 +732,8 @@ def grass_cards_tile(aid, lat, lon, zoom, tx, ty, out_dir, vfs_dir, tex=None):
     frame = geodesy.EnuFrame(lat, lon)
     x0, y0, x1, _ = roadsmod.tile_bbox(tx, ty)
     size = x1 - x0
-    mask, complete = surfacemod.grass_mask_ex(frame, x0, y0, size, grasscards.MASK_PX, _s.surface)
+    mask, complete = surfacemod.grass_mask_ex(frame, x0, y0, size, grasscards.MASK_PX, _s.surface,
+                                              lut=surfacemod.grass_lut(grasscards.CARD_WEIGHT))
     if not complete:
         return None
     if mask is None:

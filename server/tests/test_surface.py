@@ -316,12 +316,11 @@ class ServerSurfaceTest(unittest.TestCase):
         s.dem = self.Dem()
         return s
 
-    def test_grass_masks_in_every_mode(self):
-        """The ground tiles' grass masks (surface.grass_mask) in detail mode too: past the drawn block the far tiles
-        are the ground seen (2026-10-28: the user's game runs detail mode and had no grass layer)."""
-        for mode in ("mesh", "detail"):
-            s = self.make(surface=self.NorthGrass(), near_visual=mode)
-            self.assertTrue(s.grass_masks, mode)
+    def test_grass_masks_in_mesh_mode_only(self):
+        """The ground tiles' grass masks (surface.grass_mask): mesh mode only (in-game 2026-10-28, detail mode: the
+        far tiles' materials turned to version 1.5 drew washed out, and grassland navy)."""
+        self.assertTrue(self.make(surface=self.NorthGrass(), near_visual="mesh").grass_masks)
+        self.assertFalse(self.make(surface=self.NorthGrass(), near_visual="detail").grass_masks)
 
     def test_gas_stations_paint_pads(self):
         # --gas-stations on: the ground's painters get the forecourts (Surface.gas_pads); off: they do not

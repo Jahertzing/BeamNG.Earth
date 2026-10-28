@@ -964,15 +964,15 @@ three days of testing: dem 741 MB / 7.5k files, imagery 1.4 GB / 35k, deshadow 7
   `far_<a>_<key>_grass.dds`, shared by the texture's revisions), and `satmat.lua` gives the material a layer of
   the same photo with our procedural grass detail and detail normal maps on UV1 (`tools/make_grass_textures.py`:
   one 32 m repeat holding tufts, clumps and patches, so each mip level carries the scale that fits its distance),
-  shown through the mask, under the asphalt layer, in every near-visual mode (in detail mode past the drawn block).
-  Mean 0.5 grey: the photo's colour stays. A tile built before
+  shown through the mask, under the asphalt layer; mesh mode only (in detail mode, in game 2026-10-28, the far tiles'
+  materials switched to version 1.5 drew the photo washed out). Mean 0.5 grey: the photo's colour stays. A tile built before
   its land cover was cached goes without (no mask rather than a hole). The settings page's "Grass in the distant
   ground" turns it off for the tiles loaded after.
 - Grass cards to 1 km (2026-10-28, same ask; `server/grasscards.py`, `earthd --grass-cards on`, any near-visual
   mode, with `--surface on`). The flat grass layer gives no height, so between the 3D grass and `SEND_M` (1 km) each road
   tile square of grassy land gets a render-only mesh of crossed cards (one per 3 m cell of a jittered grid hashed
-  from world position, kept by the grass mask's weight, 0.5-0.9 m tall, sunk 0.15 m), each coloured (vertex colour)
-  from the ground photo under it and lit as the ground (normals up). The texture is our own grey blade clump
+  from world position, kept by the grass mask's weight, cropland left out, 0.6-1.1 m tall, sunk 0.15 m), each coloured (vertex
+  colour) from the ground photo under it (blurred to 20 m: no crop rows) and lit as the ground (normals up). The texture is our own grey blade clump
   (`tools/make_grass_card.py`) with coverage-preserving opacity mips, so the alpha-tested cards don't thin out with
   distance. A `vegetation.Tracker` (kind `grfar`, pooled shape slots) sends `grfar_tile` / `grfar_drop`; it skips
   tiles within `SKIP_M` (128 m) when it builds, and the mod (`roads.lua` far kind 'G') hides a tile while the player
