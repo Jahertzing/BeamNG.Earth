@@ -45,6 +45,10 @@ M.RESPAWN_M = { 60, 300 }   -- a respawned car goes this far (min, max) behind t
 M.CUT_M = 60
 M.CUT_S = 4
 M.CUT_FRESH_M = 250
+-- ... but not a car this module put ahead along the player's way at motorway speed (aheadSpot): it faces the way the
+-- player drives, toward the graph's far end, which moves on with the player's block. With CUT_FRESH_M the 150-350 m
+-- spots ahead were all within 250 m of that end, and each such car was respawned again at once: on I-25 one car every
+-- ~2 s went round that loop (the traffic bench, 2026-10-28: cut and ahead respawns rising together).
 M.FRESH_S = 5
 M.JUMP_M = 30           -- a car this much farther than at the last check was respawned (stock or ours)
 -- At speed a car respawned behind the camera is never seen again: on a motorway every car ahead reached the block's
@@ -403,14 +407,66 @@ function M.aheadSpot(px, py, vx, vy, b)
   return px, py, dx, dy, M.AHEAD_M[1], hi
 end
 
+-- Pure: how near a cut a car heading for it is respawned: CUT_FRESH_M while fresh (age s since it appeared), unless
+-- this module put it ahead along the player's way (ahead); else CUT_M or CUT_S seconds at its speed sp.
+function M.cutReach(age, sp, ahead)
+  if age < M.FRESH_S and not ahead then return M.CUT_FRESH_M end
+  return math.max(M.CUT_M, sp * M.CUT_S)
+end
+
 -- Pure: is a car that has stood still since `since` (nil: moving) at distance d from the player stuck at `now`?
 function M.stuck(since, now, d)
   return since ~= nil and now - since >= M.STUCK_S and d >= M.STUCK_FAR_M
 end
 
+-- Each traffic car's own pace on fast roads: the stock AI's "legal" mode drives every edge's speed exactly, so on I-25
+-- every car went the same speed, nobody passed anybody (the user's drive, 2026-10-28). Each car gets a factor on the
+-- edges of at least FAST_MS (45 mph: motorways, trunks, fast arterials; town streets and their signals keep the
+-- limit), about normal around 1 with SPREAD, clipped to 1 +- SPREAD_MAX: 62-78 mph where the AI's target is 70 (a 65
+-- zone, navgraph.py FLOW_MPH). It is set once in the car's own Lua (its mapmgr scales every new map it is handed).
+M.FAST_MS = 20
+M.SPREAD = 0.06
+M.SPREAD_MAX = 0.12
+
+-- Pure: a car's pace factor from three uniform [0, 1) draws (their sum: about normal).
+function M.paceFactor(u1, u2, u3)
+  local z = (u1 + u2 + u3 - 1.5) * 2        -- (sd 1)
+  return math.max(1 - M.SPREAD_MAX, math.min(1 + M.SPREAD_MAX, 1 + z * M.SPREAD))
+end
+
+-- The vehicle Lua giving a car pace factor f: every edge of its map at least FAST_MS fast scaled from its own limit
+-- (kept as _bneLimit: a map scaled again, or handed again, is not scaled twice), now and on every new map (mapmgr.setMap
+-- wrapped once per car; graphpath shares an edge's table between its two directions: scaled once, from its in node).
+function M.paceLua(f)
+  return string.format([[do
+local f, fast = %.4f, %.2f
+local function scale(md)
+  if not (md and md.graph) or md._bnePace == f then return end
+  for a, links in pairs(md.graph) do
+    for _, e in pairs(links) do
+      if e.inNode == a and e.speedLimit then
+        e._bneLimit = e._bneLimit or e.speedLimit
+        if e._bneLimit >= fast then e.speedLimit = e._bneLimit * f end
+      end
+    end
+  end
+  md._bnePace = f
+end
+mapmgr._bnePace = scale
+if not mapmgr._bneSetMap then
+  mapmgr._bneSetMap = mapmgr.setMap
+  mapmgr.setMap = function(...) local r = mapmgr._bneSetMap(...) pcall(mapmgr._bnePace, mapmgr.mapData) return r end
+end
+pcall(scale, mapmgr.mapData)
+end]], f, M.FAST_MS)
+end
+
+local paced = {}        -- car id -> its pace factor (set in its Lua)
+
 -- Traffic cars the block left behind (or all, after a teleport), and stuck ones, are respawned on the graph.
 local stillSince = {}   -- car id -> os.clock() it stopped moving
 local seenAt = {}       -- car id -> { x, y, os.clock() it appeared there }
+local putAhead = {}     -- car id -> true: its last respawn was ours, ahead along the player's way (aheadSpot)
 local function guard(b, all)
   local gt = gameplay_traffic
   if not gt or gt.getState() ~= 'on' then return end
@@ -424,6 +480,10 @@ local function guard(b, all)
   for id in pairs(gt.getTrafficData() or {}) do
     if id ~= me then
       local o = getObjectByID(id)
+      if o and not paced[id] and o.queueLuaCommand then
+        paced[id] = M.paceFactor(math.random(), math.random(), math.random())
+        o:queueLuaCommand(M.paceLua(paced[id]))
+      end
       if o and o:getActive() then
         local p = o:getPosition()
         local u = o:getVelocity()
@@ -431,9 +491,12 @@ local function guard(b, all)
         local dir = sp > 1 and { x = u.x / sp, y = u.y / sp } or o:getDirectionVector()
         local dl = math.sqrt(dir.x * dir.x + dir.y * dir.y)
         local s0 = seenAt[id]
-        if not s0 or (p.x - s0[1]) ^ 2 + (p.y - s0[2]) ^ 2 > M.JUMP_M ^ 2 then s0 = { p.x, p.y, now } end
+        if not s0 or (p.x - s0[1]) ^ 2 + (p.y - s0[2]) ^ 2 > M.JUMP_M ^ 2 then
+          putAhead[id] = putAhead[id] == 'next' or nil   -- (ours just now, or moved by the stock respawn since)
+          s0 = { p.x, p.y, now }
+        end
         seenAt[id] = { p.x, p.y, s0[3] }
-        local reach = now - s0[3] < M.FRESH_S and M.CUT_FRESH_M or math.max(M.CUT_M, sp * M.CUT_S)
+        local reach = M.cutReach(now - s0[3], sp, putAhead[id])
         local toCut = dl > 1e-6 and M.headingToCut(p.x, p.y, dir.x / dl, dir.y / dl, cuts, reach)
         if toCut then stats.cutRespawns = (stats.cutRespawns or 0) + 1 end
         if not paused and o:getVelocity():length() < M.STUCK_MS then
@@ -452,6 +515,7 @@ local function guard(b, all)
           if pp and pu and not all then ax, ay, adx, ady, amin, amax = M.aheadSpot(pp.x, pp.y, pu.x, pu.y, b) end
           if ax then
             stats.aheadRespawns = (stats.aheadRespawns or 0) + 1
+            putAhead[id] = 'next'       -- (its jump, seen at the next check, is ours)
             pcall(gt.forceTeleport, id, vec3(ax, ay, pp.z), vec3(adx, ady, 0), amin, amax)
           elseif cp and cf then
             pcall(gt.forceTeleport, id, cp, -cf, M.RESPAWN_M[1], M.RESPAWN_M[2])
@@ -802,6 +866,8 @@ function M.reset()
   pendingSignals = nil
   stillSince = {}
   seenAt = {}
+  putAhead = {}
+  paced = {}
   cuts = {}
   M.restoreChoice()
   stats = { applies = 0, lastMs = 0, nodes = 0, edges = 0 }
