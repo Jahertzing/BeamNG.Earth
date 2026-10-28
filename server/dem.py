@@ -321,7 +321,7 @@ class Dem:
         now): the rest waits for the next call. Errors skip the tile (asked again on demand)."""
         got = 0
         for z, x, y in keys:
-            if os.path.exists(self._path(MAPTERHORN, z, x, y)):
+            if cachemod.exists(self._path(MAPTERHORN, z, x, y)):
                 continue
             try:
                 if self._download(MAPTERHORN, z, x, y, kind="prefetch") is not None:
@@ -336,9 +336,9 @@ class Dem:
         """True when Mapterhorn tile (z, x, y) needs no download: on disk, a 404 remembered, or not in Mapterhorn's
         file list (_listed; those never land on disk, and routeahead.py's bar stopped short of its total). For
         routeahead.py's progress count: no tile fetch (the file list is read once per session)."""
-        if os.path.exists(self._path(MAPTERHORN, z, x, y)):
+        if cachemod.exists(self._path(MAPTERHORN, z, x, y)):
             return True
-        if os.path.exists(os.path.join(self.cache_dir, MAPTERHORN["name"], str(z), str(x), f"{y}.404")):
+        if cachemod.exists(os.path.join(self.cache_dir, MAPTERHORN["name"], str(z), str(x), f"{y}.404")):
             return True
         return z > GLOBAL_ZOOM and not self._listed(z, x, y)
 

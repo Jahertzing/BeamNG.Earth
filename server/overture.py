@@ -34,6 +34,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 import numpy as np
 
+import cache
 import mapgeom as mg
 import netfetch
 import rangeread
@@ -237,7 +238,7 @@ class StacIndex:
 
     def _json(self, url, path, kind):
         try:
-            with open(path, "rb") as f:
+            with open(cache.resolve(path), "rb") as f:
                 return json.loads(f.read())
         except (OSError, ValueError):
             pass

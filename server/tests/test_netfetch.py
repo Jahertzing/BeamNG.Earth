@@ -893,12 +893,13 @@ class OfflineTest(unittest.TestCase):
 
     def test_cli_flag(self):
         got = []
-        with mock.patch.object(sys, "argv", ["earthd.py", "--offline", "--nice", "0"]), \
+        # (--world-dir off: no world folder left set for the tests that follow, cache.set_world)
+        with mock.patch.object(sys, "argv", ["earthd.py", "--offline", "--nice", "0", "--world-dir", "off"]), \
                 mock.patch.object(earthd.logging, "basicConfig"), \
                 mock.patch.object(earthd, "main_async", lambda args: got.append(args)), \
                 mock.patch.object(earthd.asyncio, "run", lambda coro: None):
             earthd.main()
-            sys.argv[1:] = ["--nice", "0"]
+            sys.argv[1:] = ["--nice", "0", "--world-dir", "off"]
             earthd.main()
         self.assertEqual([a.offline for a in got], [True, False])
 
