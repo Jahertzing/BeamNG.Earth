@@ -62,4 +62,24 @@ do
   be = oldBe
 end
 
+-- cars still spawning in a traffic or parked group are not 'player' cars (farcars saved and respawned them)
+do
+  local function veh(id, fields)
+    local o = { getId = function() return id end, getPosition = function() return { x = 0, y = 0, z = 0 } end,
+      getJBeamFilename = function() return 'simple_traffic' end }
+    for k, v in pairs(fields) do o[k] = v end
+    return o
+  end
+  local objs = { veh(1, {}), veh(2, { vehicleGroup = 'autoTraffic' }), veh(3, { vehicleGroup = 'autoParking' }),
+    veh(4, { isTraffic = 'true' }), veh(5, { vehicleGroup = 'autoTrafficReserve_police_1' }), veh(6, { vehicleGroup = 'my convoy' }) }
+  local oldBe = rawget(_G, 'be')
+  be = { getObjectCount = function() return #objs end, getObject = function(_, i) return objs[i + 1] end }
+  local kind = {}
+  for _, v in ipairs(cf.vehicles()) do kind[v.id] = v.kind end
+  T.check(kind[1] == 'player' and kind[6] == 'player', 'unflagged and a player\'s own group: player')
+  T.check(kind[2] == 'traffic' and kind[5] == 'traffic' and kind[4] == 'traffic', 'traffic groups and isTraffic: traffic')
+  T.check(kind[3] == 'parked', 'the parked group: parked')
+  be = oldBe
+end
+
 T.done('test_collisionfoci')

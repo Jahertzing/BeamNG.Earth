@@ -212,4 +212,20 @@ do
   T.check(N.aheadSpeed(60) == N.AHEAD_V_MAX, 'aheadSpeed: capped')
   T.check(N.aheadSpeed(N.AHEAD_MS) > 13.9, 'aheadSpeed: faster than the stock boost\'s cap from AHEAD_MS on')
 end
+-- traffic that went off on its own soon after a start or a teleport is set up once again, with an explicit amount
+do
+  local w = { untilT = 100, seenOn = true, done = false }
+  T.check(N.shouldRestart(w, 50, 'off'), 'shouldRestart: ran, went off within the watch')
+  T.check(not N.shouldRestart(w, 50, 'on') and not N.shouldRestart(w, 50, 'spawning'), 'shouldRestart: still on or spawning: no')
+  T.check(not N.shouldRestart(w, 101, 'off'), 'shouldRestart: after the watch (the player turned it off): no')
+  T.check(not N.shouldRestart({ untilT = 100, seenOn = false, done = false }, 50, 'off'), 'shouldRestart: never ran yet: no')
+  T.check(not N.shouldRestart({ untilT = 100, seenOn = true, done = true }, 50, 'off') and not N.shouldRestart(nil, 50, 'off'),
+    'shouldRestart: once; not watched: no')
+  T.check(N.restartAmount({ traffic = true, mode = 'normal', trafficAmount = -1 }, 7) == 7, 'restartAmount: normal: the game\'s own, explicit')
+  T.check(N.restartAmount({ traffic = true, mode = 'busy', trafficAmount = -1 }, 7) == 11, 'restartAmount: busy as modeAmount')
+  T.check(N.restartAmount({ traffic = true, trafficAmount = 5 }, 7) == 5, 'restartAmount: the configurator\'s amount')
+  T.check(N.restartAmount({ traffic = true, trafficAmount = -1 }, 7) == 7, 'restartAmount: the configurator on auto')
+  T.check(N.restartAmount({ traffic = false, mode = 'normal' }, 7) == 0 and N.restartAmount({ traffic = true, mode = 'off' }, 7) == 0,
+    'restartAmount: no traffic chosen: none')
+end
 T.done('test_navgraph')

@@ -78,6 +78,11 @@ local stats = { applies = 0, lastMs = 0, nodes = 0, edges = 0 }
 local pendingSignals = nil -- the clipped nodes whose signals go in next frame
 local started = false
 local respawnAll = false
+-- The traffic that went off on its own soon after we started it or the player teleported is set up once again: on
+-- 2026-10-28 a teleport 0.4 s after the cars spawned left gameplay_traffic 'off' with its cars dropped from its list,
+-- and its own amount (the setting less the vehicles about) then 0, so the drive had no traffic.
+M.WATCH_S = 90
+local watch = nil       -- { until os.clock(), seenOn, done } while the traffic is watched
 local lastGuard = -math.huge
 local cuts = {}         -- { x, y } of the applied graph's nodes that lost a road to the clip
 
@@ -609,6 +614,24 @@ function M.modeAmount(mode, auto)
   return math.min(M.BUSY_MAX, math.max(auto + M.BUSY_MORE, n))
 end
 
+-- Pure: does the watched traffic (w: { untilT, seenOn, done }, nil: not watched) want setting up again at `now`, in
+-- gameplay_traffic state `state`? Once it has run ('on') and gone 'off' within the watch, once.
+function M.shouldRestart(w, now, state)
+  return w ~= nil and not w.done and w.seenOn and state == 'off' and now <= w.untilT
+end
+
+-- Pure: the explicit number of cars to set up again (the game's own amount `auto` with nothing subtracted: the cars
+-- it lost may still be about) for the choice c; 0 none.
+function M.restartAmount(c, auto)
+  if not (c and c.traffic) then return 0 end
+  auto = tonumber(auto) or 0
+  if c.mode then
+    local n = M.modeAmount(c.mode, auto)
+    return n < 0 and math.max(0, auto) or n
+  end
+  return (c.trafficAmount or -1) > 0 and c.trafficAmount or math.max(0, auto)
+end
+
 -- Pure on its argument: the choice in freeroam's spawning options `o`, which are then set to disabled: freeroam would
 -- spawn at camera-ready, before our first road graph is in the map; we start them once it is.
 local heldOpts = nil    -- { options table, its traffic values } until freeroam's spawn time has passed
@@ -683,7 +706,31 @@ local function startTraffic()
     if amount ~= 0 then
       local ok, err = pcall(gt.setupTraffic, amount, { police = c.police })
       if not ok then log('W', 'beamngEarth', 'navgraph: setupTraffic: ' .. tostring(err)) end
+      watch = { untilT = os.clock() + M.WATCH_S, seenOn = false, done = false }
     end
+  end
+end
+
+-- The watched traffic went off: the traffic cars it dropped (flagged traffic, not in its table) deleted, and the
+-- choice's cars set up again.
+local function restartTraffic()
+  local gt = gameplay_traffic
+  if not gt then return end
+  local td = gt.getTrafficData and gt.getTrafficData() or {}
+  local me, gone = playerId(), 0
+  for i = (be and be.getObjectCount and be:getObjectCount() or 0) - 1, 0, -1 do
+    local o = be:getObject(i)
+    if o and o:getId() ~= me and require('beamngEarth/collisionfoci').flagKind(o) == 'traffic' and not td[o:getId()] then
+      o:delete()
+      gone = gone + 1
+    end
+  end
+  local okA, auto = pcall(gt.getIdealSpawnAmount, nil, false)
+  local n = M.restartAmount(M.choice, okA and auto or nil)
+  log('W', 'beamngEarth', string.format('navgraph: the traffic went off on its own: %d dropped cars deleted, %d set up again', gone, n))
+  if n > 0 then
+    local ok, err = pcall(gt.setupTraffic, n, { police = M.choice.police })
+    if not ok then log('W', 'beamngEarth', 'navgraph: setupTraffic: ' .. tostring(err)) end
   end
 end
 
@@ -692,6 +739,10 @@ end
 local heldActive = nil
 function M.onTeleport()
   respawnAll = true
+  if started and M.choice.traffic then  -- (each teleport: watched again, one more restart allowed)
+    local gt0 = gameplay_traffic
+    watch = { untilT = os.clock() + M.WATCH_S, seenOn = gt0 ~= nil and gt0.getState() == 'on', done = false }
+  end
   local gt = gameplay_traffic
   if gt and gt.getState() == 'on' and not heldActive then
     local vars = gt.getTrafficVars and gt.getTrafficVars() or {}
@@ -761,6 +812,19 @@ function M.update(aid, b, gov)
     local g = (os.clock() - t0) * 1000
     stats.guardMs = g
     stats.guardMaxMs = math.max(stats.guardMaxMs or 0, g)
+    local gt = watch and gameplay_traffic
+    if gt then
+      local st = gt.getState()
+      if st == 'on' then watch.seenOn = true end
+      if M.shouldRestart(watch, t0, st) then
+        watch.done = true
+        stats.restarts = (stats.restarts or 0) + 1
+        local okR, errR = pcall(restartTraffic)
+        if not okR then log('W', 'beamngEarth', 'navgraph restart: ' .. tostring(errR)) end
+      elseif t0 > watch.untilT then
+        watch = nil
+      end
+    end
   end
   if graph.anchor ~= aid then
     graph = nil
@@ -866,7 +930,7 @@ function M.applies() return stats.applies end
 function M.status()
   return { graph = graph and graph.serial or nil, applies = stats.applies, lastMs = stats.lastMs,
            nodes = stats.nodes, edges = stats.edges, junctions = stats.junctions, started = started,
-           cuts = stats.cuts, cutRespawns = stats.cutRespawns, aheadRespawns = stats.aheadRespawns,
+           restarts = stats.restarts, cuts = stats.cuts, cutRespawns = stats.cutRespawns, aheadRespawns = stats.aheadRespawns,
            resetMs = stats.resetMs, signalsMs = stats.signalsMs, nodesMs = stats.nodesMs, gpsMs = stats.gpsMs,
            applyMs = stats.applyMs, guardMs = stats.guardMs, guardMaxMs = stats.guardMaxMs,
            traffic = gameplay_traffic and gameplay_traffic.getState() or nil }
@@ -875,7 +939,7 @@ end
 function M.reset()
   heads = {}            -- (the level took them with it)
   graph, applied, dirty, lastApply, persistent, ours, foreign = nil, nil, false, -math.huge, nil, false, false
-  started, respawnAll, lastGuard, heldActive = false, false, -math.huge, nil
+  started, respawnAll, lastGuard, heldActive, watch = false, false, -math.huge, nil, nil
   pendingSignals = nil
   stillSince = {}
   seenAt = {}
