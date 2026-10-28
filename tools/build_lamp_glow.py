@@ -75,11 +75,19 @@ def main():
 
 
 def make(name_out, mat, colour, radii, sizes):
-    geoms, nodes = [], []
-    for k, r in enumerate(radii):
+    meshes = []
+    for r in radii:
         P, T = sphere(r)
         n = P / r
-        UV = np.c_[0.5 + 0.5 * n[:, 0], 0.5 + 0.5 * n[:, 1]]
+        meshes.append((P, n, np.c_[0.5 + 0.5 * n[:, 0], 0.5 + 0.5 * n[:, 1]], T))
+    make_lod(name_out, mat, colour, meshes, sizes)
+
+
+def make_lod(name_out, mat, colour, meshes, sizes):
+    """A shape of camera detail levels: meshes[k] = (positions, normals, uvs, tris), drawn from detail size sizes[k]
+    down to the next (the engine's base00 / start01 hierarchy; build_night_landmarks.py's star uses it too)."""
+    geoms, nodes = [], []
+    for k, (P, n, UV, T) in enumerate(meshes):
         g = f"g{k}"
         geoms.append(
             f'<geometry id="{g}" name="{g}"><mesh>\n'
