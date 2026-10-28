@@ -983,6 +983,10 @@ def run_children(a, groups, out, mode):
     """The legs' groups driven by children (child_command) at once, waited for; their summaries read back from
     out/<leg>. Returns (every leg complete, [records] in the groups' order)."""
     far, road = alone_workers(jobs=len(groups)) if mode == "alone" else (1, 1)
+    # (--workers / --road-processes given: each server's own, as without --jobs; the PC's 2026-10-28 --jobs 4 --workers
+    # 3 ran every server at 1 and 1)
+    far = a.workers if a.workers is not None else far
+    road = a.road_processes if a.road_processes is not None else road
     procs = []
     try:
         for i, legs in enumerate(groups):
