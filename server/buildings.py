@@ -711,7 +711,7 @@ def plan(ring, attrs, neighbours=0, lat=None, lon=None, look=None, town=False, d
         facade, plain, wall = attrs["facade_look"], False, attrs["facade_look"]
     if attrs.get("roof_look") in LOOKS:
         roof_mat = attrs["roof_look"]
-    if (barn or shed) and not stone_hut:    # plain walls tinted: barns the region's barn red or wood, sheds the siding colours
+    if (barn or shed) and not stone_hut and attrs.get("facade_look") not in LOOKS:    # plain walls tinted: barns the region's barn red or wood, sheds the siding colours
         tints = WALL_TINTS[SIDING]
         if barn and _hash01(seed, "barn") < style.barn_red:
             facade = f"{SIDING}|{len(tints) - 1 - int(_hash01(seed, 'red') * 2)}"

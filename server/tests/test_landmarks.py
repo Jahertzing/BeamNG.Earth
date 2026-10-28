@@ -122,6 +122,8 @@ class CurvedRoofTest(unittest.TestCase):
         self.assertAlmostEqual(s.height + s.rise, 2.0, places=6)
         self.assertTrue(s.plain)
         self.assertTrue(s.facade.startswith(bld.STONE))
+        s = bld.plan(disc(0, 0, 2.1, 16), {"class": "", "height": 13.0, "roof_shape": "dome", "facade_look": "bne_granite"})
+        self.assertEqual(s.facade, "bne_granite", "a lantern in its building's granite, not a shed's siding")
 
     def test_looks(self):
         self.assertEqual(landmarks.look_of({"roof_color": "gold"}), landmarks.GOLD)
