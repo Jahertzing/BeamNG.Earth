@@ -1300,6 +1300,7 @@ class Server:
                                              (box[0] - 8, box[1] - 8, box[2] + 8, box[3] + 8))
         cover = []                      # the ground carriageways for the decks' parapets (roadmesh.deck ground=)
         pocket_cells = [cell_fn(k) for k in roadsmod.cells_of_tile(anchor.frame, tx, ty, roadsmod.POCKET_REACH_M)]
+        signs = []                      # highway signs (guidesigns.py)
         chunks = roadsmod.build_tile(anchor.frame, tx, ty, cells, elev, urban, walks=walks, deck_context=ctx, bridges=anchor.bridges,
                                      pocket_cells=pocket_cells,     # (the segments going on: their tapers)
                                      walk_cuts=fuel_cuts,    # (the stations' made-up driveways: no sidewalk across them)
@@ -1320,7 +1321,8 @@ class Server:
                                          roadsmod.cells_of_tile(anchor.frame, tx, ty, blockworker.SIGNALS_MARGIN_M)),
                                      barrier_homes=barriersmod.residential_for(
                                          self.mapdata, anchor.frame,
-                                         roadsmod.cells_of_tile(anchor.frame, tx, ty, blockworker.BARRIER_HOMES_MARGIN_M)))
+                                         roadsmod.cells_of_tile(anchor.frame, tx, ty, blockworker.BARRIER_HOMES_MARGIN_M)),
+                                     signs=signs)
         chunks += railsmod.tile_chunks(anchor.frame, tx, ty, cells)     # railway and tram tracks on the ground
         if self.airports is not None:   # runway markings, drawn by the road mesh like the lane lines
             chunks += self.airports.tile_chunks(anchor.frame, tx, ty, elev, roadsmod.tile_bbox)
@@ -1370,7 +1372,8 @@ class Server:
                             + industry.power_plant_sound_rows(anchor.frame, tx, ty, self.mapdata, elev))
         return roadsmod.write_tile(self.out_dir, self.vfs_dir, aid, tx, ty, chunks, walks if self.sidewalks else None,
                                    mesh, dmesh, bld, props, wires, park, tunnel_mesh=tmesh, fuel=fuel,
-                                   rail_mesh=rmesh, garage_sound=garage_sound, wells=oil_wells)
+                                   rail_mesh=rmesh, garage_sound=garage_sound, wells=oil_wells,
+                                   signs=signs[0] if signs else None)
 
     def set_gas_stations(self, on):
         """The settings page's "Gas stations" switch (the mod's gas_stations; the user, 2026-10-23: off saves their
