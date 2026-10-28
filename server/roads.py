@@ -5130,7 +5130,7 @@ def build_tile(frame, tx, ty, cells, elev, urban_fn=None, walks=None, bridges=No
     if signs is not None:                           # highway guide signs, gantries, delineators (guidesigns.py)
         import guidesigns
         signs.append(guidesigns.tile(frame, roads, (x0, y0, x1, y1), ground=ground, urban=urban_fn, mph=mph,
-                                     left_hand=left_hand))
+                                     barriers=barriers, left_hand=left_hand))
     return chunks
 
 
