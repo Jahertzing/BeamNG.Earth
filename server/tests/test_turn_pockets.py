@@ -13,6 +13,7 @@ import roadmesh  # noqa: E402
 import roads  # noqa: E402
 import surface  # noqa: E402
 from test_roads import FRAME, LAT, LON, M_LAT, M_LON, features, flat  # noqa: E402
+from test_roads import rules as test_roads_rules  # noqa: E402
 from test_turn_lanes import LON_US, tagged  # noqa: E402
 
 
@@ -203,6 +204,95 @@ class PocketTest(unittest.TestCase):
         left = [a for a in arrows if a[:, 1].mean() > 0.2]
         self.assertTrue(left)                                  # the left arrow in the pocket (left of the old centre)
         self.assertTrue(all(abs(a[:, 1].mean() - (float(yellow[0][-1, 1]) - lw / 2)) < 1.6 for a in left))
+
+
+class CentreLaneTest(unittest.TestCase):
+    """(b): a centre turn lane (CDOT's painted median: lanes_c) opening where the road goes on from a narrower piece."""
+
+    def test_centre_lane_opens_from_a_side_street(self):
+        rows = [{"lanes:forward": "1", "lanes:backward": "1"},
+                {"lanes:forward": "1", "lanes:backward": "1", "lanes:both_ways": "1"}]
+        lines = [[(-100, 0), (0, 0)], [(0, 0), (200, 0)], [(0, -60), (0, 0), (0, 60)]]
+        f = road(lines, ["primary"] * 2 + ["residential"], ["Main"] * 2 + ["Side"], lanes=[2, 3, None],
+                 rows=rows + [{}])
+        sp = roads.road_specs(f, None)
+        wd = profiles(f)["id001"]
+        dw = sp[1].width - sp[0].width
+        self.assertEqual(edges_at(wd, 0.0), (-dw / 2, -dw / 2))
+        c0, c1 = roads.lane_layout(sp[1])["centre"]
+        s0 = np.zeros(1)
+        self.assertAlmostEqual(roads.widen_off(wd, s0, c0)[0], roads.widen_off(wd, s0, c1)[0], places=6)  # (closed)
+        self.assertAlmostEqual(roads.widen_off(wd, np.array([150.0]), c1)[0], c1)
+
+    def test_not_across_a_junction_of_its_rank(self):
+        rows = [{"lanes:forward": "1", "lanes:backward": "1"},
+                {"lanes:forward": "1", "lanes:backward": "1", "lanes:both_ways": "1"}]
+        lines = [[(-100, 0), (0, 0)], [(0, 0), (200, 0)], [(0, -60), (0, 0), (0, 60)]]
+        f = road(lines, ["primary"] * 2 + ["secondary"], ["Main"] * 2 + ["Cross"], lanes=[2, 3, None],
+                 rows=rows + [{}])
+        wd = profiles(f).get("id001")
+        self.assertTrue(wd is None or not wd.comps)             # (no taper; (c): its centre lane's arrow there)
+
+
+class ApproachTest(unittest.TestCase):
+    """(c): the approaches to a junction of major roads where OpenStreetMap gives no turn lanes."""
+
+    def setUp(self):
+        self.was = roads.POCKET_INFER_ON
+
+    def tearDown(self):
+        roads.POCKET_INFER_ON = self.was
+
+    def junction(self, lanes, rows, beyond=None, cross="secondary", regional=True, link=False):
+        """Main (id000) from x = -200 to the junction at x = 0, crossed there by Cross (id001); Main going on beyond
+        it (id002) with `beyond` lanes when given."""
+        lines = [[(-200, 0), (0, 0)], [(0, -80), (0, 0), (0, 80)]]
+        classes, names, ln, rw = ["primary", cross], ["Main", "Cross"], [lanes, None], [rows, {}]
+        if beyond is not None:
+            lines.append([(0, 0), (200, 0)])
+            classes.append("primary")
+            names.append("Main")
+            ln.append(beyond[0])
+            rw.append(beyond[1])
+        f = road(lines, classes, names, lanes=ln, rows=rw if regional else None)
+        if link:
+            f.rules["subclass"] = test_roads_rules([(1, "link")])
+        return f
+
+    def test_inferred_left_pocket_on_a_four_lane_approach(self):
+        f = self.junction(4, {})
+        wd = profiles(f)["id000"]
+        self.assertGreater(edges_at(wd, wd.L - 1.0)[0], 2.5)    # forward (eastbound) arrives at x = 0: its end
+        self.assertEqual(edges_at(wd, 1.0), (0.0, 0.0))
+        self.assertEqual([(d, t[0]) for d, t in wd.turns], [(1, ("left",))])
+        self.assertEqual(len(wd.added), 1)
+        sp = roads.road_specs(f, None)[0]
+        ring = f.parts(0)[0][0]
+        lonlat, s = roads.widen_nodes(wd, ring, roads.widen_s(wd, ring))
+        pts = np.c_[(lonlat[:, 0] - LON) * M_LON, (lonlat[:, 1] - LAT) * M_LAT, np.full(len(s), 10.0)]
+        ex = roads.extras(sp, pts, LON_US, wid=(wd, s))
+        self.assertTrue([1 for lk, w, ln in ex if lk.get("arrow")])     # (its left arrow in the pocket)
+
+    def test_no_pocket_on_two_lanes_or_without_a_major_road_or_outside_the_tables(self):
+        self.assertEqual(profiles(self.junction(2, {})), {})
+        self.assertEqual(profiles(self.junction(4, {}, cross="residential")), {})
+        self.assertEqual(profiles(self.junction(4, {}, regional=False)), {})
+        self.assertEqual(profiles(self.junction(4, {}, link=True)), {})     # (a slip road is no cross street)
+        roads.POCKET_INFER_ON = False
+        self.assertEqual(profiles(self.junction(4, {})), {})
+
+    def test_a_lane_more_than_goes_on_is_the_turn_lane(self):
+        rows = {"lanes:forward": "3", "lanes:backward": "2"}
+        f = self.junction(5, rows, beyond=(4, {"lanes:forward": "2", "lanes:backward": "2"}))
+        wd = profiles(f)["id000"]
+        self.assertFalse(wd.comps)                              # (no widening: it is counted)
+        self.assertEqual(dict(wd.turns)[1], (("left",), (), ()))
+
+    def test_centre_turn_lane_gets_its_arrow(self):
+        rows = {"lanes:forward": "1", "lanes:backward": "1", "lanes:both_ways": "1"}
+        wd = profiles(self.junction(3, rows))["id000"]
+        self.assertFalse(wd.comps)
+        self.assertIn((1, "C"), wd.turns)
 
 
 class MeshTest(unittest.TestCase):
