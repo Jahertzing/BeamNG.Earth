@@ -74,8 +74,13 @@ class DrivewayTest(unittest.TestCase):
             self.assertGreater(r[2], 106.35)
 
     def test_an_alley_gets_no_mail(self):
-        rows = sl.driveway_rows(drives_along(20, gap=8.0), [], BOX, flat, ll(), lines=street_line(cls="service"))
+        front = [(np.array([(-100.0, 140.0), (500.0, 140.0)]), 4.0, "residential", True)]
+        rows = sl.driveway_rows(drives_along(20, gap=8.0), [], BOX, flat, ll(),
+                                lines=street_line(cls="service") + front)
         self.assertFalse([r for r in rows if r[0] in (sl.G_MAILBOX, sl.G_CBU)])
+        # ... but a lane that is the houses' only road (no street within ALLEY_STREET_M): their mail on it
+        rows = sl.driveway_rows(drives_along(4, gap=40.0), [], BOX, flat, ll(), lines=street_line(cls="service"))
+        self.assertEqual(len([r for r in rows if r[0] == sl.G_MAILBOX]), 4)
 
     def test_nothing_at_the_curb_past_a_dead_end(self):
         rows = sl.driveway_rows(drives_along(4, gap=40.0), [], BOX, flat, ll(),

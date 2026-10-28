@@ -68,6 +68,7 @@ CBU_MIN_HOUSES = 8          # in a subdivision: its mail in a cluster box; fewer
 CBU_CELL_DEG = 0.002        # one cluster box for a subdivision's houses in a ~220 x 170 m cell (USPS CBUs: 8-16 doors
 CBU_CELL_MIN = 3            # each, a few pads a subdivision), where it has at least this many of them
 NO_MAIL_CLASSES = {"service", "track", "path", "footway", "cycleway", "pedestrian", "steps", "bridleway"}   # (alleys)
+ALLEY_STREET_M = 45.0       # a service road counts as an alley when a street passes this near the house
 OFF_END_M = 1.0             # a driveway's mouth this far past its road's end (a dead end): nothing at the curb
 CBU_H = 1.75
 CART_SHARE = 0.12           # houses with their carts out
@@ -179,6 +180,15 @@ class _Segs:
         k, _, _, past = self.nearest(q)
         return self.cls[k], self.urban[k], past > OFF_END_M
 
+    def street_dist(self, q):
+        """m from q to the edge of the nearest road not in NO_MAIL_CLASSES (inf: none)."""
+        keep = np.array([c not in NO_MAIL_CLASSES for c in self.cls], bool)
+        if not keep.any():
+            return math.inf
+        A, D, L2, H = self.A[keep], self.D[keep], self.L2[keep], self.H[keep]
+        t = np.clip(((q - A) * D).sum(1) / L2, 0.0, 1.0)
+        return float((np.hypot(*(q - (A + t[:, None] * D)).T) - H).min())
+
     def clear(self, Q, margin):
         """Which points Q (n, 2) are at least margin off every carriageway."""
         Q = np.asarray(Q, np.float64).reshape(-1, 2)
@@ -203,7 +213,7 @@ def off_roads(rows, lines, margin=ROAD_CLEAR_M):
     return [r for r, k in zip(rows, ok) if k]
 
 
-def out_of(rows, rings, margin=0.6):
+def out_of(rows, rings, margin=0.9):
     """rows without those inside a building or within margin of its wall (rings: footprints in the anchor frame)."""
     if not rows or not rings:
         return rows
@@ -292,6 +302,8 @@ def driveway_rows(drives, walks, box, z_at, to_ll, us=True, town=True, spots=Non
         cls, urban, off_end = segs.road_at(p1)
         if off_end:
             continue
+        if cls in NO_MAIL_CLASSES and segs.street_dist(p0) > ALLEY_STREET_M:
+            cls = "residential"                     # a lane, the house's only road (not an alley behind a street)
         cell = (math.floor(lat / CBU_CELL_DEG), math.floor(lon / CBU_CELL_DEG))
         drive_info.append((k, cell, p1, u, s, half_w, outer, cls, urban))
     # a subdivision's density: the town-street drives within CBU_NEAR_M of each
@@ -442,14 +454,12 @@ def bus_stop_rows(stops, lines, box, z_at, left_hand=False, walks=None, town=Tru
         # on the sidewalk where the street has one (its curb side); a dense core's street without one (a wall at
         # the asphalt): no sign
         if len(wp):
+            # a tile with sidewalks: the sign on one, else none (a stop mapped in a junction, by a wall at the asphalt)
             dw = np.hypot(*(wp - p[None]).T)
             i = int(np.argmin(dw))
-            if dw[i] <= BUS_WALK_M:
-                pp = wp[i] - out_n * max(0.0, wh[i] - 0.5)
-                if every.clear(pp[None], 0.4)[0]:
-                    p = pp
-            elif not town:
+            if dw[i] > BUS_WALK_M or not every.clear(wp[i][None], 0.4)[0]:
                 continue
+            p = wp[i].copy()
         elif not town:
             continue
         # (the stock sign's plate stands out from its pole along its local +x, faces along y: +x to the road shows it
