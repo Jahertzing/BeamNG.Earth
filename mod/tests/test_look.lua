@@ -79,6 +79,19 @@ T.check(objects.BeamNGEarthGradeShader and objects.BeamNGEarthGradeShader.fields
 T.check(enabled and G.isActive() and consts['$gradeTone'] == G.constsFor('colorado')['$gradeTone'], 'on with the constants')
 G.update(false)
 T.check(not enabled and not G.isActive(), 'leaving the level: off')
-clock = 200; G.setMode('off'); G.update(true)
+-- night: every preset fades to the night constants over NIGHT_FADE_S
+T.check(G.constsFor('vivid', 1)['$gradeTone'] == G.constsFor('natural', 1)['$gradeTone'], 'full night: the same night look')
+local function num(str, i) local t = {} for x in str:gmatch('%S+') do t[#t + 1] = tonumber(x) end return t[i] end
+local half = num(G.constsFor('colorado', 0.5)['$gradeTone'], 1)
+T.check(math.abs(half - (G.PRESETS.colorado.tone[1] + G.NIGHT.tone[1]) / 2) < 1e-6, 'half way: the midpoint')
+package.loaded['beamngEarth/nightlights'] = { night = true }
+clock = 300; G.update(true)
+T.check(G.nightBlend() == 1 and consts['$gradeTone'] == G.constsFor('colorado', 1)['$gradeTone'], 'first check at night: night at once')
+package.loaded['beamngEarth/nightlights'].night = false
+clock = 302; G.update(true)
+T.check(math.abs(G.nightBlend() - (1 - 2 / G.NIGHT_FADE_S)) < 1e-9, 'dawn: fades a step per check: ' .. G.nightBlend())
+clock = 400; G.update(true)
+T.check(G.nightBlend() == 0, 'day again')
+clock = 500; G.setMode('off'); G.update(true)
 T.check(not enabled, 'mode off: stays off')
 T.done('test_look')
