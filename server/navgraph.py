@@ -161,7 +161,8 @@ def _deck_z(decks, fid, x, y):
 def build(frame, feats_list, elev, centre, urban_fn=None, window=WINDOW_M, decks=None, widths=None, left_hand=False,
           mph=True, signals=None):
     """{"nodes": {name: [x, y, z, radius]}, "edges": [[in, out, oneway, lanes_out, lanes_in, speed m/s,
-    drivability, radius]]} of the drivable roads in the square of half size `window` around centre (x, y) of
+    drivability, radius, ramp]]} of the drivable roads (ramp: 1 on a ramp or slip road, Overture's subclass "link": the
+    mod's merge assist, mergeassist.lua) in the square of half size `window` around centre (x, y) of
     the anchor frame. feats_list: the "roads" mapgeom.Features of the cells around (duplicates across cells
     are taken once). elev(lat, lon) -> metres. decks: fid -> [(xy, z)] of the bridge parts (roads.BridgeProfiles):
     nodes on a bridge take its deck height (else traffic would spawn on the ground under it), and roads that are
@@ -287,6 +288,7 @@ def build(frame, feats_list, elev, centre, urban_fn=None, window=WINDOW_M, decks
                 dw = driving_width(bspecs[i])
                 if decks_here and dw < w - 0.01:
                     deck_lanes = _lanes(dw, direction != 0, bspecs[i].lanes) + (dw,)
+            ramp = roads._rule_value(sub, i) == "link"
             profile = _speed_profile(xy, w, direction != 0)
             # this road's approaches at its two ends (the graph node next to the junction, whether traffic comes in)
             for end in (0, -1):
@@ -314,7 +316,8 @@ def build(frame, feats_list, elev, centre, urban_fn=None, window=WINDOW_M, decks
                 elo, eli, ew = lo, li, w
                 if deck_lanes and any(t0 <= (full[j] + full[j + 1]) / (2 * L) <= t1 for t0, t1 in decks_here):
                     elo, eli, ew = deck_lanes
-                edges.append([a, b, 1 if direction else 0, elo, eli, round(target, 2), driv, round(ew / 2, 2)])
+                edges.append([a, b, 1 if direction else 0, elo, eli, round(target, 2), driv, round(ew / 2, 2),
+                              1 if ramp else 0])
                 edge_fids.append(fid)
     import islands
     ring = islands.ring_directions(ring_cands, left_hand)

@@ -85,6 +85,13 @@ M.WATCH_S = 90
 local watch = nil       -- { until os.clock(), seenOn, done } while the traffic is watched
 local lastGuard = -math.huge
 local cuts = {}         -- { x, y } of the applied graph's nodes that lost a road to the clip
+-- The merge assist (mergeassist.lua: ramp cars find a gap in the motorway's traffic), every MERGE_S on the applied graph
+M.MERGE = true
+M.MERGE_S = 0.5           -- (it runs with the guard, every GUARD_S at most)
+local merge = require('beamngEarth/mergeassist')
+local lastNodes = nil   -- the node table of the graph applied last (toNodes': positions, links, edges with ramp flags)
+local capped = {}       -- traffic car id -> the merge assist's speed cap on it
+local lastMerge = -math.huge
 
 -- Pure: point inside box {x0, y0, x1, y1} shrunk by m (no box: anywhere).
 function M.inside(b, x, y, m)
@@ -152,7 +159,7 @@ function M.toNodes(g, b, edgeM, leftHand, yieldEvery)
       if not A.links[bb] then
         local edge = { drivability = e[7], oneWay = e[3] == 1, lanes = M.lanes(e[4], e[5], leftHand),
           speedLimit = e[6], inNode = a, outNode = bb, inPos = A.pos, outPos = B.pos,
-          inRadius = e[8], outRadius = e[8] }
+          inRadius = e[8], outRadius = e[8], ramp = e[9] == 1 or nil }
         A.links[bb] = edge
         B.links[a] = edge
         ne = ne + 1
@@ -341,6 +348,7 @@ local function apply(b, pre)
   if mr and mr.reset then pcall(mr.reset) end
   pendingSignals = ts and nodes or nil     -- next frame: a second, smaller hitch instead of one big one
   cuts = cl
+  lastNodes = nodes
   stats.applies, stats.lastMs, stats.nodes, stats.edges = stats.applies + 1, (os.clock() - t0) * 1000, nn, ne
   stats.applyMs = (os.clock() - tN) * 1000
   stats.cuts = #cl
@@ -916,6 +924,22 @@ function M.update(aid, b, gov)
     stats.guardMs = g
     stats.guardMaxMs = math.max(stats.guardMaxMs or 0, g)
     local gt = watch and gameplay_traffic
+    if M.MERGE and t0 - lastMerge >= M.MERGE_S then
+      lastMerge = t0
+      local okM, errM = pcall(function()
+        local ids, me = {}, playerId()
+        local tr = gameplay_traffic
+        if tr and tr.getState() == 'on' then
+          for id in pairs(tr.getTrafficData() or {}) do if id ~= me then ids[#ids + 1] = id end end
+        end
+        local brain = package.loaded['beamngEarth/aibrain']
+        local n, new = merge.update(ids, lastNodes, capped, map.findBestRoad,
+          brain and brain.controls and function(id) return brain.controls(id) end)
+        stats.merging = n
+        stats.mergeAssists = (stats.mergeAssists or 0) + new
+      end)
+      if not okM then log('W', 'beamngEarth', 'navgraph merge: ' .. tostring(errM)) end
+    end
     if gt then
       local st = gt.getState()
       if st == 'on' then watch.seenOn = true end
@@ -1034,6 +1058,7 @@ function M.status()
   return { graph = graph and graph.serial or nil, applies = stats.applies, lastMs = stats.lastMs,
            nodes = stats.nodes, edges = stats.edges, junctions = stats.junctions, started = started,
            restarts = stats.restarts, cuts = stats.cuts, cutRespawns = stats.cutRespawns, aheadRespawns = stats.aheadRespawns,
+           merging = stats.merging, mergeAssists = stats.mergeAssists,
            resetMs = stats.resetMs, signalsMs = stats.signalsMs, nodesMs = stats.nodesMs, gpsMs = stats.gpsMs,
            applyMs = stats.applyMs, guardMs = stats.guardMs, guardMaxMs = stats.guardMaxMs,
            routesKept = stats.routesKept, routesDropped = stats.routesDropped,
@@ -1050,6 +1075,7 @@ function M.reset()
   putAhead = {}
   paced = {}
   cuts = {}
+  lastNodes, capped, lastMerge = nil, {}, -math.huge
   M.restoreChoice()
   stats = { applies = 0, lastMs = 0, nodes = 0, edges = 0 }
   prep, waited = nil, 0

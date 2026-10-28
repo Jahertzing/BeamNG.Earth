@@ -48,6 +48,18 @@ class GraphTest(unittest.TestCase):
             self.assertAlmostEqual(e[5], 20.0, places=2)
         self.assertTrue(any(e[1] == "cA" for e in g["edges"]))
 
+    def test_ramp_edges_are_flagged(self):
+        # (the mod's merge assist finds on-ramps by it: edge[8], Overture's subclass "link")
+        g = graph([[(0, 0), (100, 0)], [(-80, -40), (0, 0)]], ["motorway", "motorway"],
+                  connectors=[(0, "J", 0.0, 0.0), (0, "B", 1.0, 1.0), (1, "R", 0.0, 0.0), (1, "J", 1.0, 1.0)],
+                  oneway=[(0, 1.0), (1, 1.0)], subclass=[(1, "link")])
+        main = [e for e in g["edges"] if e[1] == "cB" or e[0] == "cJ"]
+        ramp = [e for e in g["edges"] if e[1] == "cJ"]
+        self.assertTrue(main and ramp)
+        self.assertTrue(all(len(e) == 9 for e in g["edges"]))
+        self.assertTrue(all(e[8] == 0 for e in main))
+        self.assertTrue(all(e[8] == 1 for e in ramp))
+
     def test_not_drivable_and_window(self):
         g = graph([[(0, 0), (50, 0)], [(0, 10), (50, 10)], [(0, 20), (50, 20)], [(5000, 0), (5100, 0)]],
                   ["footway", "service", "residential", "residential"], subclass=[(1, "parking_aisle")])
