@@ -15,13 +15,13 @@ M.CHECK_S = 2           -- re-assert enabled / constants this often (a graphics-
 -- the pivot (the probe's dusk shots: full contrast crushed the foreground to black).
 M.PRESETS = {
   -- dry high-plains light: a touch warm, firmer contrast, greens and browns lifted without neon, cool shadows
-  colorado = { balance = { 1.025, 1.0, 0.965, 1 }, tone = { 1.15, 0.42, 1.08, 0.35 },
-    shadows = { 0.47, 0.495, 0.545, 0.55 }, highlights = { 0.545, 0.515, 0.47, 0.45 }, misc = { 0.12, 0.95, 0.4, 0 } },
+  colorado = { balance = { 1.025, 1.0, 0.965, 1 }, tone = { 1.15, 0.38, 1.08, 0.35 },
+    shadows = { 0.47, 0.495, 0.545, 0.55 }, highlights = { 0.545, 0.515, 0.47, 0.45 }, misc = { 0.05, 0.95, 0.4, 0 } },
   -- only the photos' flatness taken out
   natural = { balance = { 1.0, 1.0, 1.0, 1 }, tone = { 1.06, 0.42, 1.0, 0.18 },
-    shadows = { 0.5, 0.5, 0.5, 0 }, highlights = { 0.5, 0.5, 0.5, 0 }, misc = { 0.08, 0.95, 0.6, 0 } },
-  vivid = { balance = { 1.02, 1.0, 0.97, 1 }, tone = { 1.22, 0.42, 1.16, 0.45 },
-    shadows = { 0.465, 0.49, 0.55, 0.65 }, highlights = { 0.55, 0.52, 0.465, 0.55 }, misc = { 0.16, 0.92, 0.5, 0 } },
+    shadows = { 0.5, 0.5, 0.5, 0 }, highlights = { 0.5, 0.5, 0.5, 0 }, misc = { 0.03, 0.95, 0.6, 0 } },
+  vivid = { balance = { 1.02, 1.0, 0.97, 1 }, tone = { 1.22, 0.38, 1.16, 0.45 },
+    shadows = { 0.465, 0.49, 0.55, 0.65 }, highlights = { 0.55, 0.52, 0.465, 0.55 }, misc = { 0.07, 0.92, 0.5, 0 } },
 }
 M.NAMES = { 'off', 'natural', 'colorado', 'vivid' }
 
