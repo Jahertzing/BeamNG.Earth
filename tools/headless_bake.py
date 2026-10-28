@@ -11,16 +11,27 @@ the benchmark.
 
   python3 tools/headless_bake.py                         every planned route (route_bake.py plan), one way
   python3 tools/headless_bake.py --routes i25 --both-ways
+  python3 tools/headless_bake.py --jobs 2                the routes at once, a server each (the PC to itself)
   python3 tools/headless_bake.py --connect 47620         a server already running (tests; never the game's)
 
 The server: launcher.py --server with the launcher's own options (RECOMMENDED, the mod settings' setting_flags, the
 remembered --cache-dir) and this process's environment, so its keys are the game server's when both start from the
-same folder and shell; then --port 0 (a free port: never the game's GAME_PORT), --workers 1 and --road-processes 1,
---load-boost off (it never lends itself the game's cores), --map-tiles off. Windows: the idle priority class (its worker
-processes inherit it; --nice 0, or it would raise itself to below normal); elsewhere --nice 19 --sched idle. It shares
-the game's user folder (each server touches its session marker every minute and sweeps only folders idle for ten), the
-download cache and the world folder (revisit writes a temp file and renames it). It ends with this tool: stopped in a
-finally, and launcher.watch_parent (BNGEARTH_PARENT) ends it if this process is killed.
+same folder and shell; then --port 0 (a free port: never the game's GAME_PORT), --load-boost off (it never lends
+itself the game's cores), --map-tiles off, and its workers by --mode:
+  game   the game is running (--mode auto finds its process): --workers 1 and --road-processes 1 (THROTTLE), Windows
+         the idle priority class (its worker processes inherit it; --nice 0, or it would raise itself to below
+         normal), elsewhere --nice 19 --sched idle;
+  alone  no game: the machine's share (alone_workers: a far worker per 4 CPUs, a road process per 6, split between
+         --jobs), the below normal class on Windows, --nice 10 elsewhere. The bake of 2026-10-28 10:18 used 0.8 of 24
+         CPUs with the throttle while the car stood 45% of the time for far and road tiles.
+It shares the game's user folder (each server touches its session marker every minute and sweeps only folders idle for
+ten), the download cache and the world folder (revisit writes a temp file and renames it; two servers of one code
+baking at once write the same items at most twice). It ends with this tool: stopped in a finally, and
+launcher.watch_parent (BNGEARTH_PARENT) ends it if this process is killed.
+
+--jobs N: the legs (a route one way, or back with --both-ways) shared out over N copies of this tool, each with a
+server of its own and the workers divided, all under one run in the manifest (the parent's, from the children's
+summary.json files), the children's lines prefixed with their leg.
 
 The client (the mod's rules from server/tests/modsim.py, line-by-line ports of follow.lua and rebase.lua): hello; per
 route a teleport to its start (the anchor pinned as routepins.lua does: the planned anchor within PIN_SHARE of the
@@ -31,6 +42,12 @@ not count: it commits past the rebase distance), the next block ready before the
 final, at most --roads-q road tiles and --backlog-q far tiles still to come round the car. After --max-wait s at one
 spot it moves on anyway (counted in the summary). Writes <out>/<route>/samples.jsonl and summary.json, and a run in the
 bake's manifest.json (route_bake.py status / clean read it).
+
+The speed (SPEED, --speed) is the bake's pace, not a car's: the car stands wherever the server has not finished, so
+a faster car only shortens the stretches with nothing to wait for. At the ghost drive's 27 m/s a 94 km route took
+58 min with nothing to build, 53% of a 41 min run (2026-10-28 10:18; the terrain blocks took 96 s of it). The pose
+carries the speed, so the server's road lead (roads.LEAD_S of driving, LEAD_MAX_M at most) grows to its cap: a
+superset of a real drive's tiles. The summary's seconds_by says where a leg's time went (moving, or each wait).
 """
 import argparse
 import json
@@ -57,7 +74,7 @@ GAME_PORT = 47613           # earthd's default: the game's server (launcher.SERV
 IS_WIN = os.name == "nt"
 TICK_S = 0.1                # the client's frame
 POSE_S = 0.5                # core.lua POSE_INTERVAL
-SPEED = 27.0                # m/s along the road (the ghost drive's)
+SPEED = 80.0                # m/s along the road: the pace between waits (the ghost drive's 27 m/s capped the bake)
 ROADS_Q = 1                 # road tiles round the car still to come, at most, to move on
 BACKLOG_Q = 4               # far tiles likewise (the ghost's --backlog-q)
 EDGE_M = 160.0              # the next block must be ready before the car is this near its block's edge
@@ -73,15 +90,57 @@ CAR_Z = 0.5                 # the car's position over the ground (the pose's z)
 SAMPLE_S = 1.0              # a samples.jsonl line this often
 LISTEN_RE = re.compile(r"earthd listening on 127\.0\.0\.1:(\d+)")
 MOD_VERSION = re.search(r"MOD_VERSION = '([^']+)'", (modsim.MOD_DIR / "core.lua").read_text()).group(1)
-THROTTLE = ["--workers", "1", "--road-processes", "1", "--load-boost", "off", "--map-tiles", "off"]
+THROTTLE = ["--workers", "1", "--road-processes", "1", "--load-boost", "off", "--map-tiles", "off"]   # --mode game
+QUIET = ["--load-boost", "off", "--map-tiles", "off"]       # both modes: never the game's cores, no map tiles
+GAME_EXES = ("BeamNG.drive.x64.exe", "BeamNG.drive.x64")    # the game itself (not its launcher BeamNG.drive.exe)
+ALONE_FAR_PER_CPU = 4       # --mode alone: a far-tile worker per this many CPUs (os.cpu_count: threads) ...
+ALONE_ROAD_PER_CPU = 6      # ... and a road-tile process per this many
+ALONE_MAX = (8, 4)          # at most (far workers, road processes) for one server
+MODES = ("auto", "game", "alone")
 
 
 # --- the server -----------------------------------------------------------------------------------------------------
-def server_command(user_dir, port=0, cache_dir=None, win=IS_WIN):
+def alone_workers(cpus=None, jobs=1):
+    """(far workers, road processes) of one of jobs servers with the machine to themselves: a far worker per
+    ALONE_FAR_PER_CPU CPUs and a road process per ALONE_ROAD_PER_CPU, ALONE_MAX at most, divided between the jobs,
+    at least one each. 24 CPUs: (6, 4); two jobs (3, 2)."""
+    cpus = (os.cpu_count() or 1) if cpus is None else cpus
+    jobs = max(1, int(jobs))
+    far = min(ALONE_MAX[0], cpus // ALONE_FAR_PER_CPU)
+    road = min(ALONE_MAX[1], cpus // ALONE_ROAD_PER_CPU)
+    return max(1, far // jobs), max(1, road // jobs)
+
+
+def game_running(win=IS_WIN):
+    """Whether the game's own process (GAME_EXES) runs: --mode auto's test. False when it cannot be told."""
+    try:
+        if win:
+            r = subprocess.run(["tasklist", "/FI", f"IMAGENAME eq {GAME_EXES[0]}", "/FO", "CSV", "/NH"],
+                               capture_output=True, timeout=20)
+            return f'"{GAME_EXES[0]}"' in (r.stdout or b"").decode("utf-8", errors="replace")
+        r = subprocess.run(["pgrep", "-x", GAME_EXES[1]], capture_output=True, timeout=20)
+        return r.returncode == 0
+    except (OSError, subprocess.SubprocessError):
+        return False
+
+
+def resolve_mode(mode, win=IS_WIN):
+    """"game" or "alone" for --mode (auto: alone unless the game runs)."""
+    if mode not in MODES:
+        raise ValueError(f"mode {mode!r}: one of {', '.join(MODES)}")
+    if mode == "auto":
+        return "game" if game_running(win) else "alone"
+    return mode
+
+
+def server_command(user_dir, port=0, cache_dir=None, win=IS_WIN, mode="game", workers=None, road_processes=None):
     """launcher.start_server's command for user_dir (its options and the mod settings' flags, the remembered cache
-    folder), then this tool's: a free port, few workers, idle priority."""
+    folder), then this tool's: a free port, and by mode ("game" | "alone") the workers and priority (workers,
+    road_processes: given, or THROTTLE's / alone_workers' for one job)."""
     if port == GAME_PORT:
         raise ValueError(f"port {GAME_PORT} is the game's server")
+    if mode not in ("game", "alone"):
+        raise ValueError(f"mode {mode!r}: game or alone (resolve_mode)")
     import launcher
     if cache_dir is None:
         cache_dir = launcher.cache_dir_arg(None)
@@ -89,19 +148,30 @@ def server_command(user_dir, port=0, cache_dir=None, win=IS_WIN):
     cmd += launcher.RECOMMENDED + launcher.setting_flags(user_dir)
     if cache_dir:
         cmd += ["--cache-dir", cache_dir]
-    cmd += ["--port", str(int(port))] + THROTTLE
-    cmd += ["--nice", "0"] if win else ["--nice", "19", "--sched", "idle"]
+    cmd += ["--port", str(int(port))]
+    if mode == "game" and workers is None and road_processes is None:
+        cmd += THROTTLE
+    else:
+        far, road = (1, 1) if mode == "game" else alone_workers()
+        cmd += ["--workers", str(int(workers if workers is not None else far)),
+                "--road-processes", str(int(road_processes if road_processes is not None else road))] + QUIET
+    if mode == "game":
+        cmd += ["--nice", "0"] if win else ["--nice", "19", "--sched", "idle"]
+    else:           # (Windows: the class is start_server's; --nice 0 keeps the server from changing it)
+        cmd += ["--nice", "0"] if win else ["--nice", "10"]
     return cmd
 
 
-def start_server(cmd, log_path, timeout=START_S):
-    """(process, port): cmd started at idle priority, its output to log_path, once it listens."""
+def start_server(cmd, log_path, timeout=START_S, mode="game"):
+    """(process, port): cmd started at idle priority (mode "alone": below normal), its output to log_path, once it
+    listens."""
     # (BNE_REVISIT_GENS=bake: builds what an older generation baked anew and marks the anchors it bakes, revisit.py
     # "Generations"; not in the code key)
     env = dict(os.environ, BNGEARTH_PARENT=str(os.getpid()), PYTHONUNBUFFERED="1", BNE_REVISIT_GENS="bake")
     kw = {"cwd": ROOT, "env": env}
     if IS_WIN:
-        kw["creationflags"] = subprocess.IDLE_PRIORITY_CLASS | subprocess.CREATE_NEW_PROCESS_GROUP
+        cls = subprocess.BELOW_NORMAL_PRIORITY_CLASS if mode == "alone" else subprocess.IDLE_PRIORITY_CLASS
+        kw["creationflags"] = cls | subprocess.CREATE_NEW_PROCESS_GROUP
     else:
         kw["start_new_session"] = True
     os.makedirs(os.path.dirname(log_path), exist_ok=True)
@@ -221,6 +291,20 @@ def rebase_hint(vx, vy, dist, distance, dx, dy, size, latency=None):
     return modsim.follow_target(dx + px, dy + py, vx, vy, size)
 
 
+CAUSES = ("moving", "anchor", "block", "ground", "roads", "far")   # summary seconds_by: where a leg's time went
+
+
+def cause_of(why):
+    """The cause (CAUSES) of a wait: its first reason's (waiting_for's order: the anchor, the block, the ground, the
+    road tiles, the far tiles)."""
+    w = why[0] if why else ""
+    for cause, start in (("anchor", "anchor request"), ("block", "terrain block"), ("ground", "ground"),
+                         ("roads", "road tiles"), ("far", "far tiles")):
+        if w.startswith(start):
+            return cause
+    return "far"
+
+
 def waiting_for(st, edge, a):
     """Why the car does not move on yet (empty: it does). st: the drive's state, edge: the car's distance to its
     block's ground edge (None: no block), a: the options."""
@@ -286,6 +370,7 @@ class Drive:
         self.stats = {"rebases": 0, "prepares": 0, "commits": 0, "anchor_errors": 0, "terrain_errors": 0,
                       "discards": 0, "anchors": []}
         self.waits = []
+        self.by = {k: 0.0 for k in CAUSES}      # seconds by cause: moving, or the first wait reason's (cause_of)
 
     def rid(self):
         self.next_id += 1
@@ -493,6 +578,7 @@ class Drive:
                         self.say(f"  gave up waiting at {wait['at_km']} km after {now - wait['t0']:.0f} s: "
                                  f"{'; '.join(why)}")
                     wait = None
+                self.by[cause_of(why) if why else "moving"] += dt
                 if s >= self.route.length and (not why or gave_up):
                     break
                 if not why or gave_up:
@@ -516,6 +602,7 @@ class Drive:
     def summary(self, seconds, s):
         return {"seconds": round(seconds, 1), "km": round(s / 1000, 2), "route_km": round(self.route.length / 1000, 2),
                 "complete": s >= self.route.length - 1, **{k: v for k, v in self.stats.items()},
+                "speed": self.a.speed, "seconds_by": {k: round(v, 1) for k, v in self.by.items()},
                 "waits": {"count": len(self.waits), "seconds": round(sum(w["s"] for w in self.waits), 1),
                           "gave_up": sum(1 for w in self.waits if w["gave_up"]),
                           "longest": sorted(self.waits, key=lambda w: -w["s"])[:10]}}
@@ -538,11 +625,177 @@ def bne_env():
     return {k: v for k, v in sorted(os.environ.items()) if k.startswith("BNE_")}
 
 
+# --- the legs (--jobs) ----------------------------------------------------------------------------------------------
+def legs_of(names, both_ways):
+    """The legs [(route, back)]: each route one way, and back again too with both_ways."""
+    return [(n, back) for n in names for back in ((False, True) if both_ways else (False,))]
+
+
+def leg_label(route, back):
+    return f"{route}{'_back' if back else ''}"
+
+
+def parse_legs(text):
+    """[(route, back)] of --legs "i25,downtown_back"."""
+    out = []
+    for item in text.split(","):
+        item = item.strip()
+        if item:
+            out.append((item[:-5], True) if item.endswith("_back") else (item, False))
+    return out
+
+
+def share_out(legs, jobs):
+    """The legs dealt round to jobs lists (the routes' lengths are not known here: round robin), empty lists left
+    out."""
+    jobs = max(1, int(jobs))
+    groups = [legs[i::jobs] for i in range(jobs)]
+    return [g for g in groups if g]
+
+
+def by_text(summary):
+    """"moving 1055 s, far 211 s, roads 180 s" of a summary's seconds_by (moving first, then the longest waits)."""
+    by = summary.get("seconds_by") or {}
+    parts = [("moving", by.get("moving", 0.0))]
+    parts += sorted(((k, v) for k, v in by.items() if k != "moving" and v >= 0.5), key=lambda kv: -kv[1])
+    return ", ".join(f"{k} {v:.0f} s" for k, v in parts)
+
+
+def saying(prefix):
+    """print with a prefix on every line (a --jobs child: its legs')."""
+    if not prefix:
+        return print
+
+    def say(*x, **k):
+        print(prefix + " ".join(str(v) for v in x), **k)
+    return say
+
+
+def leg_report(leg, summary):
+    w = summary["waits"]
+    return (f"{leg}: {summary['km']} of {summary['route_km']} km in {summary['seconds']:.0f} s ({by_text(summary)}); "
+            f"{summary['rebases']} rebases, {summary['prepares']} blocks asked; waited {w['count']}x "
+            f"{w['seconds']:.0f} s ({w['gave_up']} gave up)")
+
+
+def drive_legs(a, legs, lines, routes_file, anchors, pin_m, distance, out, mode, workers=None, road_processes=None,
+               prefix="", on_leg=None):
+    """A server (unless a.connect) and the legs driven through it in turn, each leg's summary.json in out/<leg>;
+    on_leg(record) after each. Returns (every leg complete, [records])."""
+    say = saying(prefix)
+    proc = c = None
+    ok, records = True, []
+    try:
+        if a.connect:
+            port = a.connect
+        else:
+            cmd = server_command(a.user_dir, 0, a.cache_dir, mode=mode, workers=workers, road_processes=road_processes)
+            say("server: " + " ".join(cmd[1:]), flush=True)
+            tag = ("-" + prefix.strip(": ")) if prefix else ""
+            log_path = os.path.join(out, f"server{tag}.log")
+            proc, port = start_server(cmd, log_path, mode=mode)
+            say(f"server listening on {port} (log {log_path})", flush=True)
+        c = Client(port)
+        h = hello(c)
+        size = int(h.get("blockSize") or 1024)
+        say(f"session {h.get('sessionId')}, block {size}, near visual {h.get('nearVisual')}", flush=True)
+        next_id = 1
+        for n, back in legs:
+            if n not in lines:
+                print(f"{prefix}{n}: not in {routes_file}", file=sys.stderr)
+                ok = False
+                continue
+            route = gd.load_route(routes_file, n, back)
+            leg = leg_label(n, back)
+            lo = os.path.join(out, leg)
+            os.makedirs(lo, exist_ok=True)
+            say(f"{leg}: {route.length / 1000:.1f} km at {a.speed:g} m/s", flush=True)
+            d = Drive(c, route, anchors, pin_m, distance, size, a.user_dir, a, next_id, lo, say=say)
+            summary = d.run()
+            next_id = d.next_id
+            rb.write_json(os.path.join(lo, "summary.json"), summary)
+            rec = {"route": n, "back": back, "driver": "headless", "rc": 0, "out": lo, "summary": summary}
+            records.append(rec)
+            if on_leg is not None:
+                on_leg(rec)
+            say(leg_report(leg, summary), flush=True)
+            ok = ok and summary["complete"]
+    except KeyboardInterrupt:
+        print(f"{prefix}stopped", file=sys.stderr)
+        ok = False
+    except (RuntimeError, ConnectionError, OSError) as e:
+        print(f"{prefix}error: {e}", file=sys.stderr)
+        ok = False
+    finally:
+        if c is not None:
+            c.close()
+        stop_server(proc)
+    return ok, records
+
+
+def child_command(a, legs, out, mode, workers, road_processes):
+    """This tool again for legs (a --jobs child): the same options, its server's workers, the parent's run folder."""
+    cmd = [sys.executable, os.path.abspath(__file__), "--child", "--legs", ",".join(leg_label(*lg) for lg in legs),
+           "--out", out, "--mode", mode, "--workers", str(workers), "--road-processes", str(road_processes),
+           "--speed", str(a.speed), "--roads-q", str(a.roads_q), "--backlog-q", str(a.backlog_q),
+           "--edge-m", str(a.edge_m), "--max-wait", str(a.max_wait), "--ground-wait", str(a.ground_wait)]
+    for opt in ("cache_dir", "world_dir", "user_dir", "rebase_m"):
+        v = getattr(a, opt, None)
+        if v is not None:
+            cmd += ["--" + opt.replace("_", "-"), str(v)]
+    return cmd
+
+
+def run_children(a, groups, out, mode):
+    """The legs' groups driven by children (child_command) at once, waited for; their summaries read back from
+    out/<leg>. Returns (every leg complete, [records] in the groups' order)."""
+    far, road = alone_workers(jobs=len(groups)) if mode == "alone" else (1, 1)
+    procs = []
+    try:
+        for i, legs in enumerate(groups):
+            cmd = child_command(a, legs, out, mode, far, road)
+            print(f"job {i + 1}: {', '.join(leg_label(*lg) for lg in legs)} ({far} far workers, {road} road "
+                  f"processes)", flush=True)
+            procs.append(subprocess.Popen(cmd, cwd=ROOT, env=dict(os.environ, PYTHONUNBUFFERED="1")))
+        while any(p.poll() is None for p in procs):
+            time.sleep(1.0)
+    except KeyboardInterrupt:
+        print("stopped", file=sys.stderr)
+        for p in procs:
+            if p.poll() is None:
+                p.terminate()      # (its server ends with it: launcher.watch_parent)
+        for p in procs:
+            try:
+                p.wait(30)
+            except subprocess.TimeoutExpired:
+                p.kill()
+    ok, records = True, []
+    for legs, p in zip(groups, procs):
+        for n, back in legs:
+            lo = os.path.join(out, leg_label(n, back))
+            summary = rb.read_json(os.path.join(lo, "summary.json"))
+            records.append({"route": n, "back": back, "driver": "headless", "rc": p.returncode, "out": lo,
+                            "summary": summary})
+            ok = ok and p.returncode == 0 and bool(summary and summary.get("complete"))
+            if summary:
+                print(leg_report(leg_label(n, back), summary), flush=True)
+            else:
+                print(f"{leg_label(n, back)}: no summary (job exit {p.returncode})", file=sys.stderr)
+    return ok, records
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--routes", default=None, help="comma list of the planned routes (default: all in routes.json)")
     ap.add_argument("--both-ways", action="store_true", help="each route back again too")
-    ap.add_argument("--speed", type=float, default=SPEED, help="m/s along the road")
+    ap.add_argument("--speed", type=float, default=SPEED, help="m/s along the road between waits (default %(default)g)")
+    ap.add_argument("--mode", choices=MODES, default="auto",
+                    help="game: the game runs, one worker at idle priority; alone: the machine's share of workers "
+                         "(alone_workers) below normal; auto (default): alone unless the game's process is found")
+    ap.add_argument("--workers", type=int, default=None, help="far-tile workers of the server (default: the mode's)")
+    ap.add_argument("--road-processes", type=int, default=None, help="road-tile processes (default: the mode's)")
+    ap.add_argument("--jobs", type=int, default=1,
+                    help="the legs shared out over this many servers at once, the workers divided (default 1)")
     ap.add_argument("--roads-q", type=int, default=ROADS_Q)
     ap.add_argument("--backlog-q", type=int, default=BACKLOG_Q)
     ap.add_argument("--edge-m", type=float, default=EDGE_M)
@@ -555,9 +808,13 @@ def main(argv=None):
     ap.add_argument("--user-dir", default=None, help="the game's user folder (default: the one the game uses)")
     ap.add_argument("--rebase-m", type=float, default=None, help="the rebase distance (default: the mod's setting)")
     ap.add_argument("--out", default=os.path.join(ROOT, "build", "headless_bake"))
+    ap.add_argument("--legs", default=None, help=argparse.SUPPRESS)       # a --jobs child: "i25,downtown_back"
+    ap.add_argument("--child", action="store_true", help=argparse.SUPPRESS)  # ... no manifest, --out is the run's
     a = ap.parse_args(argv)
     if a.connect == GAME_PORT:
         ap.error(f"port {GAME_PORT} is the game's server: this tool drives a server of its own")
+    if a.jobs < 1:
+        ap.error("--jobs: at least 1")
     a.world_dir = a.world_dir or rb.default_world_dir()
     a.user_dir = a.user_dir or rb.default_user_dir()
     import revisit
@@ -569,12 +826,20 @@ def main(argv=None):
         print(f"no plan in {bd}: route_bake.py plan first", file=sys.stderr)
         return 2
     names = a.routes.split(",") if a.routes else list(lines)
+    legs = parse_legs(a.legs) if a.legs else legs_of(names, a.both_ways)
     distance = a.rebase_m or rb.rebase_distance(a.user_dir)
     if data.get("rebaseDistance") and abs(float(data["rebaseDistance"]) - distance) > 1:
         print(f"warning: the plan is for rebases every {float(data['rebaseDistance']) / 1000:g} km, the mod's setting "
               f"is {distance / 1000:g} km: plan again (route_bake.py plan)", file=sys.stderr)
     anchors = [tuple(map(float, x)) for x in data.get("anchors") or ()]
     pin_m = pin_metres(data, distance)
+    mode = resolve_mode(a.mode)
+    if a.child:         # (a --jobs child: the parent's run folder and manifest entry)
+        os.makedirs(a.out, exist_ok=True)
+        prefix = ",".join(leg_label(*lg) for lg in legs) + ": "
+        ok, _ = drive_legs(a, legs, lines, routes_file, anchors, pin_m, distance, a.out, mode, a.workers,
+                           a.road_processes, prefix=prefix)
+        return 0 if ok else 1
     code = revisit.code_key()
     stamp = time.strftime("%Y%m%d-%H%M%S")
     out = os.path.join(a.out, stamp)
@@ -582,63 +847,29 @@ def main(argv=None):
     man_path = os.path.join(bd, rb.MANIFEST)
     man = rb.read_json(man_path, {})
     prior = next((r.get("code") for r in reversed(man.get("runs") or []) if r.get("code")), None)
-    print(f"headless bake: {', '.join(names)}{' both ways' if a.both_ways else ''} at {a.speed:g} m/s; "
+    jobs = min(a.jobs, len(legs)) if not a.connect else 1
+    print(f"headless bake: {', '.join(leg_label(*lg) for lg in legs)} at {a.speed:g} m/s, mode {mode}"
+          f"{' (auto)' if a.mode == 'auto' else ''}{f', {jobs} jobs' if jobs > 1 else ''}; "
           f"code {code}, BNE env {bne_env() or 'none'}; bake {bd}")
     if prior and prior != code:
         print(f"note: the last bake run had code {prior}: a server/*.py change or other BNE_* switches since",
               flush=True)
     run = {"started": time.strftime("%Y-%m-%d %H:%M:%S"), "start_ts": time.time(), "code": code, "routes": names,
-           "driver": "headless", "complete": False, "legs": []}
+           "driver": "headless", "mode": mode, "speed": a.speed, "jobs": jobs, "complete": False, "legs": []}
     man.setdefault("runs", []).append(run)
     rb.write_json(man_path, man)
-    proc = c = None
-    ok = True
+
+    def on_leg(rec):
+        run["legs"].append(rec)
+        rb.write_json(man_path, man)
+    ok = False
     try:
-        if a.connect:
-            port = a.connect
+        if jobs > 1:
+            ok, run["legs"] = run_children(a, share_out(legs, jobs), out, mode)
         else:
-            cmd = server_command(a.user_dir, 0, a.cache_dir)
-            print("server: " + " ".join(cmd[1:]), flush=True)
-            proc, port = start_server(cmd, os.path.join(out, "server.log"))
-            print(f"server listening on {port} (log {os.path.join(out, 'server.log')})", flush=True)
-        c = Client(port)
-        h = hello(c)
-        size = int(h.get("blockSize") or 1024)
-        print(f"session {h.get('sessionId')}, block {size}, near visual {h.get('nearVisual')}", flush=True)
-        next_id = 1
-        for n in names:
-            if n not in lines:
-                print(f"{n}: not in {routes_file}", file=sys.stderr)
-                ok = False
-                continue
-            for back in ((False, True) if a.both_ways else (False,)):
-                route = gd.load_route(routes_file, n, back)
-                leg = f"{n}{'_back' if back else ''}"
-                lo = os.path.join(out, leg)
-                os.makedirs(lo, exist_ok=True)
-                print(f"{leg}: {route.length / 1000:.1f} km", flush=True)
-                d = Drive(c, route, anchors, pin_m, distance, size, a.user_dir, a, next_id, lo)
-                summary = d.run()
-                next_id = d.next_id
-                rb.write_json(os.path.join(lo, "summary.json"), summary)
-                run["legs"].append({"route": n, "back": back, "driver": "headless", "rc": 0, "out": lo,
-                                    "summary": summary})
-                rb.write_json(man_path, man)
-                w = summary["waits"]
-                print(f"{leg}: {summary['km']} of {summary['route_km']} km in {summary['seconds']:.0f} s; "
-                      f"{summary['rebases']} rebases, {summary['prepares']} blocks asked; waited {w['count']}x "
-                      f"{w['seconds']:.0f} s ({w['gave_up']} gave up)", flush=True)
-                ok = ok and summary["complete"]
-    except KeyboardInterrupt:
-        print("stopped", file=sys.stderr)
-        ok = False
-    except (RuntimeError, ConnectionError, OSError) as e:
-        print(f"error: {e}", file=sys.stderr)
-        ok = False
+            ok, _ = drive_legs(a, legs, lines, routes_file, anchors, pin_m, distance, out, mode, a.workers,
+                               a.road_processes, on_leg=on_leg)
     finally:
-        if c is not None:
-            c.close()
-        stop_server(proc)
         run["ended"] = time.strftime("%Y-%m-%d %H:%M:%S")
         run["complete"] = ok
         rb.write_json(man_path, man)
