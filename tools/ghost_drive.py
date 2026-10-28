@@ -279,7 +279,9 @@ def drive(a, route, log=print):
     mcp.quiet_ui()
     if lua(GHOST_LUA % {"turn": a.turn_deg}).strip() != "ok":
         raise SystemExit("could not load the ghost drive's chunk")
-    lua("input.event('throttle', 0, 2) input.event('brake', 0, 2) input.event('steering', 0, 2) return 1")
+    # (input is the vehicle's Lua, not GE's: queued to the player's car)
+    lua("local v = be:getPlayerVehicle(0) if v then v:queueLuaCommand(\"input.event('throttle', 0, 2) "
+        "input.event('brake', 0, 2) input.event('steering', 0, 2)\") end return 1")
     lat0, lon0 = route.point(a.from_km * 1000)
     if not a.no_teleport:
         teleport_to(lat0, lon0, log)
@@ -351,7 +353,8 @@ def drive(a, route, log=print):
             time.sleep(max(0.0, TICK_S - (time.time() - tick)))
     try:                                        # parked where it ended
         step({"lat": lat, "lon": lon, "hlat": hlat, "hlon": hlon, "v": 0})
-        lua("input.event('parkingbrake', 1, 2) return 1")
+        lua("local v = be:getPlayerVehicle(0) if v then v:queueLuaCommand(\"input.event('parkingbrake', 1, 2)\") end "
+            "return 1")
     except (Exception, SystemExit):
         pass
     summary = summarize(rows, waits, stop_at - a.from_km * 1000, s - a.from_km * 1000) if rows else {"ticks": 0}
