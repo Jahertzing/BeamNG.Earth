@@ -5,6 +5,7 @@ import sys
 import tempfile
 import threading
 import unittest
+from unittest import mock
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -217,7 +218,10 @@ class BaseRoutingTest(unittest.TestCase):
             photo.append("here")
             return "here.png"
         s.write_base = write_base
-        s._block_key = lambda anchor, cx, cy, kind=None: None                # (blockcache.store_base: not kept)
+        s._block_key = lambda anchor, cx, cy, kind=None: None
+        keep = mock.patch.object(earthd.blockcache, "store_base", lambda *a: False)   # (no revisit cache here)
+        keep.start()
+        self.addCleanup(keep.stop)
         s._base_elsewhere = lambda anchor, cx, cy, pool, photo: None         # a tile not on disk
         name, photo, _ = S._base_photo(s, None, 1, 2, "pool")
         self.assertEqual((name, photo, calls), ("here.png", ["here"], [(1, 2)]))
