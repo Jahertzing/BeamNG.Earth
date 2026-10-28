@@ -78,12 +78,19 @@ T.check(clears == 1, 'a clear with the spawn: ' .. clears)
 clock = clock + 1; G.update(gov)
 T.check(clears == 1, 'none without a change')
 local c0 = clears
+clock = clock + G.CLEAR_S
 G.onRows(1, '1:0_1', { rec('def', 50) }); G.update(gov)
 clock = clock + 0.1
 G.onRows(1, '1:0_2', { rec('ghi', 90) }); G.update(gov)
 T.check(clears == c0 + 1, 'debounced within CLEAR_S: ' .. (clears - c0))
 clock = clock + G.CLEAR_S + 0.01; G.update(gov)
 T.check(clears == c0 + 2, 'then one clear')
+G.onRows(1, '1:0_3', { rec('jkl', 130) }); G.update(gov)
+clock = clock + 1; G.update(gov)
+T.check(clears == c0 + 2, 'a station a second later: not gathered again yet (CLEAR_S is 8 s, not every station)')
+clock = clock + G.CLEAR_S; G.update(gov)
+T.check(clears == c0 + 3, 'gathered once CLEAR_S has passed')
+G.dropKey('1:0_3'); G.update(gov)
 
 -- the same station from a second tile (the new anchor's after a rebase): no second set, re-placed from the new record
 local n0 = count('TSStatic')
@@ -102,8 +109,8 @@ clock = clock + 1; G.update(gov)
 local c1 = clears
 G.transform(xf)
 T.near(scenetree.findObject('bne_fuel_def_a1').pos.y, before - 20, 1e-9, 'moved by the transform')
-clock = clock + 1; G.update(gov)
-T.check(clears == c1 + 1, 'a clear after the rebase')
+clock = clock + G.CLEAR_REBASE_S + 0.01; G.update(gov)
+T.check(clears == c1 + 1, 'a clear soon after the rebase (CLEAR_REBASE_S): every marker was in the old frame')
 
 -- a level end: everything goes
 G.reset()

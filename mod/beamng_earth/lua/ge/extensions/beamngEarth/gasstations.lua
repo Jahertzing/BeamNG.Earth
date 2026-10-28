@@ -12,7 +12,12 @@ local M = {}
 M.MATERIAL_FILES = { '/levels/west_coast_usa/art/shapes/buildings/main.materials.json',     -- m_gasstation_tyrannos
   '/levels/west_coast_usa/art/shapes/objects/main.materials.json',                          -- corrugation
   '/levels/east_coast_usa/art/shapes/buildings/main.materials.json' }                       -- (US East's units)
-M.CLEAR_S = 0.5            -- the POI list gathered again at most this often (s)
+-- The POI list gathered again at most this often (s) after stations come or go; CLEAR_REBASE_S after a rebase (every
+-- marker in the old frame). Each gathering runs every extension's onGetRawPoiListForLevel and rebuilds the playmode
+-- markers in one frame: 85 of them in Jeff's 22-minute Drive (2026-10-28) at 0.5 s, stations streaming in and out. A
+-- station made 8 s late is still kilometres of road before the car reaches it.
+M.CLEAR_S = 8
+M.CLEAR_REBASE_S = 0.5
 M.ENERGY = { 'gasoline', 'diesel' }
 M.now = os.clock
 M.onCollide = nil          -- called once per spawned station (core: the collision rebuild, batched with the roads')
@@ -21,6 +26,7 @@ M.enabled = true           -- (always on: the settings page's switch was removed
 local stations = {}        -- id -> { rec, keys = { [tile key] = true }, objs = { { id, pos, q } }, pumps, made }
 local queue = {}           -- station ids to spawn
 local poisDirty, lastClear = false, -math.huge
+local poisSoon = false     -- a rebase: CLEAR_REBASE_S
 
 -- yaw in degrees counter-clockwise from +x (the server's), as setPosRot's quaternion (geodesy.lua beamngQuat: the
 -- conjugate of the standard one)
@@ -157,8 +163,8 @@ function M.update(gov)
       gov:charge('fuel', (M.now() - t0) * 1000)
     end
   end
-  if poisDirty and M.now() - lastClear >= M.CLEAR_S then
-    poisDirty, lastClear = false, M.now()
+  if poisDirty and M.now() - lastClear >= (poisSoon and M.CLEAR_REBASE_S or M.CLEAR_S) then
+    poisDirty, poisSoon, lastClear = false, false, M.now()
     if gameplay_rawPois then gameplay_rawPois.clear() end
   end
 end
@@ -178,7 +184,7 @@ function M.transform(xf)
       if o then place(o, ob.pos, ob.q) end
     end
   end
-  poisDirty = true
+  poisDirty, poisSoon = true, true
 end
 
 -- core.lua's onGetRawPoiListForLevel: the made stations as stock gas station POIs. Only where the stock module lists a
