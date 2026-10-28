@@ -86,7 +86,7 @@ class PlanCache:
     def load(self, key):
         """(plans, keeps, covers, opens) of cell key from the cache, or None."""
         from grading import Plan
-        from roads import Spec
+        import roads
         try:
             src = self._path(key)
             if not os.path.exists(src):
@@ -105,7 +105,7 @@ class PlanCache:
             plans.append((m["fid"], pl))
         keeps = list(zip(lists["k"], meta["keeps"]))
         covers = list(zip(lists["v"], meta["covers"]))
-        opens = [(xy, Spec(**{**sp, "sides": tuple(sp["sides"]) if sp.get("sides") is not None else None}))
+        opens = [(xy, roads.spec_from_json(sp))
                  for xy, sp in zip(lists["o"], meta["opens"])]   # (JSON gave sides back as a list)
         with self._lock:
             self.stats["read"] += 1

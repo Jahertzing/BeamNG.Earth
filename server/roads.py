@@ -124,8 +124,10 @@ def look_of(spec):
     if spec.kind == "paved" and spec.surf == "concrete":
         return CONCRETE
     return LOOK[spec.kind]
-Spec = namedtuple("Spec", "width kind urban cls oneway walk dir kmh gap median lanes surf link sides",
-                  defaults=(False, 2.5, 0, None, None, None, None, None, False, None))   # median: m to the other carriageway's centre line
+Spec = namedtuple("Spec", "width kind urban cls oneway walk dir kmh gap median lanes surf link sides lanes_f lanes_b "
+                          "lanes_c park turns_f turns_b",
+                  defaults=(False, 2.5, 0, None, None, None, None, None, False, None, None, None, None, None, None,
+                            None))   # median: m to the other carriageway's centre line
 # (sides: the sidewalk sides OpenStreetMap's sidewalk tag gives (_osm_sidewalks; walk_sides' +1 left / -1 right of the
 # geometry, () none), None where it has none: the class and land-cover rule, has_sidewalks; from mpsteppe's PR #292)
 # (lanes: OpenStreetMap's lane count, both directions on a two-way road, None unknown: osmtags.py; surf: the surface
@@ -134,6 +136,10 @@ Spec = namedtuple("Spec", "width kind urban cls oneway walk dir kmh gap median l
 # road_specs' result per feature (walk: the sidewalk width, measured from the buildings where known: roadwidth.py;
 # dir: a one-way road's direction along its geometry, +1 / -1, 0 two-way; kmh: its speed limit, None unknown;
 # gap: m of road per junction along it (its connectors), None unknown)
+# (lanes_f / lanes_b: OpenStreetMap's lanes along / against the geometry, lanes_c: its centre (two-way turn) lanes,
+# park: the sides with on-street parking (+1 left, -1 right of the geometry), turns_f / turns_b: the turn:lanes of
+# each lane left to right as the driver sees them: the regional tables (osmtags.Regional), None where they say
+# nothing: _osm_lanes, lane_layout)
 # (width = carriageway). One-way driving widths (Overture's divided roads are two one-way segments, each
 # drawn before as a full two-way street: 2026-10-11 orthophoto of Broadway, 14-15 m drawn for 8-9 m)
 ONEWAY_STYLE = {"primary": 6.5, "secondary": 6.5, "tertiary": 4.0, "residential": 3.5, "living_street": 3.5,
@@ -1116,13 +1122,20 @@ def _spec_json(sp):
             for f, v in sp._asdict().items()}
 
 
+def spec_from_json(d):
+    """A Spec from _spec_json's dict (its tuples back from JSON's lists)."""
+    def tup(v, deep=False):
+        return None if v is None else tuple(tuple(x) for x in v) if deep else tuple(v)
+    return Spec(**{**d, "sides": tup(d.get("sides")), "park": tup(d.get("park")), "turns_f": tup(d.get("turns_f"), True),
+                   "turns_b": tup(d.get("turns_b"), True)})
+
+
 def _specs_from(data, n):
     """road_specs' list from the shared facts (_spec_json), or None."""
     if not isinstance(data, list) or len(data) != n:
         return None
     try:
-        return [None if d is None else Spec(**{**d, "sides": tuple(d["sides"]) if d.get("sides") is not None else None})
-                for d in data]
+        return [None if d is None else spec_from_json(d) for d in data]
     except (TypeError, KeyError):
         return None
 
@@ -1145,6 +1158,96 @@ def _osm_sidewalks(feats, specs):
         if tag in SIDEWALK_TAG:
             out[i] = sp._replace(sides=SIDEWALK_TAG[tag])
     return out
+
+
+# Lanes, turn lanes and parking from the regional OSM tables (osmtags.Regional, feature turn-lanes 2026-10-28): the lanes
+# each way and the centre turn lane (lanes:forward / backward / both_ways, centre_turn_lane, turn:lanes:both_ways), the
+# turn arrows (turn:lanes, :forward, :backward), the parking sides (parking:left / right / both, the older
+# parking:lane:*). A road without them keeps the class and land-cover rules exactly (extras).
+PARK_YES = {"lane", "street_side", "on_kerb", "half_on_kerb", "shoulder", "parallel", "diagonal", "perpendicular",
+            "marked", "inline", "yes"}
+PARK_NO = {"no", "separate", "no_parking", "no_stopping", "fire_lane", "none"}
+TURN_KINDS = ("left", "slight_left", "sharp_left", "through", "right", "slight_right", "sharp_right")
+
+
+def _rtag(feats, key, i):
+    """The regional table's value of `key` for feature i ("" where none or no table)."""
+    import osmtags
+    col = feats.attrs.get(osmtags.regional_column(key))
+    return "" if col is None else str(col[i]).strip()
+
+
+def _count(v, lo=0, hi=OSM_LANES[1]):
+    try:
+        n = int(float(v))
+    except (TypeError, ValueError):
+        return None
+    return n if lo <= n <= hi else None
+
+
+def parse_turns(v):
+    """turn:lanes "left|through;right|" -> (("left",), ("through", "right"), ()): per lane its turns (the kinds of
+    TURN_KINDS; "none" and others none), None for no value."""
+    if not v:
+        return None
+    return tuple(tuple(t for t in lane.strip().lower().split(";") if t in TURN_KINDS) for lane in v.split("|"))
+
+
+def parking_sides(feats, i):
+    """The sides with on-street parking ((1,) left, (-1,) right, both, () none) the tags give, None when they give none."""
+    sides, said = set(), False
+    for side, keys in ((1, ("left", "both")), (-1, ("right", "both"))):
+        for k in keys:
+            for key in (f"parking:{k}", f"parking:lane:{k}"):
+                v = _rtag(feats, key, i).lower()
+                if v in PARK_YES:
+                    sides.add(side)
+                    said = True
+                elif v in PARK_NO:
+                    said = True
+    return tuple(sorted(sides, reverse=True)) if said else None
+
+
+def _osm_lanes(feats, specs):
+    """specs with lanes_f / lanes_b / lanes_c / park / turns_f / turns_b from the regional tags, and the parking the
+    tags give instead of the class rule's in a width that is the class rule's own (carriageway). Pure."""
+    import osmtags
+    if osmtags.regional_column("lanes:forward") not in feats.attrs:
+        return specs
+    out = list(specs)
+    for i, sp in enumerate(out):
+        if sp is None or sp.kind not in BUILT:
+            continue
+        lf = _count(_rtag(feats, "lanes:forward", i))
+        lb = _count(_rtag(feats, "lanes:backward", i))
+        lc = _count(_rtag(feats, "lanes:both_ways", i), 0, 2)
+        ctl = _rtag(feats, "centre_turn_lane", i).lower()
+        tb = parse_turns(_rtag(feats, "turn:lanes:both_ways", i))
+        if lc is None and (ctl == "yes" or (tb and any("left" in t for t in tb))):
+            lc = 1
+        if sp.oneway:
+            tf, tbk = parse_turns(_rtag(feats, "turn:lanes", i)), None
+            if sp.dir == -1:                    # (drawn against its way: OSM's lanes are the travel direction's)
+                tf, tbk = None, tf
+        else:
+            tf = parse_turns(_rtag(feats, "turn:lanes:forward", i))
+            tbk = parse_turns(_rtag(feats, "turn:lanes:backward", i))
+        park = parking_sides(feats, i)
+        if all(v is None for v in (lf, lb, lc, tf, tbk, park)):
+            continue
+        w = sp.width
+        if park is not None and sp.median is None and abs(
+                w - carriageway(sp.cls, sp.kind, sp.urban, None, sp.oneway, sp.lanes)) < 1e-6:
+            w = w - _class_parking(sp) * PARKING_M + len(park) * PARKING_M
+        out[i] = sp._replace(width=w, lanes_f=lf, lanes_b=lb, lanes_c=lc, park=park, turns_f=tf, turns_b=tbk)
+    return out
+
+
+def _class_parking(sp):
+    """How many parking lanes the class rule put in a road's carriageway (carriageway)."""
+    if sp.kind not in BUILT or not (sp.urban and sp.cls in PARKING_CLASSES):
+        return 0
+    return 1 if sp.oneway else 2
 
 
 def _road_specs(feats, urban_fn, left_hand):
@@ -1205,7 +1308,7 @@ def _road_specs(feats, urban_fn, left_hand):
             out[j] = Spec(carriageway(cls, kind, urban, None, ow, lanes), kind, urban, cls, ow, 2.5, *dk, lanes=lanes,
                           surf=token, link=link)
     out = dual_carriageways(feats, out, left_hand)
-    return _osm_sidewalks(feats, out)
+    return _osm_lanes(feats, _osm_sidewalks(feats, out))
 
 
 def _measured_widths(feats, specs, widths):
@@ -2034,7 +2137,10 @@ def extras(spec, pts, lon, left_hand=False):
                     out.append((look, CENTRE["w"], offset_polyline(
                         pts, ms * (w / 2 - EDGE_LINE["inset"] - 2 * k * CENTRE["gap"]))))
             out.append(({**GUTTER, "side": ms}, GUTTER["w"], offset_polyline(pts, ms * (w / 2 - GUTTER["w"] / 2))))
-    if kind == "paved" and cls in CENTRE_CLASSES and w >= 6.0 and not spec.oneway:   # no paint on cobbles
+    tagged = kind == "paved" and has_lane_tags(spec)
+    if tagged:                  # the regional tables' lanes, centre turn lanes, parking and turn arrows (lane_marks)
+        out.extend(lane_marks(spec, pts, lon, left_hand))
+    if kind == "paved" and cls in CENTRE_CLASSES and w >= 6.0 and not spec.oneway and not tagged:   # no paint on cobbles
         if centre_colour(lon) == "line_white":
             # outside the Americas one broken white line (the Gotthard road on Mapillary, 2026-10-18: ours had the
             # Americas' double line in white)
@@ -2043,7 +2149,7 @@ def extras(spec, pts, lon, left_hand=False):
             look = {"m": centre_colour(lon), "tl": CENTRE["tl"], "p": CENTRE["p"]}
             for side in (1, -1):
                 out.append((look, CENTRE["w"], offset_polyline(pts, side * CENTRE["gap"])))
-    if kind == "paved" and cls in LANE_CLASSES:
+    if kind == "paved" and cls in LANE_CLASSES and not tagged:
         # lane lines (white dashes) where the driving width holds two or more lanes a direction
         parked = urban and cls in PARKING_CLASSES and not (not spec.oneway and cls in URBAN_ARTERIAL)
         # (a rural road's edge strips counted as lanes: three on every rural Interstate, GitHub #43)
@@ -2064,6 +2170,183 @@ def extras(spec, pts, lon, left_hand=False):
             inset = motorway_shoulder(spec) if rural_motorway(spec) else EDGE_LINE["inset"]
             out.append((EDGE_LINE, EDGE_LINE["w"], offset_polyline(pts, side * (w / 2 - inset))))
     return out
+
+
+TWLTL_DASH = {"m": "line_dashed_short_yellow", "tl": 6.0, "p": 6}     # (West Coast USA's): a centre turn lane's inner lines
+PARK_EDGE = {"m": "line_white", "tl": 6.4, "p": 2, "w": 0.12}       # the line between a parking lane and the traffic
+ARROW = {"m": "line_white", "tl": 3.0, "p": 2, "w": 0.3, "arrow": True}     # turn arrows, drawn in strokes
+ARROW_AT_M = (12.0, 42.0)       # m before a lane's downstream end (the junction) its arrows stand (US: two per lane) ...
+ARROW_MIN_ROAD_M = 25.0         # ... on a road at least this long; the second only where it fits with 6 m to spare
+ARROW_SHAFT_M = 4.0             # m of an arrow's shaft (US arrows ~ 7 m long overall; a stroke arrow reads smaller)
+ARROW_HEAD_M = 1.1              # m each head stroke runs back from the tip ...
+ARROW_HEAD_W = 0.55             # ... and out to each side
+ARROW_TURN_M = 1.5              # m a turn arrow's bent stroke reaches sideways
+
+
+def has_lane_tags(spec):
+    """Does the spec carry the regional tables' lanes, parking or turns (_osm_lanes)?"""
+    return any(getattr(spec, f, None) is not None for f in ("lanes_f", "lanes_b", "lanes_c", "park", "turns_f",
+                                                             "turns_b"))
+
+
+def lane_layout(spec, left_hand=False):
+    """The driving lanes across a tagged road (offsets m to the left of its geometry): {"lo", "hi": the driving width's
+    edges, "strips": {+1 / -1: parking or edge strip width}, "groups": [(dir +1 along the geometry / -1 against, lanes,
+    lo, hi)], "centre": (lo, hi) of the centre turn lanes or None}, or None when the driving width holds no lane.
+    Two-way: the lanes each way from lanes:forward / backward (the rest of `lanes` split evenly where one is missing),
+    the centre turn lanes between them; traffic keeps right (left_hand: left). Pure."""
+    w = spec.width
+    strips = {}
+    for side in (1, -1):
+        if spec.park is not None:
+            strips[side] = PARKING_M if side in spec.park else edge_margin(spec)
+        elif spec.urban and spec.cls in PARKING_CLASSES:
+            strips[side] = PARKING_M / (2 if spec.oneway else 1)
+        else:
+            strips[side] = edge_margin(spec)
+    lo, hi = -w / 2 + strips[-1], w / 2 - strips[1]
+    if hi - lo < 2.5:
+        return None
+    if spec.oneway:
+        n = spec.lanes or max(1, int((hi - lo) // LANE_M))
+        return {"lo": lo, "hi": hi, "strips": strips, "groups": [(spec.dir or 1, n, lo, hi)], "centre": None}
+    nc = spec.lanes_c or 0
+    nf, nb = spec.lanes_f, spec.lanes_b
+    total = spec.lanes
+    if total is None:
+        total = (nf + nb + nc) if nf is not None and nb is not None else max(2, int((hi - lo) // LANE_M))
+    rem = max(0, total - nc)
+    if nf is None and nb is None:
+        nb = rem // 2
+        nf = rem - nb
+    elif nf is None:
+        nf = max(0, rem - nb)
+    elif nb is None:
+        nb = max(0, rem - nf)
+    if nf + nb + nc == 0:
+        return None
+    lw = (hi - lo) / (nf + nb + nc)
+    if not left_hand:           # forward lanes on the right of the geometry (negative offsets)
+        gf, gc, gb = (lo, lo + nf * lw), (lo + nf * lw, lo + (nf + nc) * lw), (lo + (nf + nc) * lw, hi)
+    else:
+        gf, gc, gb = (hi - nf * lw, hi), (hi - (nf + nc) * lw, hi - nf * lw), (lo, lo + nb * lw)
+    groups = [g for g in ((1, nf) + gf, (-1, nb) + gb) if g[1] > 0]
+    return {"lo": lo, "hi": hi, "strips": strips, "groups": groups, "centre": gc if nc else None}
+
+
+def _along(pts, s):
+    """(point (3,), unit direction (2,)) s m along a polyline (k, 3) (clamped)."""
+    seg = np.diff(pts[:, :2], axis=0)
+    L = np.hypot(seg[:, 0], seg[:, 1])
+    c = np.concatenate([[0.0], np.cumsum(L)])
+    s = min(max(s, 0.0), c[-1])
+    k = int(min(np.searchsorted(c, s, side="right") - 1, len(L) - 1))
+    t = (s - c[k]) / L[k] if L[k] > 1e-9 else 0.0
+    p = pts[k] + (pts[k + 1] - pts[k]) * t
+    return p, seg[k] / max(L[k], 1e-9)
+
+
+def arrow_strokes(p, d, turns):
+    """The strokes [(k, 3)] of a turn arrow at p (its shaft's middle, z kept) pointing along d (unit, xy) for a lane's
+    turns (TURN_KINDS): a shaft, then a straight head for "through", a bent stroke with its head for each side. Pure."""
+    d = np.asarray(d, np.float64)
+    n = np.array([-d[1], d[0]])                     # the driver's left
+    z = float(p[2])
+    P = np.asarray(p[:2], np.float64)
+
+    def pt(q):
+        return [float(q[0]), float(q[1]), z]
+
+    def head(tip, u):
+        v = np.array([-u[1], u[0]])
+        return [[pt(tip - u * ARROW_HEAD_M + v * ARROW_HEAD_W), pt(tip), pt(tip - u * ARROW_HEAD_M - v * ARROW_HEAD_W)]]
+    base, top = P - d * ARROW_SHAFT_M / 2, P + d * ARROW_SHAFT_M / 2
+    kinds = set(turns)
+    through = "through" in kinds or not kinds
+    left = bool(kinds & {"left", "slight_left", "sharp_left"})
+    right = bool(kinds & {"right", "slight_right", "sharp_right"})
+    out = [[pt(base), pt(top if through else P + d * ARROW_SHAFT_M * 0.15)]]
+    if through:
+        out += head(top, d)
+    for on, sgn in ((left, 1.0), (right, -1.0)):
+        if on:
+            a = P + d * ARROW_SHAFT_M * 0.15
+            b = a + n * sgn * ARROW_TURN_M + d * ARROW_TURN_M * 0.6
+            u = (b - a) / np.hypot(*(b - a))
+            out += [[pt(a), pt(b)]] + head(b, u)
+    return [np.array(s_, np.float64) for s_ in out]
+
+
+def lane_marks(spec, pts, lon, left_hand=False):
+    """The markings of a road with the regional tables' tags (has_lane_tags): lane lines within each direction, the
+    centre line between them (or a centre turn lane's yellow solid-and-dashed pair on each side), a white line along
+    each tagged parking lane, and the turn:lanes arrows of each lane before its downstream end. [(look, width, pts)].
+    Pure."""
+    lay = lane_layout(spec, left_hand)
+    if lay is None:
+        return []
+    out = []
+    groups = lay["groups"]
+
+    def line(look, w, off):
+        out.append((look, w, offset_polyline(pts, off)))
+    for d, n, g0, g1 in groups:                     # lane lines within each direction
+        lw = (g1 - g0) / n
+        for k in range(1, n):
+            line(LANE_LINE, LANE_LINE["w"], g0 + k * lw)
+    yellow = centre_colour(lon)
+    gap = CENTRE["gap"]
+    look = {"m": yellow, "tl": CENTRE["tl"], "p": CENTRE["p"]}
+    if not spec.oneway and len(groups) == 2:
+        if lay["centre"] is None:                   # the centre line between the two directions
+            b = groups[0][3] if groups[0][2] < groups[1][2] else groups[1][3]
+            if yellow == "line_white":
+                line(LANE_LINE, LANE_LINE["w"], b)
+            else:
+                for sgn in (1, -1):
+                    line(look, CENTRE["w"], b + sgn * gap)
+        else:                                       # a centre turn lane: solid toward the traffic, dashed inside
+            c0, c1 = lay["centre"]
+            line(look, CENTRE["w"], c0 - gap)
+            line({**TWLTL_DASH, "m": TWLTL_DASH["m"] if yellow != "line_white" else LANE_LINE["m"]}, CENTRE["w"],
+                 c0 + gap)
+            line({**TWLTL_DASH, "m": TWLTL_DASH["m"] if yellow != "line_white" else LANE_LINE["m"]}, CENTRE["w"],
+                 c1 - gap)
+            line(look, CENTRE["w"], c1 + gap)
+    if spec.park:
+        for side in spec.park:
+            line(PARK_EDGE, PARK_EDGE["w"], lay["hi"] if side > 0 else lay["lo"])
+    L = float(np.hypot(*np.diff(pts[:, :2], axis=0).T).sum()) if len(pts) >= 2 else 0.0
+    if L >= ARROW_MIN_ROAD_M:
+        for d, n, g0, g1 in groups:
+            turns = spec.turns_f if d > 0 else spec.turns_b
+            if not turns or len(turns) != n or not any(turns):
+                continue
+            lw = (g1 - g0) / n
+            for i, t in enumerate(turns):           # (left to right as the driver sees them)
+                if not t or set(t) == {"through"} and len(set(turns) - {()}) == 1:
+                    continue                        # (no arrows on a road whose lanes all go straight on)
+                off = g1 - (i + 0.5) * lw if d > 0 else g0 + (i + 0.5) * lw
+                lane = offset_polyline(pts, off)
+                for at in ARROW_AT_M:
+                    if at + 6.0 > L:
+                        continue
+                    p, u = _along(lane, L - at if d > 0 else at)
+                    for st in arrow_strokes(p, u if d > 0 else -u, t):
+                        out.append((ARROW, ARROW["w"], st))
+    return out
+
+
+def clear_of(pts, blockers):
+    """Is a polyline (k, 3) clear of every blocker (centreline, half width), densified to 0.5 m (a turn arrow's
+    stroke: drawn whole or not at all)?"""
+    if not blockers:
+        return True
+    d = densify(np.asarray(pts, np.float64), 0.5)
+    import fast
+    fast.require(0, "inside_blockers")
+    segs, starts, hws = _blocker_segments(blockers)
+    return not np.asarray(fast._ef.inside_blockers(np.ascontiguousarray(d[:, :2]), segs, starts, hws)).any()
 
 
 JOIN_GAP_M = 14.0       # sidewalk ends this close (and facing each other) are joined: a sharp corner / road merge
@@ -4321,6 +4604,10 @@ def build_tile(frame, tx, ty, cells, elev, urban_fn=None, walks=None, bridges=No
                             runs_near.append({"pts": run, "side": side, "w": w, "fid": fid, "j": (at_j0, at_j1),
                                               "median": bool(look.get("median")),
                                               "open": (not _on_box(run[0], near), not _on_box(run[-1], near))})
+                continue
+            if look.get("arrow"):                   # a turn arrow's stroke: whole, in the tile of its first point
+                if x0 <= line[0, 0] < x1 and y0 <= line[0, 1] < y1 and clear_of(line, blockers):
+                    chunks.append(_chunk(look, w, line))
                 continue
             if walks is not None and look["m"] == GUTTER["m"]:     # gutters end where their curb turns
                 gcuts = jcuts.get((fid, side), [])

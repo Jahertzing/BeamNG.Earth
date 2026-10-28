@@ -1049,6 +1049,14 @@ three days of testing: dem 741 MB / 7.5k files, imagery 1.4 GB / 35k, deshadow 7
 - Two-way urban trunks (town main streets on state highways) get sidewalks, lamps; urban trunks not
   lined by buildings default to 4 lanes (13.2 m); white dashed lane lines where the driving width holds
   2+ lanes a direction; white edge lines on urban roads without curbs too.
+- Lanes from the regional OSM tables (`osmtags.Regional`, `roads._osm_lanes`, `lane_layout`, `lane_marks`;
+  2026-10-28): lanes:forward / backward split the driving width unevenly and move the centre line; a centre
+  turn lane (lanes:both_ways, centre_turn_lane, turn:lanes:both_ways with left) gets a yellow solid line toward
+  the traffic and `line_dashed_short_yellow` inside on each side; parking:* / parking:lane:* set the parking
+  lanes (the carriageway's class-rule parking replaced) and a white line along each; turn:lanes(:forward /
+  :backward) put stroke arrows (shaft, head, bent stroke per turn side) 12 and 42 m before each lane's end,
+  each stroke drawn whole or not at all (clear of the other carriageways). Roads without the tags are drawn
+  as before. Not done: tapers / widening into turn pockets (a road's width is constant along its mesh).
 - Curb ramps: the tactile pad is the first 0.6 m of the slope (tinted yellow); brick sidewalks on 55 % of
   the streets of dense brick-region cores; parking lots (Overture infrastructure `parking`) are the
   asphalt ground layer (no grass); built-up land is the dirt layer.
