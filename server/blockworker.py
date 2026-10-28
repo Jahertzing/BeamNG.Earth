@@ -101,6 +101,7 @@ class _State:
 
 ANCHORS_KEPT = 2
 SIGNALS_MARGIN_M = 60.0         # m around a road tile its junctions' mapped traffic signals are taken from
+BARRIER_HOMES_MARGIN_M = 150.0  # m around a road tile its residential land use is taken from (barriers.py: noise walls)
 WATER_BED_M = 0.05           # ground carved deeper than this under the water gets the bed layer (MUD)
 
 
@@ -499,6 +500,8 @@ def _roads_tile(aid, lat, lon, zoom, tx, ty, out_dir, vfs_dir, sidewalks, lift, 
                                              skip=skip)
         town = buildingsmod.coverage(items) < buildingsmod.POLES_COVERAGE
     rwalls = []
+    rbars = []                          # highway barriers (barriers.py), drawn with the retaining walls
+    import barriers as barriersmod
     ctx = []
     box = roadsmod.tile_bbox(tx, ty)
     cell_fn = lambda key: _s.md.cell(key, layers=("roads",), kind="demand").layers.get("roads")   # noqa: E731
@@ -516,7 +519,12 @@ def _roads_tile(aid, lat, lon, zoom, tx, ty, out_dir, vfs_dir, sidewalks, lift, 
                                  ground=lambda x, y: roadmeshmod.drawn_ground(frame, drawn, np.c_[x, y], q),
                                  terrain_paint=getattr(_s, "surface", None) is not None, cover_out=cover,
                                  signals=furniture.signals_for(_s.md, frame,
-                                                               roadsmod.cells_of_tile(frame, tx, ty, SIGNALS_MARGIN_M)))
+                                                               roadsmod.cells_of_tile(frame, tx, ty, SIGNALS_MARGIN_M)),
+                                 barriers=rbars,
+                                 barrier_lines=barriersmod.mapped_for(
+                                     _s.md, frame, roadsmod.cells_of_tile(frame, tx, ty, SIGNALS_MARGIN_M)),
+                                 barrier_homes=barriersmod.residential_for(
+                                     _s.md, frame, roadsmod.cells_of_tile(frame, tx, ty, BARRIER_HOMES_MARGIN_M)))
     chunks += railsmod.tile_chunks(frame, tx, ty, cells)     # railway and tram tracks on the ground
     if _s.airports is not None:         # runway markings, drawn by the road mesh like the lane lines
         chunks += _s.airports.tile_chunks(frame, tx, ty, elev, roadsmod.tile_bbox)
@@ -538,7 +546,7 @@ def _roads_tile(aid, lat, lon, zoom, tx, ty, out_dir, vfs_dir, sidewalks, lift, 
     mesh = _with_plazas(mesh, frame, tx, ty, elev, (x0, y0, 0.0), getattr(_s, "surface", None))
     dmesh = roadmeshmod.deck(chunks, (x0, y0, 0.0), bridges.piers_in(roadsmod.tile_bbox(tx, ty)), ctx,
                               bridges.beams_in(roadsmod.tile_bbox(tx, ty)), ground=cover)
-    tmesh = roadmeshmod.tunnel(chunks, (x0, y0, 0.0), rwalls)
+    tmesh = roadmeshmod.tunnel(chunks, (x0, y0, 0.0), rwalls, rbars)
     import railways
     rcells = [cell_fn(k) for k in roadsmod.cells_of_tile(frame, tx, ty, railways.REACH_M)]
     rground = railways.point_ground(frame, elev, (aid, lat, lon))

@@ -1288,6 +1288,8 @@ class Server:
                                                  decks=blockworker._tile_decks(anchor.bridges, cells, tx, ty), skip=skip)
             town = buildingsmod.coverage(items) < buildingsmod.POLES_COVERAGE
         rwalls = []
+        rbars = []                      # highway barriers (barriers.py), drawn with the retaining walls
+        import barriers as barriersmod
         ctx = []
         box = roadsmod.tile_bbox(tx, ty)
         cell_fn = lambda key: self.mapdata.cell(key, layers=("roads",), kind="demand").layers.get("roads")  # noqa: E731
@@ -1308,7 +1310,14 @@ class Server:
                                      terrain_paint=self.surface is not None, cover_out=cover,
                                      signals=furnituremod.signals_for(
                                          self.mapdata, anchor.frame,
-                                         roadsmod.cells_of_tile(anchor.frame, tx, ty, blockworker.SIGNALS_MARGIN_M)))
+                                         roadsmod.cells_of_tile(anchor.frame, tx, ty, blockworker.SIGNALS_MARGIN_M)),
+                                     barriers=rbars,
+                                     barrier_lines=barriersmod.mapped_for(
+                                         self.mapdata, anchor.frame,
+                                         roadsmod.cells_of_tile(anchor.frame, tx, ty, blockworker.SIGNALS_MARGIN_M)),
+                                     barrier_homes=barriersmod.residential_for(
+                                         self.mapdata, anchor.frame,
+                                         roadsmod.cells_of_tile(anchor.frame, tx, ty, blockworker.BARRIER_HOMES_MARGIN_M)))
         chunks += railsmod.tile_chunks(anchor.frame, tx, ty, cells)     # railway and tram tracks on the ground
         if self.airports is not None:   # runway markings, drawn by the road mesh like the lane lines
             chunks += self.airports.tile_chunks(anchor.frame, tx, ty, elev, roadsmod.tile_bbox)
@@ -1332,7 +1341,7 @@ class Server:
                                  ctx,
                                  anchor.bridges.beams_in(roadsmod.tile_bbox(tx, ty)) if anchor.bridges is not None else (),
                                  ground=cover)
-        tmesh = roadmeshmod.tunnel(chunks, (x0, y0, 0.0), rwalls)
+        tmesh = roadmeshmod.tunnel(chunks, (x0, y0, 0.0), rwalls, rbars)
         import railways
         rmesh = railways.tile_mesh(anchor.frame, tx, ty,
                                    [cell_fn(k) for k in roadsmod.cells_of_tile(anchor.frame, tx, ty, railways.REACH_M)],

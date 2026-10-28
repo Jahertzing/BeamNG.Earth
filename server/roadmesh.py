@@ -824,6 +824,8 @@ TUNNEL_STONE = "bne_tunnel_stone"  # a low arch's portal faces and the retaining
                                     # Park's transverse walls and arches; the buildings' pale dressed stone read as
                                     # concrete, 2026-10-17)
 TUNNEL_STONE_IN = "bne_tunnel_stone_in"   # the same stone darker: a low arch's vault (in its shade)
+GUARDRAIL_STEEL = "bne_guardrail_steel"     # the highway barriers' (barriers.py) galvanized steel ...
+NOISE_WALL = "bne_noise_wall"               # ... and noise walls' tinted concrete (tunnel.materials.json)
 TUNNEL_SOIL = "bne_tunnel_soil"     # grass on the ground over the masonry: a retaining wall's top behind its coping,
                                     # a low arch's top (stone slabs on the grass, the user 2026-10-17: "blend the
                                     # stone and terrain better")
@@ -931,18 +933,22 @@ def _retaining_walls(walls, origin, P, T, UV, M, nv):
     return nv
 
 
-def tunnel(chunks, origin, walls=()):
+def tunnel(chunks, origin, walls=(), barriers=()):
     """The tunnels of a tile as one colliding mesh: around every "tunnel" chunk (its road surface: a deck, deck()
     makes its slab) a tube of concrete (TUNNEL_SIDE) faced inwards: shoulders, walls and a vault TUNNEL_H over the
-    floor; at a chunk end that is a portal ("portal") a face around the opening, seen from both sides. (positions,
-    tris, uvs, materials, tri material index) or None. Pure."""
+    floor; at a chunk end that is a portal ("portal") a face around the opening, seen from both sides. The retaining
+    walls and the highway barriers (barriers.tile_barriers) with them. (positions, tris, uvs, materials, tri material
+    index) or None. Pure."""
     tc = [c for c in chunks if c.get("tunnel") and not c.get("no_tube")]     # (twins: one tube_only round both)
     rb = [(r, c) for r, c in zip(ribbons(tc), tc) if r[5] is not None] if tc else []
-    if not rb and not walls:
+    if not rb and not walls and not barriers:
         return None
     P, T, UV, M = [], [], [], []           # M: per T entry its material index (0 concrete, 1 lamps, 2 stone, 3 dark stone,
-                                            # 4 soil)
+                                            # 4 soil, 5 a tube's inside, 6 guardrail steel, 7 noise walls)
     nv = _retaining_walls(walls, np.asarray(origin, np.float64), P, T, UV, M, 0) if walls else 0
+    if barriers:
+        import barriers as barriersmod
+        nv = barriersmod.mesh_into(barriers, origin, P, T, UV, M, nv)
     for (left, right, v, _, _, z), c in rb:
         # a piece ending at a tile edge reaches TUNNEL_OVERLAP past it: the next tile's piece meets it there without a
         # hairline of daylight (2026-10-17, inside Eisenhower)
@@ -1033,7 +1039,10 @@ def tunnel(chunks, origin, walls=()):
             if low and (cap_m is None or cap_m >= LOW_CAP_MIN):
                 nv = _arch_cap(P, T, UV, M, nv, mid, u, z, at, k, float(np.max(o[:, 0])), float(o[:, 1].max()), th, origin,
                                LOW_CAP_M if cap_m is None else min(LOW_CAP_M, float(cap_m)))
-    allm = [TUNNEL_SIDE, TUNNEL_LIGHT, TUNNEL_STONE, TUNNEL_STONE_IN, TUNNEL_SOIL, TUNNEL_INNER]
+    if not T:                               # (barriers too short to draw)
+        return None
+    allm = [TUNNEL_SIDE, TUNNEL_LIGHT, TUNNEL_STONE, TUNNEL_STONE_IN, TUNNEL_SOIL, TUNNEL_INNER, GUARDRAIL_STEEL,
+            NOISE_WALL]
     Tall = np.concatenate(T)
     Mall = np.concatenate([np.full(len(t), m, np.int64) for t, m in zip(T, M)]) if M else np.zeros(len(Tall), np.int64)
     used = sorted(set(int(v) for v in np.unique(Mall)) | {0, 1})     # (concrete and lamps first, as before)
