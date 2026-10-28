@@ -78,9 +78,22 @@ for _ = 1, 3 do clock = clock + 2; nl.update(anchor, 1) end
 T.check(#S.liveOf('SpotLight') == 4, 'a spot light at each lamp and the canopy: ' .. #S.liveOf('SpotLight'))
 T.check(pointLights() == 2, 'fills under the two nearest street lamps, none under the canopy: ' .. pointLights())
 T.check(nl.status().fills == 2, 'status: the fills')
+-- the shop windows' spill: a light at the nearest shopfront points (the tiles' shopspill rows)
+nl.onRows('1:0_0', { { 0, 10, 0, 9, 90 }, { 0, 20, 0, 9, 90 }, { 0, 30, 0, 9, 90 }, { 1, 15, 8, 2.4, 90 },
+  { 1, 900, 0, 2.4, 0 } }, { 'lamplens', 'shopspill' })
+for _ = 1, 3 do clock = clock + 2; nl.update(anchor, 1) end
+T.check(nl.status().spills == 1 and nl.status().shopfronts == 2, 'a spill light at the near shopfront only: '
+  .. tostring(nl.status().spills))
+T.check(pointLights() == 3, 'two fills and the spill: ' .. pointLights())
+local sp
+for _, o in ipairs(S.liveOf('PointLight')) do if o.pos.x == 15 and o.pos.y == 8 then sp = o end end
+T.check(sp and sp.pos.z == 2.4 and sp.fields.radius == tostring(nl.SPILL.radius), '... at its point, a spill\'s look')
+nl.dropKey('1:0_0')
+T.check(nl.status().shopfronts == 0, 'its tile goes: its shopfronts')
+nl.onRows('1:0_0', { { 0, 10, 0, 9, 90 }, { 0, 20, 0, 9, 90 }, { 0, 30, 0, 9, 90 } }, { 'lamplens' })
 na.setMode('off')
 clock = clock + 2; nl.update(anchor, 1)
-T.check(pointLights() == 0, 'ambient off: no fills')
+T.check(pointLights() == 0, 'ambient off: no fills, no spills')
 nl.LIGHT.range = 50
 nl.applyLook()
 local spot = S.liveOf('SpotLight')[1]

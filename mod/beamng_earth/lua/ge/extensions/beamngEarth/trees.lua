@@ -212,6 +212,7 @@ M.CATALOG.busshelter = { { '/art/shapes/objects/s_busstop_wcu', 2.85 } }
 M.CATALOG.uspsbox = { { WCA .. 'objects/postbox_blue', 1.53 } }
 M.CATALOG.bikerack = { { ECA .. 'clutter/clutter_city_bike_stand', 1.16 } }
 M.CATALOG.planter = { { WCA .. 'objects/planterbox', 0.8 } }
+M.CATALOG.shopspill = {}      -- (the shopfronts' spill light points: nightlights.lua lights them, nothing drawn)
 M.STREET_LIFE = { 'mailbox', 'mailcbu', 'cart_trash', 'cart_recycle', 'bussign', 'busshelter', 'uspsbox', 'bikerack',
   'planter' }
 for _, g in ipairs(M.STREET_LIFE) do M.GROUP_MAX_M[g] = 250 end
@@ -311,7 +312,7 @@ M.forests = 0
 -- MihneaTeodorStoica's PR #321.)
 -- (lampglow, beaconglow: the lamps' far glow, the towers' red lights, night only: nightlights.lua turns them on after
 -- dusk)
-M.groupOff = { lampglow = true, beaconglow = true }
+M.groupOff = { lampglow = true, beaconglow = true, shopspill = true }   -- (shopspill: nightlights.lua's, no shape)
 function M.setGroupEnabled(groups, on)
   local changed = false
   for _, g in ipairs(groups) do

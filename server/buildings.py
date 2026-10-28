@@ -2886,6 +2886,41 @@ def beacon_rows(items, x0, y0):
     return [[G_BEACON, x, y, z, 0.0, 1.0, 1.0, 0.0] for x, y, z in beacon_points(items, x0, y0)]
 
 
+# Shop windows' light on the street at night (the user, 2026-10-28: the lamps' and lights' light has no "ambient ...
+# bouncing or anything"): a point every SPILL_STEP_M along each shopfront (doors() sets spec.sign: the street wall of a
+# shop or big box), SPILL_OUT_M out from the wall at SPILL_Z_M over its ground, for nightlights.lua's spill lights
+# (a dim warm-white point light at the nearest ones; trees.lua draws nothing for the group). Call after doors().
+G_SPILL = "shopspill"
+SPILL_STEP_M = 9.0
+SPILL_OUT_M = 1.8
+SPILL_Z_M = 2.4
+SPILL_MAX = 6               # a building's at most (a big box's long front: spread over it)
+
+
+def spill_rows(items, x0, y0):
+    """Prop rows [G_SPILL, x, y, z, yaw, 1, 1, 0] (anchor frame; yaw: the wall's outward normal, degrees) along the
+    shopfronts among items (rings relative to (x0, y0))."""
+    rows = []
+    for spec, gmin, gmax in items:
+        edge = getattr(spec, "sign", None)
+        if edge is None:
+            continue
+        ring = np.asarray(drawn_ring(spec), np.float64)[:, :2]
+        a, b = ring[edge % len(ring)], ring[(edge + 1) % len(ring)]
+        L = float(math.hypot(*(b - a)))
+        if L < 2.0:
+            continue
+        d = (b - a) / L
+        out = np.array([d[1], -d[0]])                  # outward (counter-clockwise ring)
+        n = int(min(SPILL_MAX, max(1, round(L / SPILL_STEP_M))))
+        z = round(base_z(spec, gmin, gmax) + SPILL_Z_M, 2)
+        yaw = round(math.degrees(math.atan2(out[1], out[0])), 1)
+        for k in range(n):
+            p = a + d * (L * (k + 0.5) / n) + out * SPILL_OUT_M
+            rows.append([G_SPILL, round(float(p[0] + x0), 2), round(float(p[1] + y0), 2), z, yaw, 1.0, 1.0, 0.0])
+    return rows
+
+
 def collider_boxes(items, x0, y0):
     """Boxes [x0, y0, z0, x1, y1, z1] (anchor frame) around each building: the mod does not make the tile's
     mesh solid while the player's car is inside one (roads.lua playerIn)."""

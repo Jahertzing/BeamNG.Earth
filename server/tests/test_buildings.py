@@ -944,6 +944,30 @@ class BeaconTest(unittest.TestCase):
         self.assertTrue(all(r[7] == 0.0 for r in rows))
 
 
+class SpillTest(unittest.TestCase):
+    def test_shopfronts_spill_light_onto_the_street(self):
+        """A shop's street wall (spec.sign) gets spill points SPILL_OUT_M out in front of it at SPILL_Z_M over its
+        ground, about one per SPILL_STEP_M, at most SPILL_MAX; a building without a shopfront none."""
+        shop = bld.plan(rect(0, 0, 30, 15), {"class": "retail", "height": 8.0}, 0, 39.74, -104.99)
+        house = bld.plan(rect(100, 0, 12, 10), {"class": "house"}, 0, 39.74, -104.99)
+        big = bld.plan(rect(0, 100, 200, 80), {"class": "retail", "height": 9.0}, 0, 39.74, -104.99)
+        shop.sign, house.sign, big.sign = 0, None, 0
+        ring = bld.drawn_ring(shop)
+        a, b = ring[0][:2], ring[1][:2]
+        rows = bld.spill_rows([(shop, 1600.0, 1601.0), (house, 1600.0, 1600.0)], 1000.0, 2000.0)
+        L = math.hypot(*(b - a))
+        self.assertEqual(len(rows), max(1, round(L / bld.SPILL_STEP_M)))
+        self.assertEqual({r[0] for r in rows}, {bld.G_SPILL})
+        d = (b - a) / L
+        out = (d[1], -d[0])
+        for r in rows:
+            v = (r[1] - 1000.0 - a[0], r[2] - 2000.0 - a[1])
+            self.assertAlmostEqual(v[0] * out[0] + v[1] * out[1], bld.SPILL_OUT_M, places=1)     # out in front
+            self.assertAlmostEqual(r[3], bld.base_z(shop, 1600.0, 1601.0) + bld.SPILL_Z_M, places=1)
+            self.assertAlmostEqual(math.cos(math.radians(r[4])), out[0], places=2)
+        self.assertLessEqual(len(bld.spill_rows([(big, 1600.0, 1600.0)], 0.0, 0.0)), bld.SPILL_MAX)
+
+
 class NightShiftTest(unittest.TestCase):
     def test_floors_start_at_different_bays(self):
         """A tower's floors of an equal-bay band start a hashed whole number of bays along (the night maps light the

@@ -83,15 +83,20 @@ M.LIGHT = { range = 44, inner = 60, outer = 160, brightness = 8.0, color = '1 0.
 -- an arm's yaw), `out` m toward the road from the pole and `down` m under the head, warm like the pool it stands for;
 -- its brightness by the night ambient setting (nightambient.lua: none when off).
 M.FILL = { max = 96, radius = 20, brightness = 0.5, color = '1 0.70 0.42 1', out = 3, down = 6 }
+-- The shop windows' light on the sidewalk and the street (server buildings.spill_rows: points out in front of each
+-- shopfront, the road tiles' shopspill rows): a warm-white point light at each of the SPILL.max nearest within
+-- SPILL.near m, by the same setting.
+M.SPILL = { max = 48, radius = 10, brightness = 0.8, color = '1 0.88 0.70 1', near = 300 }
 
 local lastCheck = -1e9
 local lastLights = -1e9
 M.night = nil            -- the state applied (nil: none yet)
 M.errors = 0
 local lenses = {}        -- road tile key -> { {x, y, z}, ... }
+local spills = {}        -- road tile key -> { {x, y, z, yaw}, ... } (shopfronts)
 -- other lights' places: name -> function returning { {x, y, z}, ... } (gasstations.lua: the pump islands under their canopy)
 M.providers = {}
-local pools = { spot = {}, fill = {} }   -- kind -> { { id, at (lens table or nil) }, ... }
+local pools = { spot = {}, fill = {}, spill = {} }   -- kind -> { { id, at (lens table or nil) }, ... }
 
 -- Whether it is night by the stock environment (nil when there is no time of day, as in the main menu).
 -- Not while the sun drawn is up (the sky's ScatterSky, sunUp): the clock and the drawn sun can disagree (2026-10-28: a
@@ -158,23 +163,30 @@ local function apply(night)
 end
 
 -- A road tile's furniture rows (roads.lua: { group index, x, y, z, yaw, ... } with its groups): its lenses.
-function M.onRows(key, items, groups)
+local function rowsOf(items, groups, name)
   local gi = nil
-  for i, g in ipairs(type(groups) == 'table' and groups or {}) do if g == 'lamplens' then gi = i - 1 end end
-  if gi == nil or type(items) ~= 'table' then lenses[key] = nil; return end
+  for i, g in ipairs(type(groups) == 'table' and groups or {}) do if g == name then gi = i - 1 end end
+  if gi == nil or type(items) ~= 'table' then return nil end
   local out = {}
   for _, r in ipairs(items) do
     if type(r) == 'table' and r[1] == gi and r[2] and r[3] and r[4] then out[#out + 1] = { r[2], r[3], r[4], r[5] } end
   end
-  lenses[key] = #out > 0 and out or nil
+  return #out > 0 and out or nil
 end
 
-function M.dropKey(key) lenses[key] = nil end
+function M.onRows(key, items, groups)
+  lenses[key] = rowsOf(items, groups, 'lamplens')
+  spills[key] = rowsOf(items, groups, 'shopspill')
+end
+
+function M.dropKey(key) lenses[key], spills[key] = nil, nil end
 
 -- Origin rebase (core.lua finishRebase): p_new = R*p + t.
 function M.transform(xf)
-  for _, list in pairs(lenses) do
-    for _, l in ipairs(list) do l[1], l[2], l[3] = xf:apply(l[1], l[2], l[3]) end
+  for _, set in ipairs({ lenses, spills }) do
+    for _, list in pairs(set) do
+      for _, l in ipairs(list) do l[1], l[2], l[3] = xf:apply(l[1], l[2], l[3]) end
+    end
   end
   for _, pool in pairs(pools) do
     for _, e in ipairs(pool) do e.at = nil end         -- (placed again at the next step)
@@ -182,8 +194,9 @@ function M.transform(xf)
 end
 
 -- Pure: the n nearest lenses (and providers' places) to (x, y) within r (their tables, nearest first). With a heading
--- (fx, fy) (unit): those within `around` all round, the others only within VIEW_COS of it.
-function M.nearest(x, y, r, n, fx, fy, around)
+-- (fx, fy) (unit): those within `around` all round, the others only within VIEW_COS of it. set: another set of
+-- places instead (tile key -> list: the shopfronts' spill points, M.spillSet), without the providers'.
+function M.nearest(x, y, r, n, fx, fy, around, set)
   local cand, r2 = {}, r * r
   local a2 = (around or r) ^ 2
   local function consider(l)
@@ -191,12 +204,14 @@ function M.nearest(x, y, r, n, fx, fy, around)
     local d = dx * dx + dy * dy
     if d <= r2 and (d <= a2 or not fx or dx * fx + dy * fy >= M.VIEW_COS * math.sqrt(d)) then cand[#cand + 1] = { l, d } end
   end
-  for _, list in pairs(lenses) do
+  for _, list in pairs(set or lenses) do
     for _, l in ipairs(list) do consider(l) end
   end
-  for _, fn in pairs(M.providers) do
-    local ok, pts = pcall(fn)
-    if ok and type(pts) == 'table' then for _, l in ipairs(pts) do consider(l) end end
+  if not set then                                     -- (the lamps' set: and the other lights')
+    for _, fn in pairs(M.providers) do
+      local ok, pts = pcall(fn)
+      if ok and type(pts) == 'table' then for _, l in ipairs(pts) do consider(l) end end
+    end
   end
   table.sort(cand, function(a, b) return a[2] < b[2] end)
   local out = {}
@@ -204,11 +219,14 @@ function M.nearest(x, y, r, n, fx, fy, around)
   return out
 end
 
--- The fill's brightness now (the night ambient setting: none when off, half when dim).
-local function fillBrightness()
-  local k = nightambient.STRENGTH[nightambient.mode] or 1
-  return M.FILL.brightness * math.min(k, 1.5)
+-- The night ambient setting's share for the fill and spill lights (none when off, half when dim).
+local function ambientShare()
+  return math.min(nightambient.STRENGTH[nightambient.mode] or 1, 1.5)
 end
+
+local function fillBrightness() return M.FILL.brightness * ambientShare() end
+
+function M.spillSet() return spills end
 
 -- A light's look from M.LIGHT / M.FILL (made, and again on applyLook).
 local function look(kind, o)
@@ -220,9 +238,10 @@ local function look(kind, o)
     o:setField('brightness', 0, tostring(L.brightness))
     o:setField('color', 0, L.color)
   else
-    o:setField('radius', 0, tostring(M.FILL.radius))
-    o:setField('brightness', 0, tostring(fillBrightness()))
-    o:setField('color', 0, M.FILL.color)
+    local F = kind == 'fill' and M.FILL or M.SPILL
+    o:setField('radius', 0, tostring(F.radius))
+    o:setField('brightness', 0, tostring(F.brightness * ambientShare()))
+    o:setField('color', 0, F.color)
   end
 end
 
@@ -254,6 +273,8 @@ local function place(kind, e, l)
   if not o then return end
   if l and kind == 'fill' then
     o:setPosition(vec3(M.fillAt(l)))
+  elseif l and kind == 'spill' then
+    o:setPosition(vec3(l[1], l[2], l[3]))
   elseif l then
     if l[4] then                                        -- (its forward, local y: down, tilted toward the road)
       local a, t = math.rad(l[4]), math.rad(M.LIGHT.tilt)
@@ -333,6 +354,11 @@ local function stepLights(night)
     end
   end
   stepPool('fill', fill)
+  local spill = {}
+  if ambientShare() > 0 and M.SPILL.max > 0 then
+    spill = M.nearest(cx, cy, M.SPILL.near, M.SPILL.max, fx, fy, M.AROUND_M, spills)
+  end
+  stepPool('spill', spill)
 end
 
 -- Every frame (core.lua; cheap: the materials looked at every CHECK_S, the lights every LIGHTS_S). anchor, anchorId:
@@ -366,16 +392,16 @@ function M.reset()
       if o then o:delete() end
     end
   end
-  pools, lenses = { spot = {}, fill = {} }, {}
+  pools, lenses, spills = { spot = {}, fill = {}, spill = {} }, {}, {}
 end
 
 function M.status()
-  local on, fills, n = 0, 0, 0
-  for _, e in ipairs(pools.spot) do if e.at then on = on + 1 end end
-  for _, e in ipairs(pools.fill) do if e.at then fills = fills + 1 end end
+  local function on(pool) local k = 0 for _, e in ipairs(pool) do if e.at then k = k + 1 end end return k end
+  local n, ns = 0, 0
   for _, list in pairs(lenses) do n = n + #list end
-  return { night = M.night, errors = M.errors, lights = #pools.spot, lit = on, fills = fills, lenses = n,
-           ambient = nightambient.status() }
+  for _, list in pairs(spills) do ns = ns + #list end
+  return { night = M.night, errors = M.errors, lights = #pools.spot, lit = on(pools.spot), fills = on(pools.fill),
+           spills = on(pools.spill), lenses = n, shopfronts = ns, ambient = nightambient.status() }
 end
 
 return M
