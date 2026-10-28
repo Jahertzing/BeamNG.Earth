@@ -30,7 +30,8 @@ M.MATERIAL_FILES = { '/levels/west_coast_usa/art/road/main.materials.json',
   '/levels/driver_training/art/road/main.materials.json',          -- m_metal_grid_drain (storm drains)
   '/levels/gridmap_v2/art/shapes/grid/main.materials.json',        -- m_gm_concrete_plain (concrete streets)
   '/levels/beamng_earth/art/shapes/beamngEarth/buildings.materials.json',   -- buildings (server/buildings.py)
-  '/levels/beamng_earth/art/shapes/beamngEarth/guidesigns.materials.json' } -- highway signs (server/guidesigns.py)
+  '/levels/beamng_earth/art/shapes/beamngEarth/guidesigns.materials.json',  -- highway signs (server/guidesigns.py)
+  '/levels/beamng_earth/art/shapes/beamngEarth/grasscards.materials.json' }  -- grass cards (server/grasscards.py)
 M.FADE = '450 150'          -- distanceFade: start, range (m)
 M.enabled = true
 -- be:reloadCollision() at most this often: every rebuild is a ~20 ms physics frame (2026-10-13, the
@@ -535,6 +536,12 @@ end
 M.SKY_UNIT = 4
 -- `brfar_tile` (kind 'B'): a far bridge tile's decks (server buildings.far_bridge_tile), shown only while the road
 -- tile of the same square has no deck or road mesh of its own.
+-- `grfar_tile` (kind 'G'): a tile's grass cards past the 3D grass (server grasscards.py), shown while M.grassCards
+-- (the setting grassCards) is on: never under the 3D grass (the server skips the squares near the player).
+-- A tile is hidden too while the player or the camera comes within GRASS_CARD_NEAR_M of its square: a card up close is
+-- a flat cross, and may lean over a road's edge (the grass mask has 2 m texels); there the 3D grass is.
+M.grassCards = true
+M.GRASS_CARD_NEAR_M = 48
 function M.onFarTile(msg, currentAnchor, kind)
   if kind == true then kind = 'S' end
   local sky = kind == 'S'
@@ -557,7 +564,7 @@ function M.onFarTile(msg, currentAnchor, kind)
     if sky then ux, uy = string.match(tostring(msg.key), '^(-?%d+)_(-?%d+)$') end
     far[key] = { anchor = msg.anchorId, shape = sl and sl.path or data.shape, pos = data.pos, slot = sl,
                  sky = sky and { tonumber(ux), tonumber(uy) } or nil,
-                 deckOf = kind == 'B' and tileKey(msg.anchorId, msg.key) or nil,
+                 deckOf = kind == 'B' and tileKey(msg.anchorId, msg.key) or nil, grass = kind == 'G' or nil,
                  lamps = type(data.lamps) == 'table' and #data.lamps > 0 and data.lamps or nil,
                  beacons = type(data.beacons) == 'table' and #data.beacons > 0 and data.beacons or nil }
     farQ[#farQ + 1] = key
@@ -592,11 +599,26 @@ function M.skyCovered(seen, aid, ux, uy)
   return true
 end
 
-local function updateFar(gov)
+-- Pure: is a grass card tile at pos (its square's south-west corner) hidden, with the player and camera at player and
+-- view (positions or nil)?
+function M.grassCardHidden(on, pos, player, view)
+  if not on then return true end
+  for _, p in ipairs({ player or false, view or false }) do
+    if p and p.x and type(pos) == 'table' and pos[1] then
+      local d = math.max(pos[1] - p.x, p.x - (pos[1] + M.TILE_M), pos[2] - p.y, p.y - (pos[2] + M.TILE_M))
+      if d < M.GRASS_CARD_NEAR_M then return true end
+    end
+  end
+  return false
+end
+
+local function updateFar(gov, player, view)
   for key, f in pairs(far) do
     if f.id then
       local hide
-      if f.sky then
+      if f.grass then
+        hide = M.grassCardHidden(M.grassCards, f.pos, player, view)
+      elseif f.sky then
         hide = M.skyCovered(farSeen, f.anchor, f.sky[1], f.sky[2])
       elseif f.deckOf then
         local t = tiles[f.deckOf]
@@ -1051,7 +1073,7 @@ function M.update(gov, currentAnchor, player, view)
       sinceChange = stopwatch.new()
     end
   end
-  updateFar(gov)                -- far buildings: only with the near meshes all made (they share the budget)
+  updateFar(gov, player, view)  -- far buildings: only with the near meshes all made (they share the budget)
   updateSky(gov, player, view)  -- the skyline: after both
   if swapQuiet then
     swapQuiet.frames = swapQuiet.frames - 1

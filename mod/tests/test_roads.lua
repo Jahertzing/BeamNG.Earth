@@ -446,4 +446,43 @@ do
   T.check(p1 and not p1.hidden, 'its bldsky square dropped: the skyline part shown again (no hole)')
   roads.reset()
 end
+-- grass cards (kind 'G', server grasscards.py): never hidden by the near meshes; hidden while the player or the
+-- camera comes within GRASS_CARD_NEAR_M of the tile's square, or with the setting off
+do
+  T.check(not roads.grassCardHidden(true, { 256, 0, 0 }, { x = 128, y = 128 }, nil), 'grass cards: the next tile shown')
+  T.check(roads.grassCardHidden(true, { 256, 0, 0 }, { x = 230, y = 128 }, nil), 'grass cards: 26 m from it: hidden')
+  T.check(roads.grassCardHidden(true, { 256, 0, 0 }, { x = 300, y = 100 }, nil), 'grass cards: inside it: hidden')
+  T.check(roads.grassCardHidden(true, { 256, 0, 0 }, { x = 0, y = 0 }, { x = 530, y = 10 }),
+    'grass cards: the camera near it: hidden')
+  T.check(roads.grassCardHidden(false, { 2560, 0, 0 }, { x = 0, y = 0 }, nil), 'grass cards: the setting off: hidden')
+  T.check(not roads.grassCardHidden(true, { -512, -512, 0 }, { x = 0, y = 0 }, nil), 'grass cards: negative squares')
+  roads.reset()
+  local g = {}
+  function g:try() return true end
+  function g:charge() end
+  function g:chargeMotion() end
+  local aid = 6
+  local function shapeObj(name)
+    for _, o in pairs(S.objects) do if o.class == 'TSStatic' and o.fields.shapeName == name then return o end end
+  end
+  roads.onFarTile({ anchorId = aid, key = '2_0', data = { v = 1, shape = '/t/grfar_2_0.cdae', pos = { 512, 0, 0 } } }, aid, 'G')
+  roads.onFarTile({ anchorId = aid, key = '0_0', data = { v = 1, shape = '/t/grfar_0_0.cdae', pos = { 0, 0, 0 } } }, aid, 'G')
+  roads.onFarTile({ anchorId = aid, key = '1_0', data = { v = 1 } }, aid, 'G')      -- no cards: nothing made
+  roads.update(g, aid, { x = 100, y = 100 }, nil)
+  local far, near = shapeObj('/t/grfar_2_0.cdae'), shapeObj('/t/grfar_0_0.cdae')
+  T.check(far ~= nil and near ~= nil, 'grass cards: made')
+  roads.update(g, aid, { x = 100, y = 100 }, nil)
+  T.check(far and not far.hidden, 'grass cards: a far tile shown')
+  T.check(near and near.hidden == true, 'grass cards: the tile under the player hidden')
+  roads.grassCards = false
+  roads.update(g, aid, { x = 100, y = 100 }, nil)
+  T.check(far and far.hidden == true, 'grass cards: the setting off hides them at once')
+  roads.grassCards = true
+  roads.update(g, aid, { x = 600, y = 100 }, nil)
+  T.check(far.hidden == true and near.hidden == false, 'grass cards: driven on: the near one hidden, the old one shown')
+  roads.onFarDrop({ anchorId = aid, key = '2_0' }, 'G')
+  roads.update(g, aid, { x = 600, y = 100 }, nil)
+  T.check(not scenetree.findObjectById(far.id) or far.deleted, 'grass cards: dropped')
+  roads.reset()
+end
 T.done('test_roads')
