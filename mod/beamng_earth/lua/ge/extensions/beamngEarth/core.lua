@@ -166,6 +166,7 @@ local cacheClears = 0         -- answers to a clear so far (the settings page wa
 
 local function resetState()
   loadprogress.reset()
+  perflog.reset()           -- (st.clock starts again at 0: its marks are of the old clock)
   st = {
     inOurLevel = false,
     active = false,          -- world logic running (rebase, far field, sky, pose)
@@ -1834,6 +1835,8 @@ local function perfContext()
   c.doing = table.concat(d, ', ')
   c.extra = string.format('Lua %.0f MB%s', collectgarbage('count') / 1024,
     st.terrainLatency and string.format(', last block %.1fs', st.terrainLatency) or '')
+  local okC, nr = pcall(roads.reloads)
+  if okC then c.reloads = nr end
   return c
 end
 local machineSent = false       -- the machine's lines sent to this server connection

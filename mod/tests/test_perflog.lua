@@ -42,6 +42,36 @@ run(70, 1000 / 60)
 local m = find('perf minute')
 T.check(#m >= 1 and m[1]:find('^perf minute %d+ fps, 1%% low') and m[1]:find('3 hitches', 1, true)
   and m[1]:find('worst: terrainCommit 280', 1, true), 'the minute line: fps, 1 % low, hitches, the worst one\'s cause')
+T.check(m[1] and m[1]:find('3 hitches %(worst: terrainCommit 280%), 201 stutters 50%-100 ms') and m[1]:find('hitches by cause: ', 1, true)
+  and m[1]:find('terrainCommit 1', 1, true), 'the minute line: the stutter count (the drop\'s 50 ms frames), the hitches by cause')
+
+-- stutters: frames of STUTTER_MS up to HITCH_MS, by cause; the collision rebuilds of the minute
+lines = {}
+local reloads = 10
+ctx = function() return { lat = 39.7, lon = -105, mph = 60, extra = 'Lua 200 MB', reloads = reloads } end
+run(61, 1000 / 60)                -- a minute line: the rebuild count's start
+for i = 1, 3 do now = now + 0.07; P.frame(70, now, ctx, { mod = {}, engine = { Ticking = 60 } }, nil, nil) end
+now = now + 0.06; P.frame(60, now, ctx, { mod = { roads = 40 }, engine = {} }, nil, nil)
+now = now + 0.08; P.frame(80, now, ctx, { mod = {}, engine = { FPSLimiter = 2 } }, nil, nil)
+reloads = 17
+run(61, 1000 / 60)
+m = find('perf minute')
+T.check(#m == 2 and m[2]:find('0 hitches, 5 stutters 50-100 ms', 1, true)
+  and m[2]:find('stutters by cause: Ticking 3, roads 1, unmeasured 1', 1, true), 'stutters counted, by cause: ' .. tostring(m[2]))
+T.check(m[2]:find('Lua 200 MB, 7 collision rebuilds', 1, true), 'the minute\'s collision rebuilds')
+
+-- a level restart: the caller's clock starts at 0 again; the lines must not wait for the old clock to come back
+lines = {}
+now = 0
+run(5, 1000 / 60)
+P.frame(300, now + 0.3, ctx, { mod = {}, engine = { Lua = 290 } }, nil, nil)
+now = now + 0.3
+T.check(#find('perf hitch') == 0, 'a hitch this soon: no line made by run()')
+lines[#lines + 1] = P.frame(300, now + 0.3, ctx, { mod = {}, engine = { Lua = 290 } }, nil, nil)[1]
+now = now + 0.3
+run(61, 1000 / 60)
+T.check(#find('perf minute') >= 1, 'a minute line within a minute of the clock going back')
+
 T.check(P.cause(1600, { mod = {}, engine = { FPSLimiter = 13 } }) == P.UNMEASURED,
   'a 1.6 s frame with 13 ms measured: not blamed on that part')
 T.check(P.cause(300, { mod = { terrainCommit = 280 }, engine = {} }) == 'terrainCommit 280', 'a part that explains it: named')

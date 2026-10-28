@@ -7,11 +7,14 @@
 --   perf drop     a WINDOW_S window under DROP_SHARE of the usual frame rate (the median of the last BASELINE_N
 --                 windows): the window's fps, its slowest frames, the mod's parts summed over it, the engine's mean
 --   perf back     the frame rate back over BACK_SHARE of the usual: how long the drop lasted, its lowest fps
---   perf minute   every SUMMARY_S: average fps, 1 % low, hitches, the worst frame and its cause, where
+--   perf minute   every SUMMARY_S: average fps, 1 % low, hitches, the worst frame and its cause, where; the stutters
+--                 (frames of STUTTER_MS up to HITCH_MS: under the hitch line, but a visible jerk at 85-90 fps) and the
+--                 causes of both by count
 -- Pure but for the clock and the context the caller passes.
 local M = {}
 
 M.HITCH_MS = 100
+M.STUTTER_MS = 50           -- (core.lua's hitch record starts here: a cause for each)
 M.WINDOW_S = 5
 M.DROP_SHARE = 0.65
 M.BACK_SHARE = 0.85
@@ -23,12 +26,14 @@ M.HITCH_GAP_S = 2           -- hitch lines at most this often (the ones between 
 M.ENGINE_EVERY = 5          -- the engine's breakdown sampled every this many frames for the window means
 
 local w, base, frames, sumMin, hitchesMin, worstMin, lastHitchAt, skipped, drop, summaryAt
+local stuttersMin, causesMin, reloadsAt
 
 function M.reset()
   w = { t0 = nil, n = 0, ms = 0, worst = {}, mod = {}, eng = {}, engN = 0, k = 0 }
   base = {}
   frames, sumMin, hitchesMin, worstMin = {}, 0, 0, nil
   lastHitchAt, skipped, drop, summaryAt = -math.huge, 0, nil, nil
+  stuttersMin, causesMin, reloadsAt = 0, { stutter = {}, hitch = {} }, nil
 end
 M.reset()
 
@@ -59,6 +64,21 @@ function M.cause(ms, hitch)
   return M.UNMEASURED
 end
 
+-- The part's name of a cause ('Ticking 187.9' -> 'Ticking'), 'unmeasured' for UNMEASURED
+local function causeName(c)
+  return c:match('^(.-) [%d.]+$') or 'unmeasured'
+end
+
+-- "Ticking 6, Lua 4" of a {name = count} table, most first, at most n
+local function counts(t, n)
+  local arr = {}
+  for k, v in pairs(t) do arr[#arr + 1] = { k, v } end
+  table.sort(arr, function(a, b) return a[2] > b[2] or (a[2] == b[2] and a[1] < b[1]) end)
+  local out = {}
+  for i = 1, math.min(n, #arr) do out[i] = arr[i][1] .. ' ' .. arr[i][2] end
+  return table.concat(out, ', ')
+end
+
 local function median(t)
   local s = {}
   for i, v in ipairs(t) do s[i] = v end
@@ -80,17 +100,29 @@ local function where(c)
   return table.concat(s, ', ')
 end
 
--- One frame. ms: its wall time; now: a clock (s); ctx(): the caller's context {lat, lon, mph, block, state, doing}
+-- One frame. ms: its wall time; now: a clock (s); ctx(): the caller's context {lat, lon, mph, block, state, doing,
+-- extra, reloads (collision rebuilds so far: each a whole static collision rebuild, 10-80 ms on the 2026-10-28 drive)}
 -- (called only when a line is made); hitch: core's hitch record for this frame ({mod = {}, engine = {}}) or nil;
 -- mod: the mod's parts this frame {name = ms} (summed over the window); engine(): the engine's breakdown {name = ms}
 -- (sampled every ENGINE_EVERY frames). Returns a list of lines (often empty).
 function M.frame(ms, now, ctx, hitch, mod, engine)
   local out = {}
   if type(ms) ~= 'number' or ms ~= ms or ms <= 0 then return out end
+  -- a clock that went back (core's st.clock starts at 0 again with each level start): the old marks would hold every
+  -- line back for as long as the last session ran (2026-10-28: a whole 22-minute drive after a level restart unlogged)
+  if (summaryAt and now < summaryAt) or (w.t0 and now < w.t0) or now < lastHitchAt then M.reset() end
   summaryAt = summaryAt or now
+  -- stutters
+  if ms >= M.STUTTER_MS and ms < M.HITCH_MS then
+    stuttersMin = stuttersMin + 1
+    local n = causeName(M.cause(ms, hitch))
+    causesMin.stutter[n] = (causesMin.stutter[n] or 0) + 1
+  end
   -- hitches
   if ms >= M.HITCH_MS then
     hitchesMin = hitchesMin + 1
+    local n = causeName(M.cause(ms, hitch))
+    causesMin.hitch[n] = (causesMin.hitch[n] or 0) + 1
     if not worstMin or ms > worstMin.ms then worstMin = { ms = ms, cause = M.cause(ms, hitch) } end
     if now - lastHitchAt >= M.HITCH_GAP_S then
       local c = ctx and ctx() or {}
@@ -169,10 +201,16 @@ function M.frame(ms, now, ctx, hitch, mod, engine)
     local line = string.format('perf minute %.0f fps, 1%% low %.0f, worst %d ms, %d hitches', #frames / (sumMin / 1000),
       1000 / low, r0(s[1]), hitchesMin)
     if worstMin and worstMin.cause ~= '' then line = line .. ' (worst: ' .. worstMin.cause .. ')' end
+    line = line .. string.format(', %d stutters %d-%d ms', stuttersMin, M.STUTTER_MS, M.HITCH_MS)
     line = line .. ' ' .. where(c)
+    if hitchesMin > 0 then line = line .. ' | hitches by cause: ' .. counts(causesMin.hitch, 5) end
+    if stuttersMin > 0 then line = line .. ' | stutters by cause: ' .. counts(causesMin.stutter, 5) end
     if c.extra and c.extra ~= '' then line = line .. ' | ' .. c.extra end
+    if c.reloads and reloadsAt then line = line .. string.format(', %d collision rebuilds', c.reloads - reloadsAt) end
+    reloadsAt = c.reloads
     out[#out + 1] = line
     frames, sumMin, hitchesMin, worstMin, summaryAt = {}, 0, 0, nil, now
+    stuttersMin, causesMin = 0, { stutter = {}, hitch = {} }
   end
   return out
 end
