@@ -27,6 +27,8 @@ A few things hold for all of them:
 | Overture Maps (map data releases) | `overturemaps-us-west-2.s3.us-west-2.amazonaws.com` | Every road and railway line, every building (footprint, height, roof shape where mapped), water areas, rivers, land use (parks, farmland, industrial areas), bridges and tunnels as mapped, gas stations, airports' surroundings. Read in small ranges of large files: only the part around you. | Places you have not visited before come without roads, buildings or water until it answers. Places you have visited load from disk. | named |
 | Overture Maps (second copy, on Azure) | `overturemapswestus2.blob.core.windows.net` | The same data, used when the first copy does not answer. | Only matters while the first copy is down too. | named |
 | Overture Maps file index | `stac.overturemaps.org` | The list of which file holds which part of the world. | The app carries its own copy of the list, which is used instead. | named |
+| DRCOG planimetrics (Denver region) | `gis.drcog.org` | Measured building roofprints with their heights, and the edges of the pavement for street widths, in the Denver region (settings: DRCOG switch). | Overture's buildings and the estimated street widths there. | optional |
+| USGS 3DEP lidar heights (Microsoft Planetary Computer) | `planetarycomputer.microsoft.com` | Building heights measured by lidar in the US, where the map has none or only a machine-learned one (settings: lidar switch). | The map's own building heights. | optional |
 | OpenStreetMap road details (OSM US Layercake) | `data.openstreetmap.us` | OpenStreetMap's own road tags matched to the roads: lanes, widths, sidewalks, surfaces, speed limits, roads under construction. | Roads keep their width, lane and sidewalk estimates from their class and the land around them. | optional |
 
 ## Terrain heights (elevation)
@@ -64,7 +66,10 @@ Pennsylvania (`imagery.pasda.psu.edu`), Virginia (`vginmaps.vdem.virginia.gov`),
 (`geo.api.vlaanderen.be`), Bavaria (`geoservices.bayern.de`), North Rhine-Westphalia (`www.wms.nrw.de`),
 Baden-Wurttemberg (`owsproxy.lgl-bw.de`), Lower Saxony (`opendata.lgln.niedersachsen.de`), Berlin
 (`gdi.berlin.de`), Hesse (`www.gds-srv.hessen.de`), Japan (`cyberjapandata.gsi.go.jp`), New South Wales
-(`maps.six.nsw.gov.au`), Tasmania (`services.thelist.tas.gov.au`) and Ontario (`ws.geoservices.lrc.gov.on.ca`).
+(`maps.six.nsw.gov.au`), Tasmania (`services.thelist.tas.gov.au`), Ontario (`ws.geoservices.lrc.gov.on.ca`), and on
+Colorado's Front Range: Frederick (`gis.frederickco.gov`), Boulder County (`maps.bouldercounty.org`), Thornton
+(`maps.thorntonco.gov`), Arapahoe County (`gis.arapahoegov.com`), Douglas County (`apps.douglas.co.us`), Jefferson
+County (`gisportal.jeffco.us`), Lakewood (`egis.lakewood.org`) and Colorado Springs (`gis.coloradosprings.gov`).
 
 ## Land cover, trees and water
 

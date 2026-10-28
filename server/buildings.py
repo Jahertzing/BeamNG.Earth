@@ -744,6 +744,35 @@ DOOR_GAP_M = 0.75           # m each side of a front door kept free of the groun
 WIN_OUT_M = 0.03            # m the window stands proud of its wall
 
 
+def _band_v(band, k):
+    """v range (bottom, top) of band k (0 = the image top) of a 4-band sheet; a hair inside it (the walls moved into
+    Rust with 1.7.0: still used by skyline.mesh)."""
+    eps = 1.5 / 1024
+    return 1.0 - (k + 1) / BANDS + eps, 1.0 - k / BANDS - eps
+
+
+def _plain_strip(m, pa, pb, za, zb, bays_per_tile, bay_w, v0, v1, mat, whole=False):
+    """The wall from pa to pb (za..zb) in slices of the band's plain strip between its first two windows, at the
+    sheet's own scale (a bay of the sheet = bay_w m). The wall behind a front door was one texel of the sheet
+    stretched over it, a blurred smear round every door (the user, 2026-10-17). whole (the lite mesh: far buildings,
+    a near tile's distant detail): one slice stretched over it (the plinths of buildings on a slope were ~78 % of a
+    far buildings tile's quads, ~1 m slices nobody sees from 600 m). The walls moved into Rust with 1.7.0; kept for
+    skyline.mesh."""
+    ax, ay, bx, by = float(pa[0]), float(pa[1]), float(pb[0]), float(pb[1])
+    dx, dy = bx - ax, by - ay
+    L = math.hypot(dx, dy)
+    if L < 1e-3:
+        return
+    c, h = 1.0 / bays_per_tile, 0.5 * PLAIN_STRIP / bays_per_tile
+    sw = max(0.1, PLAIN_STRIP * bay_w)                  # m one slice covers
+    n = 1 if whole else max(1, int(round(L / sw)))
+    uva, uvb, uvc, uvd = (c - h, v0), (c + h, v0), (c + h, v1), (c - h, v1)
+    for j in range(n):
+        t0, t1 = j / n, (j + 1) / n
+        qax, qay, qbx, qby = ax + dx * t0, ay + dy * t0, ax + dx * t1, ay + dy * t1
+        m.quad((qax, qay, za), (qbx, qby, za), (qbx, qby, zb), (qax, qay, zb), uva, uvb, uvc, uvd, mat)
+
+
 _WALL_CONSTS = None
 
 

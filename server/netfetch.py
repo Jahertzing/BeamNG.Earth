@@ -292,6 +292,8 @@ ROLES = {
     "gis.ngdc.noaa.gov": "sea depths; new coasts get a plain sloping sea floor meanwhile",
     "davidmegginson.github.io": "the airport list; the copy on disk is used meanwhile",
     "data.openstreetmap.us": "road details from OpenStreetMap (lanes, widths, sidewalks); estimated meanwhile",
+    "gis.drcog.org": "the Denver region's measured buildings and street widths (DRCOG); the map's own meanwhile",
+    "planetarycomputer.microsoft.com": "US building heights from lidar; the map's own heights meanwhile",
     "tecnagamer.github.io": "railway details and US railroad crossing equipment; estimated meanwhile",
     "api.open-meteo.com": "live weather; the weather stays as it is meanwhile",
     "downloads.sourceforge.net": "the gravity model; standard gravity meanwhile",
