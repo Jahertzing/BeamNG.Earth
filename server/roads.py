@@ -2883,7 +2883,8 @@ def clear_of(pts, blockers):
 Widening = namedtuple("Widening", "w L comps added ring c s turns parts ptapers", defaults=((), (), ()))
 LEFT_TURNS = frozenset({"left", "slight_left", "sharp_left"})
 RIGHT_TURNS = frozenset({"right", "slight_right", "sharp_right"})
-_POCKET_MEMO = {}               # (cell ids, urban_fn, widths, left_hand) -> (cells, profiles): pocket_profiles
+_POCKET_MEMO = {}               # (cells' ids, urban_fn, widths, left_hand) -> (cells, profiles, cells whose signals
+                                # were not known): pocket_profiles
 _POCKET_LOCK = threading.Lock()
 _POCKET_MEMO_N = 16
 _REGIONAL_COL = "osm_lanes_forward"     # (osmtags.regional_column("lanes:forward"): a cell in a regional table's area)
@@ -3255,22 +3256,37 @@ def cell_signals(infra):
     return np.asarray(pts, np.float64).reshape(-1, 2)
 
 
+SIGNALS_MEMO_N = 256        # cells whose signals signals_provider keeps (each read once: a junction asks its cells')
+
+
 def signals_provider(md):
-    """A SIGNALS_FN over a mapdata.MapData's cached cells (never waits: a cell not cached is not known)."""
+    """A SIGNALS_FN over a mapdata.MapData's cached cells (never waits: a cell not cached is not known), each cell's
+    signals read once (every junction asked for its cells' again: 70 % of pocket_profiles' time downtown)."""
+    memo, lock = {}, threading.Lock()
+
     def fn(key):
+        with lock:
+            got = memo.get(key)
+        if got is not None:
+            return got
         try:
             if not md.has(key, "infrastructure"):
                 return None
-            infra = md.cell(key, layers=("infrastructure",), kind="background").layers.get("infrastructure")
-            return cell_signals(infra)
+            got = cell_signals(md.cell(key, layers=("infrastructure",), kind="background").layers.get("infrastructure"))
         except Exception:       # (an unreadable cell: not known)
             return None
+        with lock:
+            if len(memo) >= SIGNALS_MEMO_N:
+                memo.pop(next(iter(memo)))
+            memo[key] = got
+        return got
     return fn
 
 
-def _signalled(ll, reach_m):
+def _signalled(ll, reach_m, unknown=None):
     """Is there a mapped traffic signal within reach_m of the point ll (lon, lat): True / False, None not known (no
-    SIGNALS_FN, a cell's infrastructure not read). The cells round the point: the same for every tile and painter."""
+    SIGNALS_FN, a cell's infrastructure not read: its key added to unknown). The cells round the point: the same for
+    every tile and painter."""
     if SIGNALS_FN is None:
         return None
     lon, lat = float(ll[0]), float(ll[1])
@@ -3282,6 +3298,8 @@ def _signalled(ll, reach_m):
         pts = SIGNALS_FN(k)
         if pts is None:
             known = False
+            if unknown is not None:
+                unknown.append(k)
             continue
         if len(pts) and (np.hypot((pts[:, 0] - lon) / dx, (pts[:, 1] - lat) / dy) <= 1.0).any():
             return True
@@ -3295,19 +3313,24 @@ def pocket_profiles(feats_list, urban_fn=None, widths=None, left_hand=False):
     if not POCKETS_ON:
         return {}
     fl = [f for f in feats_list if f is not None and len(f)]
-    key = (tuple(id(f) for f in fl), urban_fn, widths, bool(left_hand))
+    # (by each cell's content id, mapdata's _bnge_cell: a cell decoded again is a new object of the same content, and
+    # downtown Denver's road cells were decoded again for every tile, the buildings' widths pushing them out of
+    # mapdata's memory: no profile was ever remembered)
+    ids = tuple(f.__dict__.get("_bnge_cell") or id(f) for f in fl)
+    key = (ids, urban_fn, widths, bool(left_hand))
     with _POCKET_LOCK:
         got = _POCKET_MEMO.get(key)
-        if got is not None and len(got[0]) == len(fl) and all(a is b for a, b in zip(got[0], fl)):
-            return got[1]
+    if got is not None and len(got[0]) == len(fl) and all(
+            a is b or (a.__dict__.get("_bnge_cell") is not None and a.__dict__.get("_bnge_cell") == b.__dict__.get(
+                "_bnge_cell")) for a, b in zip(got[0], fl)) and not (
+            SIGNALS_FN is not None and any(SIGNALS_FN(k) is not None for k in got[2])):
+        return got[1]                   # (built while some cells' signals were not known: again once one is)
     unknown = []
     out = _pocket_profiles(fl, urban_fn, widths, left_hand, unknown)
-    if unknown:                         # (a signal not known yet: asked again next time, not remembered)
-        return out
     with _POCKET_LOCK:
         if len(_POCKET_MEMO) >= _POCKET_MEMO_N:
             _POCKET_MEMO.pop(next(iter(_POCKET_MEMO)))
-        _POCKET_MEMO[key] = (fl, out)
+        _POCKET_MEMO[key] = (fl, out, tuple(sorted(set(unknown))))
     return out
 
 
@@ -3545,9 +3568,7 @@ def _pocket_profiles(fl, urban_fn, widths, left_hand, unknown=None):
             if best >= 7:
                 continue                # (nothing crosses there)
             reach = POCKET_SIGNAL_M + max(roads[f][2].width / 2 for f, _e in ends.get(k, ()))
-            sig = _signalled(ring[-1] if at_end else ring[0], reach)
-            if sig is None and unknown is not None:
-                unknown.append(k)
+            sig = _signalled(ring[-1] if at_end else ring[0], reach, unknown)
             if best > POCKET_MAJOR_RANK and not sig:
                 continue                # (neither a major road crossing nor a signal)
             L = float(_ring_metric(ring)[1][-1])
