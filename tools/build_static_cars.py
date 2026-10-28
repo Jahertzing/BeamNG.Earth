@@ -455,7 +455,11 @@ def car(stock, model):
 def mat_name(stock, model, stock_mat, colour):
     """Our material for a stock one (None: left out)."""
     s = stock_mat
-    if s in ("traffic_glass_invisible",):
+    # (left out: the damaged windscreen; the lamps' glass, the lamps' housings show without it and translucent glass
+    # is drawn car by car, unbatched; the badges, alpha-tested decals)
+    if s in ("traffic_glass_invisible", "traffic_badges") or re.search(r"lightglass|signalglass|lowbeamglass|"
+                                                                      r"highbeamglass|reverselightglass|taillightglass|"
+                                                                      r"glass_[LR](_R)?$", s):
         return None
     m = stock.materials.get(s)
     paint = s.startswith("traffic_paint") or (m is not None and _palette(m))
@@ -464,10 +468,12 @@ def mat_name(stock, model, stock_mat, colour):
     if m is not None:
         return "bne_car_" + s[len("traffic_"):] if s.startswith("traffic_") else "bne_car_" + s
     # the per-function lamps (the jbeam's glowMap names): the off lamp or its glass
-    base = f"traffic_{model}_lightglass" if "glass" in s else f"traffic_{model}_lights"
+    if "glass" in s:
+        return None
+    base = f"traffic_{model}_lights"
     if base in stock.materials:
         return "bne_car_" + base[len("traffic_"):]
-    return "bne_car_glass" if "glass" in s else "bne_car_main"
+    return "bne_car_main"
 
 
 def _palette(m):
@@ -475,29 +481,43 @@ def _palette(m):
     return bool(st.get("instanceDiffuse")) or "colorPaletteMap" in st
 
 
+# A static prop's material: none of the stock vehicles' per-object work (dynamicCubemap: a live reflection cubemap
+# per car; translucency: drawn car by car, unbatched, through the sorted translucent bin) nor their tags (2026-10-28:
+# the static cars v2 still hitched 150-230 ms most minutes while cruising)
+STRIP = ("dynamicCubemap", "translucent", "translucentBlendOp", "translucentRecvShadows", "translucentZWrite",
+         "castShadows", "castDynamicShadows", "materialTag0", "materialTag1", "materialTag2", "doubleSided")
+STRIP_STAGE = ("instanceDiffuse", "colorPaletteMap", "colorPaletteMapUseUV", "pixelSpecular", "clearCoatFactor",
+               "clearCoatRoughnessFactor", "ambientOcclusionMap", "opacityFactor", "opacityMap", "emissiveFactor",
+               "emissiveMap", "emissiveIntensityNits", "glow")
+GLASS_FAR = ((0.02, 0.05, 0.08), 0.2, 0.05)       # the windows of the far levels: opaque dark glass
+
+
+def _plain(pid, n, col, met, rough):
+    return {"name": n, "mapTo": n, "class": "Material", "version": 1.5, "persistentId": pid(n),
+            "Stages": [{"baseColorFactor": [*col, 1.0], "metallicFactor": met, "roughnessFactor": rough}, {}, {}, {}]}
+
+
 def material_defs(stock, names):
-    """static_cars.materials.json's entries for our names."""
+    """static_cars.materials.json's entries for our names: plain colours (the paints, the far glass) and the stock
+    stages without what costs a static prop (STRIP, STRIP_STAGE): every window opaque, the grille alpha-tested."""
     pid = lambda n: str(uuid.uuid5(uuid.NAMESPACE_URL, "beamng-earth/" + n))      # noqa: E731
     out = {}
-    paint = stock.materials.get("traffic_paint", {})
-    ao = ((paint.get("Stages") or [{}])[0] or {}).get("ambientOcclusionMap")
     for n in sorted(names):
         if n.startswith("bne_car_paint_"):
-            col, met, rough = COLOURS[n[len("bne_car_paint_"):]]
-            st0 = {"baseColorFactor": [*col, 1.0], "metallicFactor": met, "roughnessFactor": rough,
-                   "clearCoatFactor": 1, "clearCoatRoughnessFactor": 0.05}
-            if ao:
-                st0["ambientOcclusionMap"] = ao
-            out[n] = {"name": n, "mapTo": n, "class": "Material", "version": 1.5, "persistentId": pid(n),
-                      "Stages": [st0, {}, {}, {}], "dynamicCubemap": True, "materialTag0": "beamng",
-                      "materialTag1": "vehicle"}
+            out[n] = _plain(pid, n, *COLOURS[n[len("bne_car_paint_"):]])
+            continue
+        if n == "bne_car_glass_far":
+            out[n] = _plain(pid, n, *GLASS_FAR)
             continue
         src = stock.materials["traffic_" + n[len("bne_car_"):]] if ("traffic_" + n[len("bne_car_"):]) in stock.materials \
             else stock.materials[n[len("bne_car_"):]]
         d = json.loads(json.dumps(src))
+        alpha_test = bool(d.get("alphaTest")) and "glass" not in n         # (the grille's mesh: cut out, not blended)
+        for k in STRIP + (() if alpha_test else ("alphaTest", "alphaRef")):
+            d.pop(k, None)
         for st in d.get("Stages", []):
             if isinstance(st, dict):
-                for k in ("instanceDiffuse", "colorPaletteMap", "colorPaletteMapUseUV"):
+                for k in STRIP_STAGE if not alpha_test else tuple(x for x in STRIP_STAGE if x != "opacityMap"):
                     st.pop(k, None)
                 for k, v in list(st.items()):
                     if v is None:
@@ -577,7 +597,7 @@ def mid_mat(stock, model, s, colour):
     if re.search(r"light|lamp|chmsl|signal|badge|reverse|lowbeam|highbeam", s):
         return None
     if "glass" in s:
-        return "bne_car_glass"
+        return "bne_car_glass_far"
     if "wheel" in s or "tire" in s or "tyre" in s:
         return full                         # (the stock wheel atlases: their uvs)
     if s == f"traffic_{model}" and full in (f"bne_car_{model}",):
@@ -595,7 +615,7 @@ def mid_mesh(c, mats, cell=MID_CELLS_M[0], wheel_cell=None, inner_m=0.10):
     # the outer skin (paint and windows): its half width and top per 5 cm along x, its ends per 10 cm in (y, z)
     skin = np.concatenate([Pm for mat, Pm, _, _, w, mesh in c["pieces"]
                            if not w and mid_keep(mesh) and mats(mat) is not None
-                           and (mats(mat).startswith("bne_car_paint_") or mats(mat) == "bne_car_glass")])
+                           and (mats(mat).startswith("bne_car_paint_") or mats(mat) == "bne_car_glass_far")])
     xs = np.floor(skin[:, 0] / 0.05).astype(np.int64)
     ymax, zmax = {}, {}
     for kx, y, z in zip(xs, np.abs(skin[:, 1]), skin[:, 2]):
@@ -718,7 +738,7 @@ def hull(c, paint, size):
     up = g[g[:, 2] > (gz + hi[2]) / 2] if len(g) else g     # (the upper half: no lamp glass)
     if len(up):             # the cabin: the windows' length, from the belt line to the roof
         x0, x1 = np.percentile(up[:, 0], 2), np.percentile(up[:, 0], 98)
-        m.box("bne_car_glass", ((x0 + x1) / 2, (lo[1] + hi[1]) / 2, (gz + hi[2]) / 2),
+        m.box("bne_car_glass_far", ((x0 + x1) / 2, (lo[1] + hi[1]) / 2, (gz + hi[2]) / 2),
               ((x1 - x0) / 2, (hi[1] - lo[1]) / 2 * 0.9, (hi[2] - gz) / 2))
     r, w = c["radius"], c["half_w"]
     for x, y, z in c["wheels"]:
