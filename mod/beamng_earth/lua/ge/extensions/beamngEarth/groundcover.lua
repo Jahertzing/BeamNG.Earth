@@ -101,18 +101,26 @@ M.FADE_SHARE = 0.5
 
 -- The grass takes the ground's colour (the same report): open-world games colour each blade from the terrain under
 -- it (Ghost of Tsushima), so where the blades end the ground is the same colour; GroundCover cannot read the ground,
--- so the grass materials' baseColorFactor is set from the server's mean photo colour under the block's grass
--- (surface.grass_tint, the terrain message's grassTint; detail mode). TEX_LINEAR: each material's own texture's mean
--- linear colour over its opaque texels (measured from the stock textures), TINT_STRENGTH how far toward the photo
--- (1: the photo's colour; geometric), TINT_BRIGHT a brightness on top (lit blades vs the photo's ground).
--- Off by default (2026-10-28): each change is a Material flush + reload of a material the GroundCover cells draw with, and
--- Jeff's first drive with the tint ended in an engine crash (a main-thread call through a freed object, 9 s after a
--- rebase, during the terrain block changes that set the tint). Until the tint is made without a reload, off.
+-- so the grass draws with a tinted copy of its stock material, the copy's baseColorFactor set from the server's mean
+-- photo colour under the block's grass (surface.grass_tint, the terrain message's grassTint; detail mode).
+-- TEX_LINEAR: each material's own texture's mean linear colour over its opaque texels (measured from the stock
+-- textures), TINT_STRENGTH how far toward the photo (1: the photo's colour; geometric), TINT_BRIGHT a brightness on
+-- top (lit blades vs the photo's ground).
+-- No material is ever changed once made (2026-10-28: the first version set the stock materials' factor and reloaded
+-- them under live grass, and Jeff's first drive with it ended in an engine crash, a main-thread call through a freed
+-- object during the block changes that set the tint). A copy is made per colour step (TINT_STEP, so a drive makes a
+-- few dozen at most, re-used, never deleted), fully set up before it is registered, and the GroundCover objects are
+-- made again on it at the next block change (as at a teleport: afterBlockChange regenerates them that frame), only
+-- when the colour moved more than TINT_MIN_CHANGE.
 M.TINT = false
 M.TINT_STRENGTH = 0.7
-M.TINT_BRIGHT = 1.0
-M.TINT_MIN_CHANGE = 0.03    -- a smaller change is not applied (each costs a material reload)
-M.TINT_RANGE = { 0.2, 8.0 } -- the factor's bounds per channel (the green grass has almost no blue: tan needs ~10x)
+-- (Jeff's drive with the first version, 2026-10-28: the grass "sometimes looked white": the green textures need ~5x
+-- red and ~10x blue for tan, and lit blades read brighter than the photo's ground; kept lower until tuned in game)
+M.TINT_BRIGHT = 0.75
+M.TINT_MIN_CHANGE = 0.08    -- a smaller change (per channel, relative) keeps the copies in use
+M.TINT_STEP = 1.06          -- the copies' factors are powers of this (per channel)
+M.TINT_RANGE = { 0.2, 4.0 } -- the factor's bounds per channel (the green grass has almost no blue: tan wants ~10x)
+M.TINT_PREFIX = 'bngEarthGT_'
 -- material name -> { r, g, b } (linear 0-1), see above: the opaque texels' mean of the full-size base colour map
 -- (opacity >= alphaRef), measured 2026-10-28 from content/.../foliage.zip, before the stock baseColorFactor
 M.TEX_LINEAR = {
@@ -120,17 +128,10 @@ M.TEX_LINEAR = {
   m_grass_green_long_01 = { 0.0499, 0.0834, 0.0067 },    -- Hirochi long_grass_distant
   m_grass_dry_01 = { 0.4781, 0.3919, 0.2020 },           -- West Coast USA grass_dry_1
 }
-local tintMats = {}         -- material name -> its stock baseColorFactor { r, g, b, a }
-local tintRgb = nil         -- the last tint asked for (sRGB 0-255), applied again to new materials
-local tintApplied = {}      -- material name -> the factor last set
-
-local function parseFactor(v)
-  local t = {}
-  for x in tostring(v or ''):gmatch('[-%d%.eE]+') do t[#t + 1] = tonumber(x) end
-  if #t < 3 then return { 1, 1, 1, 1 } end
-  t[4] = t[4] or 1
-  return t
-end
+local tintRgb = nil         -- the last tint asked for (sRGB 0-255)
+local tintUsed = {}         -- stock material name -> { name = the material the objects draw with, f = its factor }
+local tintPending = false   -- the objects are to be made again on new copies at the next block change
+local stockJson = {}        -- source -> its materials file decoded (the copies' fields)
 
 local created = {}        -- object names we made
 local layered = false     -- a block with surface layers was loaded this level (objects can exist)
@@ -238,11 +239,8 @@ function M.ensure()
       local def = defs[d.source][d.src]
       if def then
         local name = M.PREFIX .. (d.name or d.src)
-        local mat = d.tint and (def.material or def.Material)
-        if type(mat) == 'string' and not tintMats[mat] then
-          local mo = scenetree.findObject(mat)
-          if mo then tintMats[mat] = parseFactor(mo:getField('baseColorFactor', 0)) end
-        end
+        local stock = d.tint and (def.material or def.Material)
+        local mat = type(stock) == 'string' and M.tintMaterial(d.source, stock) or nil
         -- one left by an earlier module instance (a GE Lua reload keeps the level's objects) may
         -- have older fields, e.g. GPU placement: made again from the current definition
         local old = scenetree.findObject(name)
@@ -252,6 +250,7 @@ function M.ensure()
           local fields, factor = M.reachFor(d, M.reach)
           for _, c in ipairs(M.fieldsFor(def, d.layer, d.share * M.density * factor)) do gc:setField(c[1], c[2], c[3]) end
           for k, v in pairs(fields) do gc:setField(k, 0, tostring(v)) end
+          if mat then gc:setField('material', 0, mat) end     -- (a tinted copy of the stock one)
           for _, f in ipairs(M.PLACEMENT) do gc:setField(f[1], 0, f[2]) end
           gc.canSave = false
           gc:registerObject(name)
@@ -293,55 +292,122 @@ function M.tintFactor(orig, tex, rgb, strength, bright)
   return out
 end
 
-local function applyTint()
-  if not tintRgb or not M.TINT then return 0 end     -- (off: no material is touched at all)
-  local n = 0
-  for name, orig in pairs(tintMats) do
-    local tex = M.TEX_LINEAR[name]
-    local m = scenetree.findObject(name)
-    if tex and m then
-      local f = M.TINT and M.tintFactor(orig, tex, tintRgb, M.TINT_STRENGTH, M.TINT_BRIGHT) or orig
-      local last = tintApplied[name]
-      local moved = not last
-      if last then
-        for i = 1, 3 do if math.abs(f[i] - last[i]) > M.TINT_MIN_CHANGE * math.max(last[i], 0.1) then moved = true end end
-      end
-      if moved then
-        m:setField('baseColorFactor', 0, string.format('%.4f %.4f %.4f %.4f', f[1], f[2], f[3], f[4]))
-        pcall(function() m:flush() end)
-        pcall(function() m:reload() end)
-        tintApplied[name] = f
-        n = n + 1
+-- Pure: factor f snapped to powers of TINT_STEP per channel ({ r, g, b, a } and its key "i_j_k").
+function M.tintStep(f)
+  local q, k = {}, {}
+  local l = math.log(M.TINT_STEP)
+  for i = 1, 3 do
+    k[i] = math.floor(math.log(math.max(f[i], 1e-6)) / l + 0.5)
+    q[i] = M.TINT_STEP ^ k[i]
+  end
+  q[4] = f[4] or 1
+  return q, table.concat(k, '_'):gsub('-', 'm')
+end
+
+-- The stock definition of material `name` in source's materials file (its decoded entry), or nil.
+local function stockEntry(source, name)
+  if stockJson[source] == nil then
+    local text = readFile and readFile(M.SOURCES[source].materials)
+    local ok, t = pcall(jsonDecode, text or '')
+    stockJson[source] = ok and type(t) == 'table' and t or false
+  end
+  local t = stockJson[source]
+  return t and type(t[name]) == 'table' and t[name] or nil
+end
+
+-- A new Material `name`: stock entry e's fields, its stage-0 baseColorFactor f, set before it is registered.
+local function makeCopy(name, e, f)
+  local m = createObject('Material')
+  if e.version ~= nil then m:setField('version', 0, fieldValue(e.version)) end
+  for k, v in pairs(e) do
+    if k ~= 'name' and k ~= 'mapTo' and k ~= 'class' and k ~= 'persistentId' and k ~= 'Stages' and k ~= 'version'
+        and v ~= jsonNull then
+      m:setField(k, 0, fieldValue(v))
+    end
+  end
+  for i, st in ipairs(type(e.Stages) == 'table' and e.Stages or {}) do
+    for k, v in pairs(st) do
+      if v ~= jsonNull then m:setField(k, i - 1, fieldValue(v)) end
+    end
+  end
+  m:setField('baseColorFactor', 0, string.format('%.4f %.4f %.4f %.4f', f[1], f[2], f[3], f[4]))
+  m:setField('mapTo', 0, name)
+  m.canSave = false
+  m:registerObject(name)
+  return m
+end
+
+-- The material a tinted definition's GroundCover draws with: the stock one (tint off, no colour yet, unmeasured or
+-- unknown texture) or a tinted copy, re-used while the colour stays within TINT_MIN_CHANGE of it.
+function M.tintMaterial(source, stock)
+  local tex = M.TEX_LINEAR[stock]
+  local e = tex and stockEntry(source, stock)
+  if not (M.TINT and tintRgb and e) then
+    tintUsed[stock] = nil
+    return stock
+  end
+  local st = type(e.Stages) == 'table' and type(e.Stages[1]) == 'table' and e.Stages[1] or {}
+  local orig = type(st.baseColorFactor) == 'table' and st.baseColorFactor or { 1, 1, 1, 1 }
+  local f = M.tintFactor(orig, tex, tintRgb, M.TINT_STRENGTH, M.TINT_BRIGHT)
+  local cur = tintUsed[stock]
+  if cur and not M.tintMoved(cur.f, f) and scenetree.findObject(cur.name) then return cur.name end
+  local q, key = M.tintStep(f)
+  local name = M.TINT_PREFIX .. stock .. '_' .. key
+  if not scenetree.findObject(name) then
+    local ok, err = pcall(makeCopy, name, e, q)
+    if not ok then
+      lastError = 'grass tint: ' .. tostring(err)
+      return stock
+    end
+  end
+  tintUsed[stock] = { name = name, f = f }
+  return name
+end
+
+-- Pure: has factor b moved from a by more than TINT_MIN_CHANGE in any channel?
+function M.tintMoved(a, b)
+  for i = 1, 3 do
+    if math.abs(b[i] - a[i]) > M.TINT_MIN_CHANGE * math.max(a[i], 0.1) then return true end
+  end
+  return false
+end
+
+-- Would the objects draw with other materials now (the tint switched, or its colour moved)?
+local function tintChanged()
+  for _, d in ipairs(M.DEFS) do
+    if d.tint then
+      local def = defsCache[d.source] and defsCache[d.source][d.src]
+      local stock = def and (def.material or def.Material)
+      if type(stock) == 'string' and M.TEX_LINEAR[stock] then
+        local cur = tintUsed[stock]
+        if (cur ~= nil) ~= (M.TINT and tintRgb ~= nil) then return true end
+        if cur and M.TINT and tintRgb then
+          local e = stockEntry(d.source, stock)
+          local st = e and type(e.Stages) == 'table' and type(e.Stages[1]) == 'table' and e.Stages[1] or {}
+          local orig = type(st.baseColorFactor) == 'table' and st.baseColorFactor or { 1, 1, 1, 1 }
+          if M.tintMoved(cur.f, M.tintFactor(orig, M.TEX_LINEAR[stock], tintRgb, M.TINT_STRENGTH, M.TINT_BRIGHT)) then
+            return true
+          end
+        end
       end
     end
   end
-  return n
+  return false
 end
 
 -- The photo's colour under the block's grass (sRGB 0-255 { r, g, b }, the terrain message's grassTint), or nil (keep
--- the last). Returns the number of materials changed.
+-- the last); core calls it before the block change, whose afterBlockChange makes the objects again when the colour
+-- moved. Returns true when they will be.
 function M.setTint(rgb)
   if type(rgb) == 'table' and #rgb >= 3 then tintRgb = { tonumber(rgb[1]), tonumber(rgb[2]), tonumber(rgb[3]) } end
-  return applyTint()
+  if #created > 0 and tintChanged() then tintPending = true end
+  return tintPending
 end
 
--- Tint on / off (the settings page): off puts the stock colours back.
+-- Tint on / off (the settings page): the objects made again at once on the tinted copies or the stock materials.
 function M.setTintEnabled(on)
   M.TINT = on and true or false
-  local was = tintApplied
-  tintApplied = {}
-  if not M.TINT then
-    for name, orig in pairs(tintMats) do
-      local m = was[name] and scenetree.findObject(name)     -- (only the ones tinted: no reload of a stock one)
-      if m then
-        m:setField('baseColorFactor', 0, string.format('%.4f %.4f %.4f %.4f', orig[1], orig[2], orig[3], orig[4]))
-        pcall(function() m:flush() end)
-        pcall(function() m:reload() end)
-      end
-    end
-    return M.TINT
-  end
-  applyTint()
+  if #created > 0 and tintChanged() then M.rebuild() end
   return M.TINT
 end
 
@@ -349,6 +415,11 @@ end
 -- this frame is drawn. Returns true if it asked for that.
 function M.afterBlockChange()
   if #created == 0 or not flushGroundCoverGrids then return false end
+  if tintPending then           -- (the colour moved: the objects on the new copies, generated this frame too)
+    tintPending = false
+    removeAll()
+    M.ensure()
+  end
   flushGroundCoverGrids()
   return true
 end
@@ -390,8 +461,9 @@ end
 -- the same game session found no m_grass_* / wca_groundcover and drew no grass, 2026-10-19).
 function M.reset()
   created = {}
-  tintMats = {}
-  tintApplied = {}
+  tintUsed = {}
+  tintPending = false
+  stockJson = {}
   defsCache = {}
   loadedMaterials = {}
   layered = false
@@ -401,6 +473,7 @@ end
 -- (their cells then start from nothing whatever the engine kept) and generate them this frame.
 function M.rebuild()
   if #created == 0 then return false end
+  tintPending = false
   removeAll()
   M.ensure()
   return M.afterBlockChange()
@@ -408,7 +481,7 @@ end
 
 function M.status()
   local mats = {}
-  for name in pairs(tintMats) do mats[#mats + 1] = name end
+  for _, u in pairs(tintUsed) do mats[#mats + 1] = u.name end
   table.sort(mats)
   return { enabled = M.enabled, density = M.density, reach = M.reach, objects = #created, materialsLoaded = next(loadedMaterials) ~= nil,
     error = lastError, tint = M.TINT and tintRgb or nil, tintMaterials = mats }

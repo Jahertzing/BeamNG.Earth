@@ -85,27 +85,56 @@ do
     for _, src in pairs(gc.SOURCES) do if p == src.items then return table.concat(lines, '\n') end end
     return realRead and realRead(p)
   end
-  -- the grass materials the tint acts on (stock factors), the shrubs' not
+  -- the tint: the grass draws with tinted copies of its stock material, made before they are registered and never
+  -- changed; the stock materials are never touched (a reload under live grass: suspected in a crash, 2026-10-28)
   local mLong = createObject('Material')
   mLong:setField('baseColorFactor', 0, '0.9 0.95 0.8 1')
   mLong:registerObject('m_long_grass_distant')
   local mShrub = createObject('Material')
   mShrub:registerObject('m_shrubs_near')
   gc.TEX_LINEAR = { m_long_grass_distant = { 0.1, 0.2, 0.05 }, m_shrubs_near = { 0.1, 0.1, 0.1 } }
+  local matsLine = '{"materials":1}'
+  byLine[matsLine] = { m_long_grass_distant = { name = 'm_long_grass_distant', mapTo = 'm_long_grass_distant', class = 'Material',
+    version = 1.5, alphaRef = 25, alphaTest = true, Stages = { { baseColorMap = '/g_b.png', opacityMap = '/g_o.png',
+    baseColorFactor = { 0.9, 0.95, 0.8, 1 } }, {}, {}, {} } } }
+  _G.readFile = function(p)
+    for _, src in pairs(gc.SOURCES) do
+      if p == src.items then return table.concat(lines, '\n') end
+      if p == src.materials then return matsLine end
+    end
+    return realRead and realRead(p)
+  end
+  local function longObj() return scenetree.findObject(gc.PREFIX .. 'long_grass_distant') end
+  local function copies()
+    local n = 0
+    for _, o in pairs(S.objects) do if o.class == 'Material' and tostring(o.name):find('^' .. gc.TINT_PREFIX) then n = n + 1 end end
+    return n
+  end
   T.check(gc.ensure() == true, 'ensure makes the objects ' .. tostring(gc.status().error))
-  T.check(gc.TINT == false and gc.setTint({ 140, 120, 80 }) == 0 and mLong.fields.baseColorFactor == '0.9 0.95 0.8 1',
-    'tint off (the default): no material touched')
-  gc.setTintEnabled(false)
-  T.check(mLong.fields.baseColorFactor == '0.9 0.95 0.8 1', 'tint off again: a stock material not rewritten')
+  T.check(gc.TINT == false and gc.setTint({ 140, 120, 80 }) == false and longObj().fields.material == 'm_long_grass_distant',
+    'tint off (the default): the stock material')
   gc.setTintEnabled(true)
-  local bcf = tostring(mLong.fields.baseColorFactor)
-  T.check(bcf ~= '0.9 0.95 0.8 1' and mShrub.fields.baseColorFactor == nil, 'tint: grass tinted, shrubs not (' .. bcf .. ')')
-  T.check(gc.setTint({ 141, 120, 80 }) == 0, 'tint: a tiny change is not applied (a material reload each)')
-  T.check(gc.setTint(nil) == 0 and gc.status().tint[1] == 141, 'tint: none in the message keeps the last')
+  local copy = scenetree.findObject(longObj().fields.material)
+  T.check(longObj().fields.material:find('^' .. gc.TINT_PREFIX) ~= nil and copy ~= nil, 'tint on: made again on a tinted copy')
+  T.check(copy.fields.baseColorMap == '/g_b.png' and copy.fields.alphaRef == '25' and copy.fields.version == '1.5'
+    and copy.fields.mapTo == copy.name and copy.fields.baseColorFactor ~= '0.9 0.95 0.8 1', 'the copy: the stock fields, its own factor')
+  T.check(mLong.fields.baseColorFactor == '0.9 0.95 0.8 1' and mShrub.fields.baseColorFactor == nil, 'stock materials untouched')
+  T.check(scenetree.findObject(gc.PREFIX .. 'shrubs_near').fields.material == 'm_shrubs_near', 'shrubs: their own')
+  local made = copies()
+  T.check(gc.setTint({ 142, 121, 80 }) == false, 'a small change: the same copies')
+  T.check(gc.setTint(nil) == false and gc.status().tint[1] == 142, 'none in the message keeps the last')
+  local fl0, before = flushes, longObj()
+  T.check(gc.setTint({ 90, 120, 60 }) == true and longObj() == before, 'a moved colour: waits for the block change')
+  T.check(gc.afterBlockChange() == true and flushes == fl0 + 1 and longObj() ~= before, 'block change: made again, generated now')
+  T.check(copies() == made + 1, 'one new copy (' .. copies() .. ')')
+  gc.setTint({ 142, 121, 80 })
+  gc.afterBlockChange()
+  T.check(copies() == made + 1, 'back to an earlier colour: its copy re-used')
   gc.setTintEnabled(false)
-  T.check(mLong.fields.baseColorFactor == '0.9000 0.9500 0.8000 1.0000', 'tint off: the stock factor back')
-  gc.setTintEnabled(true)
-  T.check(tostring(mLong.fields.baseColorFactor) ~= '0.9000 0.9500 0.8000 1.0000', 'tint on again: applied at once')
+  T.check(longObj().fields.material == 'm_long_grass_distant' and mLong.fields.baseColorFactor == '0.9 0.95 0.8 1',
+    'tint off: the stock material again, untouched')
+  local q, key = gc.tintStep({ 1.0, 2.0, 0.5, 1 })
+  T.check(math.abs(q[1] - 1) < 1e-9 and math.abs(q[2] / 2 - 1) < 0.031 and key:find('m') ~= nil, 'tintStep: snapped, negative steps named m')
   local o = scenetree.findObject(gc.PREFIX .. gc.DEFS[1].src)
   T.check(o and o.fields.useNewPlacement == '1' and o.fields.useNewPlacementGpu == '0', 'CPU placement over the stock GPU setting')
   T.check(o.fields.layer == gc.DEFS[1].layer and o.canSave == false, 'on our layer, not saved')
@@ -118,7 +147,8 @@ do
     end
   end
   T.check(gc.status().objects == #gc.DEFS, 'one object per definition')
-  T.check(gc.afterBlockChange() == true and flushes == 1, 'a block change rebuilds the grass in the same tick')
+  local fl1 = flushes
+  T.check(gc.afterBlockChange() == true and flushes == fl1 + 1, 'a block change rebuilds the grass in the same tick')
   -- a GE Lua reload: the module starts over, the level's objects stay (here with an old field)
   o.fields.useNewPlacementGpu = '1'
   local matLoads, realLoad = {}, _G.loadJsonMaterialsFile
