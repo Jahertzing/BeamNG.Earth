@@ -473,8 +473,12 @@ def _roads_tile(aid, lat, lon, zoom, tx, ty, out_dir, vfs_dir, sidewalks, lift, 
     if getattr(_s, "fra", None) is not None:       # (the US's level crossings' devices, alongside)
         _s.fra.prefetch(roadsmod.cells_of_tile(frame, tx, ty))
     g, _ = _s.anchor(aid, lat, lon)
-    cells = [_s.md.cell(k, layers=("roads",), kind="demand").layers.get("roads")
-             for k in roadsmod.cells_of_tile(frame, tx, ty)]
+    keys = roadsmod.cells_of_tile(frame, tx, ty)
+    cells = [_s.md.cell(k, layers=("roads",), kind="demand").layers.get("roads") for k in keys]
+    # the segments continuing the tile's roads, for their tapers (roads.pocket_profiles; the ring is warmed above)
+    pkeys = roadsmod.cells_of_tile(frame, tx, ty, roadsmod.POCKET_REACH_M)
+    pocket_cells = cells if list(pkeys) == list(keys) else \
+        [_s.md.cell(k, layers=("roads",), kind="demand").layers.get("roads") for k in pkeys]
 
     def elev(la, lo):           # the physics ground (lifted under roads: grading.ROAD_LIFT)
         z = ground(frame, la, lo, _s.dem.sample(la, lo, zoom))
@@ -518,6 +522,7 @@ def _roads_tile(aid, lat, lon, zoom, tx, ty, out_dir, vfs_dir, sidewalks, lift, 
                                  tunnels=tunnels, walls=rwalls,
                                  ground=lambda x, y: roadmeshmod.drawn_ground(frame, drawn, np.c_[x, y], q),
                                  terrain_paint=getattr(_s, "surface", None) is not None, cover_out=cover,
+                                 pocket_cells=pocket_cells,
                                  signals=furniture.signals_for(_s.md, frame,
                                                                roadsmod.cells_of_tile(frame, tx, ty, SIGNALS_MARGIN_M)),
                                  barriers=rbars,

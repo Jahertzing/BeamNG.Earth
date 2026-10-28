@@ -81,7 +81,9 @@ def ribbon_pairs(chunks):
 
 def ribbons(chunks):
     """Per chunk: (left (k, 2), right (k, 2), v (k,), material, layer, z (k,) or None) in the anchor
-    frame; z: the chunk's own heights where it is "fixed" (bridge decks), else None (draped). Pure."""
+    frame; z: the chunk's own heights where it is "fixed" (bridge decks), else None (draped). A chunk with "wl" / "wr"
+    (one per node of "n": m to its left / right edge, a turn pocket's) has those widths, linear between its nodes, in
+    place of "w". Pure."""
     out = []
     for c in chunks:
         pts = np.asarray(c["n"], np.float64)
@@ -90,8 +92,15 @@ def ribbons(chunks):
         xy, s, z = _resample(pts, DRAPE_STEP, keep_vertices=bool(c.get("deck") and c.get("fixed")))
         if len(xy) < 2:
             continue
-        n = _normals(xy) * (float(c["w"]) / 2)
-        out.append((xy + n, xy - n, s / float(c.get("tl") or 10.0), c["m"], layer_of(c),
+        if c.get("wl") is not None:     # a carriageway not of one width (roads.pocket_profiles): half widths per node
+            sn = np.concatenate(([0.0], np.cumsum(np.hypot(*np.diff(pts[:, :2], axis=0).T))))
+            n = _normals(xy)
+            left = xy + n * np.interp(s, sn, np.asarray(c["wl"], np.float64))[:, None]
+            right = xy - n * np.interp(s, sn, np.asarray(c["wr"], np.float64))[:, None]
+        else:
+            n = _normals(xy) * (float(c["w"]) / 2)
+            left, right = xy + n, xy - n
+        out.append((left, right, s / float(c.get("tl") or 10.0), c["m"], layer_of(c),
                     z if c.get("fixed") else None))
     return out
 
@@ -234,7 +243,12 @@ def _reach_past(c, box):
         n.insert(0, ends[0][None])
     if ends[1] is not None:
         n.append(ends[1][None])
-    return {**c, "n": np.concatenate(n).tolist()}
+    out = {**c, "n": np.concatenate(n).tolist()}
+    for k in ("wl", "wr"):              # (a widened chunk's half widths: its end nodes' carried on)
+        if c.get(k) is not None:
+            w = list(c[k])
+            out[k] = w[:1] * (ends[0] is not None) + w + w[-1:] * (ends[1] is not None)
+    return out
 
 
 GRID_M = 2.0            # the terrain block's square (heightmap.SQUARE): its samples on multiples of it, each square cut

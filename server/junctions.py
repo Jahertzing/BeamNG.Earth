@@ -259,7 +259,7 @@ def _across(roads, bi, bj, cr, X, walk_w, debug=None):
     return {"arc": curb, "inward": nrm, "outer": outer, "fill": None, "fills": fills, "ramps": []}, ti, tj
 
 
-def find(roads, has_walk, walk_w, parking_m=0.0, has_parking=lambda spec: False, debug=None):
+def find(roads, has_walk, walk_w, parking_m=0.0, has_parking=lambda spec: False, debug=None, half=None):
     """Corners, cuts and crosswalks of the junctions among `roads` [(fid, spec, pts (k, 3), lon)].
     has_walk(spec) -> bool; walk_w: sidewalk width. Returns
         corners: [dict(arc (n, 3) curb points, inward (n, 2) unit vectors toward the sidewalk,
@@ -268,7 +268,12 @@ def find(roads, has_walk, walk_w, parking_m=0.0, has_parking=lambda spec: False,
         crosswalks: [dict(a (3,), b (3,), w)]: across a road, curb to curb
         ramps: {(fid, side): [(node xy, branch u, t0, t1)]}: curb ramp along that sidewalk
         line_cuts: {fid: [(node xy, branch u, t)]}: that road's markings start t m from the node
-                   (beyond its crosswalk)"""
+                   (beyond its crosswalk)
+    half(road index, vertex index, side +1 left / -1 right of its geometry) -> m from its centreline to that curb
+    there (a road not of one width: roads.pocket_profiles), None: every road's width / 2."""
+    if half is None:
+        def half(ri, vi, side):
+            return roads[ri][1].width / 2
     nodes = {}
     for ri, (fid, spec, pts, lon) in enumerate(roads):
         for vi, p in enumerate(pts):
@@ -390,7 +395,7 @@ def find(roads, has_walk, walk_w, parking_m=0.0, has_parking=lambda spec: False,
                     debug.append(('walk/angle', round(theta), has_walk(spi), has_walk(spj), X.round(1).tolist()))
                 continue
             ni, nj = _left(ui), _left(uj)
-            wi, wj = spi.width / 2, spj.width / 2
+            wi, wj = half(ri, vi, si), half(rj, vj, -sj)      # (branch i's left side, j's right)
             # curb extensions: on a two-way street with parking the corner's curb is the driving
             # lanes' edge, BULB_M along the street, then back to the parking curb over TAPER_M
             # (Fells Point aerials, 2026-10-11: bulb-outs at most corners; off since GitHub #208, as most streets
@@ -489,13 +494,14 @@ def find(roads, has_walk, walk_w, parking_m=0.0, has_parking=lambda spec: False,
             if (i, "L") in side_t and (i, "R") in side_t:
                 ai, ri, vi, si, ui, li, Pi = branches[i]
                 spec = roads[ri][1]
-                w = spec.width / 2
-                dw = w - (parking_m if has_parking(spec) else 0.0)     # curb to curb at the bulbs
+                bulb = parking_m if has_parking(spec) else 0.0
+                dw = half(ri, vi, si) - bulb        # curb to curb at the bulbs (on u's left, ...)
+                dr = half(ri, vi, -si) - bulb       # (... and its right)
                 t = max(side_t[(i, "L")][0], side_t[(i, "R")][0]) + CW_GAP + CROSSWALK["w"] / 2
                 c = Pi + ui * t
                 z = _z_along(roads[ri][2], vi, si, t)
                 nl = _left(ui)
-                a, b = c + nl * dw, c - nl * dw
+                a, b = c + nl * dw, c - nl * dr
                 if _branch_len(roads[ri][2], vi, si) < t + CROSSWALK["w"]:
                     continue
                 others = [rd for k2, rd in enumerate(roads) if k2 != ri]

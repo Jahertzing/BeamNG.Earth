@@ -37,7 +37,7 @@ import staging
 
 log = logging.getLogger("earthd.roads")
 
-VERSION = 1
+VERSION = 2              # (2: turn pockets and tapers, pocket_profiles)
 TILE = 256.0            # m, tile side in the anchor frame
 SEND_M = float(os.environ.get("BNE_ROADS_SEND_M", "640"))     # tiles whose square comes this close to the player
                                                                 # (Chebyshev) are sent
@@ -202,6 +202,25 @@ MIN_PIECE_M = 3.0               # shorter sidewalk / line pieces are dropped
 WALK_STEP_M = 1.0               # m the ground under a sidewalk may lie off the road's level: further, a cutting's wall or
                                 # a drop is there and the sidewalk stops (it was draped up a wall, Munich's McGraw-Graben)
 NEAR_M = 40.0                   # roads this far outside the tile still cut its sidewalks / lines
+# Turn pockets and width tapers (feature turn-pockets 2026-10-28; pocket_profiles): a carriageway drawn at one width per
+# segment stepped where OpenStreetMap splits a way at a pocket (Colorado's table: the turn lane counted in `lanes` of a
+# short way, ~50-150 m, between ways a lane narrower; 22-26 % of the joints along Denver's and Thornton's arterials
+# step, median 3.3 m), and a turn lane the lane count leaves out had its arrows painted into the through lanes
+POCKET_M = 55.0         # m of a turn pocket at its full width before its lane's downstream end (US: 50-60 m) ...
+POCKET_TAPER_M = 30.0   # ... and its taper before that; also the taper of the wider of two segments of one road whose
+                        # widths differ, from the other's width at their joint (no step)
+POCKET_STEP_MIN_M = 0.5     # m: a smaller step between two segments is left as it is
+POCKET_SHORT_TAPER = 0.4    # share of a road shorter than a pocket and its taper given to the taper
+POCKET_TURN_DEG = 35.0      # segments meeting end to end within this of straight on continue each other ...
+POCKET_RANK = {"motorway": 0, "trunk": 1, "primary": 2, "secondary": 3, "tertiary": 4, "unclassified": 5,
+               "residential": 5, "living_street": 5, "service": 6}
+                            # ... where every other road meeting them there is of a lower rank (a side street, a
+                            # driveway: Denver's pockets start at the side street before the block; 1,700 of the ~1,800
+                            # joints of two same-named arterial segments there have one), others 7
+POCKET_TOL_M = 0.5      # m: an offset this near a pocket's outer boundary (the centre line's two strokes) moves with it
+POCKET_STEP_M = 4.0     # m between the nodes added along a widened stretch (the painted ground's and blockers' pieces)
+POCKET_REACH_M = POCKET_TAPER_M + NEAR_M    # m around a tile whose cells' roads the joints are looked up in
+POCKETS_ON = os.environ.get("BNE_POCKETS", "on") != "off"     # (off: every carriageway of one width, as before)
 # Carriageway = driving width + parking lanes on city streets or paved edge strips on rural roads
 # (docs/research/2026-10-11-official-road-study.md §2: rural paved surface = AI width + 2-2.5 m;
 # West Coast USA's plain streets 12.5 m for 8 m of driving: ~2.3 m of parking each side). A width
@@ -2157,7 +2176,8 @@ def centre_colour(lon):
 
 
 def offset_polyline(pts, d):
-    """The polyline moved d m to its left (xy; z kept), with mitred joints (miter at most 2x). Pure."""
+    """The polyline moved d m to its left (xy; z kept), with mitred joints (miter at most 2x); d one number or one per
+    point (a widened road's offsets: widen_off). Pure."""
     pts = np.asarray(pts, np.float64)
     if len(pts) < 2:
         return pts.copy()
@@ -2176,7 +2196,7 @@ def offset_polyline(pts, d):
         cosh = np.clip(np.sum(m * nrm[1:], axis=1), 0.5, 1.0)  # miter scale 1/cos(half angle), at most 2
         vn[1:-1] = m / cosh[:, None]
     out = pts.copy()
-    out[:, :2] += vn * d
+    out[:, :2] += vn * (d[:, None] if np.ndim(d) else d)
     return out
 
 
@@ -2323,18 +2343,23 @@ def sidewalk_stop(spec, fid, other, ofid):
     return other.width / 2
 
 
-def extras(spec, pts, lon, left_hand=False):
+def extras(spec, pts, lon, left_hand=False, wid=None):
     """The sidewalk / gutter / marking polylines of one road: [(look dict with m / tl / p, width, pts)].
-    pts: its centreline (k, 3) in the anchor frame; lon: its longitude (centre line colour). Pure."""
+    pts: its centreline (k, 3) in the anchor frame; lon: its longitude (centre line colour); wid: (Widening, s m along
+    the road at each point) of a road not of one width (pocket_profiles; pts with its nodes, widen_nodes): every line
+    follows its edges and lanes. Pure."""
     out = []
+
+    def op(p, d):
+        return offset_polyline(p, d if wid is None else widen_off(wid[0], wid[1], d))
     w, kind, urban, cls = spec[:4]
     if kind not in BUILT:
         return out
     if has_sidewalks(spec):
         for side in walk_sides(spec, left_hand):
             out.append(({**SIDEWALK, "side": side}, spec.walk,
-                        offset_polyline(pts, side * (w / 2 + spec.walk / 2))))
-            out.append(({**GUTTER, "side": side}, GUTTER["w"], offset_polyline(pts, side * (w / 2 - GUTTER["w"] / 2))))
+                        op(pts, side * (w / 2 + spec.walk / 2))))
+            out.append(({**GUTTER, "side": side}, GUTTER["w"], op(pts, side * (w / 2 - GUTTER["w"] / 2))))
         ms = median_side(spec, left_hand)
         if ms is not None:
             # the median: a curbed band, lawn beyond it (two sidewalks back to back made a concrete strip, the user's
@@ -2343,26 +2368,26 @@ def extras(spec, pts, lon, left_hand=False):
             # (each carriageway's half, a hair short of the middle: touching the other's carriageway where the gap
             # narrows, the band was cut away)
             band = max(0.3, mw / 2 - 0.15) if mw <= MEDIAN_SLAB_M else MEDIAN_CURB_W
-            out.append(({**SIDEWALK, "side": ms, "median": True}, band, offset_polyline(pts, ms * (w / 2 + band / 2))))
+            out.append(({**SIDEWALK, "side": ms, "median": True}, band, op(pts, ms * (w / 2 + band / 2))))
             if kind == "paved":     # a double yellow line along it (Boston Street, Mapillary 2026-10-17) ...
                 look = {"m": centre_colour(lon), "tl": CENTRE["tl"], "p": CENTRE["p"]}
                 # ... outside the Americas one solid white edge line along the median's curb (PR #146)
                 for k in ((0,) if centre_colour(lon) == "line_white" else (0, 1)):
                     out.append((look, CENTRE["w"], offset_polyline(
                         pts, ms * (w / 2 - EDGE_LINE["inset"] - 2 * k * CENTRE["gap"]))))
-            out.append(({**GUTTER, "side": ms}, GUTTER["w"], offset_polyline(pts, ms * (w / 2 - GUTTER["w"] / 2))))
+            out.append(({**GUTTER, "side": ms}, GUTTER["w"], op(pts, ms * (w / 2 - GUTTER["w"] / 2))))
     tagged = kind == "paved" and has_lane_tags(spec)
     if tagged:                  # the regional tables' lanes, centre turn lanes, parking and turn arrows (lane_marks)
-        out.extend(lane_marks(spec, pts, lon, left_hand))
+        out.extend(lane_marks(spec, pts, lon, left_hand, wid))
     if kind == "paved" and cls in CENTRE_CLASSES and w >= 6.0 and not spec.oneway and not tagged:   # no paint on cobbles
         if centre_colour(lon) == "line_white":
             # outside the Americas one broken white line (the Gotthard road on Mapillary, 2026-10-18: ours had the
             # Americas' double line in white)
-            out.append((LANE_LINE, LANE_LINE["w"], pts.copy()))
+            out.append((LANE_LINE, LANE_LINE["w"], pts.copy() if wid is None else op(pts, 0.0)))
         else:
             look = {"m": centre_colour(lon), "tl": CENTRE["tl"], "p": CENTRE["p"]}
             for side in (1, -1):
-                out.append((look, CENTRE["w"], offset_polyline(pts, side * CENTRE["gap"])))
+                out.append((look, CENTRE["w"], op(pts, side * CENTRE["gap"])))
     if kind == "paved" and cls in LANE_CLASSES and not tagged:
         # lane lines (white dashes) where the driving width holds two or more lanes a direction
         parked = urban and cls in PARKING_CLASSES and not (not spec.oneway and cls in URBAN_ARTERIAL)
@@ -2372,17 +2397,17 @@ def extras(spec, pts, lon, left_hand=False):
         if spec.oneway and lanes >= 2:
             lw = drive / lanes
             for k in range(1, lanes):
-                out.append((LANE_LINE, LANE_LINE["w"], offset_polyline(pts, -drive / 2 + k * lw)))
+                out.append((LANE_LINE, LANE_LINE["w"], op(pts, -drive / 2 + k * lw)))
         elif not spec.oneway and lanes >= 4:
             n = lanes // 2
             lw = drive / 2 / n
             for side in (1, -1):
                 for k in range(1, n):
-                    out.append((LANE_LINE, LANE_LINE["w"], offset_polyline(pts, side * k * lw)))
+                    out.append((LANE_LINE, LANE_LINE["w"], op(pts, side * k * lw)))
     if kind == "paved" and (not urban or not has_sidewalks(spec)) and cls in EDGE_LINE_CLASSES:   # no curb: edge lines
         for side in (1, -1):
             inset = motorway_shoulder(spec) if rural_motorway(spec) else EDGE_LINE["inset"]
-            out.append((EDGE_LINE, EDGE_LINE["w"], offset_polyline(pts, side * (w / 2 - inset))))
+            out.append((EDGE_LINE, EDGE_LINE["w"], op(pts, side * (w / 2 - inset))))
     return out
 
 
@@ -2491,23 +2516,41 @@ def arrow_strokes(p, d, turns):
     return [np.array(s_, np.float64) for s_ in out]
 
 
-def lane_marks(spec, pts, lon, left_hand=False):
+def lane_marks(spec, pts, lon, left_hand=False, wid=None):
     """The markings of a road with the regional tables' tags (has_lane_tags): lane lines within each direction, the
     centre line between them (or a centre turn lane's yellow solid-and-dashed pair on each side), a white line along
     each tagged parking lane, and the turn:lanes arrows of each lane before its downstream end. [(look, width, pts)].
-    Pure."""
+    wid: as extras' (a widened road: the lines moved with its lanes, a pocket of rule (a) with its own lane line from
+    halfway up its taper and its arrows in it). Pure."""
     lay = lane_layout(spec, left_hand)
     if lay is None:
         return []
     out = []
     groups = lay["groups"]
 
+    def moved(off):
+        return off if wid is None else widen_off(wid[0], wid[1], off)
+
     def line(look, w, off):
-        out.append((look, w, offset_polyline(pts, off)))
+        out.append((look, w, offset_polyline(pts, moved(off))))
     for d, n, g0, g1 in groups:                     # lane lines within each direction
         lw = (g1 - g0) / n
         for k in range(1, n):
             line(LANE_LINE, LANE_LINE["w"], g0 + k * lw)
+    pockets = {}                                    # d -> {"L" / "R": the pocket's inner and outer edge (per point)}
+    for d, which, sg, ob, kn in (wid[0].added if wid is not None else ()):
+        outer = moved(ob)
+        inner = outer - sg * _knot_eval(kn, wid[1])
+        pockets.setdefault(d, {})[which] = (inner, outer)
+        full = [s_ for s_, e in kn if e > 0]
+        rise = [s_ for s_, e in kn if e <= 0]
+        if full:                                    # (its lane line from halfway up the taper)
+            a = 0.5 * (max(rise) + min(full)) if d > 0 and rise else -1e9
+            b = 0.5 * (min(rise) + max(full)) if d < 0 and rise else 1e9
+            inside = (wid[1] >= a) & (wid[1] <= b)
+            for run in _true_runs(inside):
+                if len(run) >= 2:
+                    out.append((LANE_LINE, LANE_LINE["w"], offset_polyline(pts[run], inner[run])))
     yellow = centre_colour(lon)
     gap = CENTRE["gap"]
     look = {"m": yellow, "tl": CENTRE["tl"], "p": CENTRE["p"]}
@@ -2534,14 +2577,21 @@ def lane_marks(spec, pts, lon, left_hand=False):
     if L >= ARROW_MIN_ROAD_M:
         for d, n, g0, g1 in groups:
             turns = spec.turns_f if d > 0 else spec.turns_b
-            if not turns or len(turns) != n or not any(turns):
+            pk = pockets.get(d, {})
+            if not turns or len(turns) != n + len(pk) or not any(turns):
                 continue
             lw = (g1 - g0) / n
+            offs = [g1 - (i + 0.5) * lw if d > 0 else g0 + (i + 0.5) * lw for i in range(n)]
+            if wid is not None:                     # (each lane between its two moved edges)
+                dt = POCKET_TOL_M + 0.1
+                into = -1 if d > 0 else 1           # (from a lane's left edge into it, as the driver sees it)
+                offs = [0.5 * (moved(o - into * lw / 2 + into * dt) - into * dt
+                               + moved(o + into * lw / 2 - into * dt) + into * dt) for o in offs]
+                offs = ([0.5 * sum(pk["L"])] if "L" in pk else []) + offs + ([0.5 * sum(pk["R"])] if "R" in pk else [])
             for i, t in enumerate(turns):           # (left to right as the driver sees them)
                 if not t or set(t) == {"through"} and len(set(turns) - {()}) == 1:
                     continue                        # (no arrows on a road whose lanes all go straight on)
-                off = g1 - (i + 0.5) * lw if d > 0 else g0 + (i + 0.5) * lw
-                lane = offset_polyline(pts, off)
+                lane = offset_polyline(pts, offs[i])
                 for at in ARROW_AT_M:
                     if at + 6.0 > L:
                         continue
@@ -2549,6 +2599,14 @@ def lane_marks(spec, pts, lon, left_hand=False):
                     for st in arrow_strokes(p, u if d > 0 else -u, t):
                         out.append((ARROW, ARROW["w"], st))
     return out
+
+
+def _true_runs(mask):
+    """The index runs (arrays) where a bool array is True."""
+    idx = np.flatnonzero(mask)
+    if not len(idx):
+        return []
+    return np.split(idx, np.flatnonzero(np.diff(idx) > 1) + 1)
 
 
 def clear_of(pts, blockers):
@@ -2561,6 +2619,373 @@ def clear_of(pts, blockers):
     fast.require(0, "inside_blockers")
     segs, starts, hws = _blocker_segments(blockers)
     return not np.asarray(fast._ef.inside_blockers(np.ascontiguousarray(d[:, :2]), segs, starts, hws)).any()
+
+
+
+# Turn pockets and width tapers (POCKET_M ...): per road a profile of how its carriageway departs from its one width
+# along it, a pure function of its own spec and geometry and of the segments continuing it at its two ends (whichever
+# tile, ground photo or grader asks: each looks them up among the cells it has, the road tiles among the cells within
+# POCKET_REACH_M). Two rules:
+#   (a) an exclusive turn lane (the leftmost lane only turning left, or the rightmost only right) that the lane count
+#       leaves out (turn:lanes one lane longer than the lanes that way) is added over its last POCKET_M, opening over
+#       POCKET_TAPER_M before: a left pocket toward the centre line (the other way's lanes moved over), a right bay
+#       toward the curb; the backward lanes' pockets at the geometry's start. A road with a centre turn lane turns left
+#       from it (no left pocket);
+#   (b) where two segments of one road (same class and name, end to end, straight on) differ in width, the wider one
+#       starts from the other's width at their joint and opens over POCKET_TAPER_M, both its edges equally (the mapped
+#       line is the road's middle on both). Where the difference is the exclusive turn lanes of the way leaving the
+#       joint (a pocket mapped as its own way, as Colorado's are: it starts at the side street before the block),
+#       those lanes open and the rest shift over, and lower roads may meet it there (POCKET_RANK); a difference of no
+#       known lane opens every lane evenly, only where nothing but driveways and paths meet it (at a junction the
+#       step is the junction's). Never at the end where its lanes' turn arrows end (the junction it is the approach to).
+# A profile: Widening(w the base width, L m along the road's line (its first ring, lon scaled by cos lat as
+# sub_polyline), comps, added, ring, c, s): comps ((kind, o_b, sigma, knots), ...), knots ((s, e), ...) linear between:
+# "ins" moves every offset from o_b on (toward sigma, POCKET_TOL_M short of it included) by sigma x e, "mid" every
+# offset by e, "scale" every offset by its share e / w; added: rule (a)'s lanes ((d, "L" / "R", sigma, o_b, knots)).
+# The offsets are lane_layout's (m left of the geometry); widen_off moves them, widen_edges gives the carriageway's.
+Widening = namedtuple("Widening", "w L comps added ring c s")
+LEFT_TURNS = frozenset({"left", "slight_left", "sharp_left"})
+RIGHT_TURNS = frozenset({"right", "slight_right", "sharp_right"})
+_POCKET_MEMO = {}               # (cell ids, urban_fn, widths, left_hand) -> (cells, profiles): pocket_profiles
+_POCKET_LOCK = threading.Lock()
+_POCKET_MEMO_N = 16
+
+
+def _ring_metric(ring):
+    """(c, s): a lon/lat ring's lon scale (cos of its mean lat) and m along it at each point (sub_polyline's)."""
+    ring = np.asarray(ring, np.float64)
+    c = math.cos(math.radians(float(np.mean(ring[:, 1]))))
+    seg = np.hypot(np.diff(ring[:, 0]) * c, np.diff(ring[:, 1])) * 111320.0
+    return c, np.r_[0.0, np.cumsum(seg)]
+
+
+def _knots(pairs):
+    """((s, e), ...) in order of s, repeats of one s kept once (the last)."""
+    out = []
+    for s, e in sorted(((float(s), float(e)) for s, e in pairs), key=lambda p: p[0]):
+        if out and abs(out[-1][0] - s) < 1e-9:
+            out[-1] = (s, e)
+        else:
+            out.append((s, e))
+    return tuple(out)
+
+
+def _knot_eval(knots, s):
+    k = np.asarray(knots, np.float64)
+    return np.interp(np.asarray(s, np.float64), k[:, 0], k[:, 1])
+
+
+def _ramp(L, at_end, T, v):
+    """Knots: v at the road's start (end: at_end) falling to 0 over T m."""
+    T = min(T, L)
+    return _knots(((0.0, 0.0), (L - T, 0.0), (L, v)) if at_end else ((0.0, v), (T, 0.0), (L, 0.0)))
+
+
+def _pocket_knots(L, at_end, e):
+    """Knots: e over the last POCKET_M at the road's end (start: not at_end), opening over POCKET_TAPER_M before; on a
+    road shorter than both, its taper POCKET_SHORT_TAPER of it, the pocket the rest (whole, it stepped where its way
+    met the next: Thornton's 136th Avenue, a 53 m way)."""
+    T = min(POCKET_TAPER_M, max(L - POCKET_M, POCKET_SHORT_TAPER * L))
+    P = min(POCKET_M, L - T)
+    if at_end:
+        return _knots(((0.0, 0.0), (L - P - T, 0.0), (L - P, e), (L, e)))
+    return _knots(((0.0, e), (P, e), (P + T, 0.0), (L, 0.0)))
+
+
+def widen_off(wd, s, o):
+    """The lane_layout offset o (m left of the geometry; a number or one per point) at the points s m along a road with
+    the profile wd, moved as the profile says (one per point). Pure."""
+    s = np.asarray(s, np.float64)
+    base = np.broadcast_to(np.asarray(o, np.float64), s.shape)
+    out = base.copy()
+    for kind, ob, sg, kn in wd.comps:
+        e = _knot_eval(kn, s)
+        if kind == "scale":
+            out += base * e / wd.w
+        elif kind == "mid":
+            out += e
+        else:
+            out += np.where(sg * (base - ob) >= -POCKET_TOL_M, sg * e, 0.0)
+    return out
+
+
+def widen_edges(wd, s):
+    """(el, er): m the carriageway's left / right edge lies outside the base width's at the points s (< 0: inside)."""
+    h = wd.w / 2
+    return widen_off(wd, s, h) - h, -h - widen_off(wd, s, -h)
+
+
+def widen_knots(wd):
+    """The s of every knot of a profile, in order."""
+    return sorted({float(s) for _k, _o, _g, kn in wd.comps for s, _e in kn})
+
+
+def widen_s(wd, part):
+    """m along the road (the profile's s) at each point of one of its pieces (lon/lat, as ground_parts gives them)."""
+    part = np.asarray(part, np.float64)
+    R, c = wd.ring, wd.c
+    if len(part) == len(R) and np.array_equal(part[:, :2], R[:, :2]):
+        return wd.s.copy()
+    sc = np.array([c, 1.0]) * 111320.0
+    A, B = R[:-1, :2] * sc, R[1:, :2] * sc
+    q = part[0, :2] * sc
+    ab = B - A
+    t = np.clip(((q - A) * ab).sum(1) / np.maximum((ab * ab).sum(1), 1e-12), 0.0, 1.0)
+    d = np.hypot(*(A + ab * t[:, None] - q).T)
+    k = int(np.argmin(d))
+    s0 = wd.s[k] + t[k] * (wd.s[k + 1] - wd.s[k])
+    seg = np.hypot(*np.diff(part[:, :2] * sc, axis=0).T)
+    return s0 + np.r_[0.0, np.cumsum(seg)]
+
+
+def widen_nodes(wd, pts, s):
+    """(pts, s) with nodes added at the profile's knots and every POCKET_STEP_M where it is not zero (a widened
+    stretch's edges, its painted pieces and its blockers follow it; linear between). pts: (k, D) along the road at s
+    (s rising)."""
+    pts = np.asarray(pts, np.float64)
+    s = np.asarray(s, np.float64)
+    if len(s) < 2:
+        return pts, s
+    lo, hi = float(s[0]), float(s[-1])
+    want = []
+    for _kind, _o, _g, kn in wd.comps:
+        for (s0, e0), (s1, e1) in zip(kn[:-1], kn[1:]):
+            want.extend((s0, s1))
+            if abs(e0) > 1e-9 or abs(e1) > 1e-9:
+                n = max(1, int(math.ceil((s1 - s0) / POCKET_STEP_M)))
+                want.extend((s0 + (s1 - s0) * np.arange(1, n) / n).tolist())
+    want = np.asarray([v for v in want if lo + 1e-6 < v < hi - 1e-6], np.float64)
+    if not len(want):
+        return pts, s
+    new = np.unique(np.r_[s, want])
+    new = new[np.r_[True, np.diff(new) > 1e-6]]
+    out = np.stack([np.interp(new, s, pts[:, j]) for j in range(pts.shape[1])], axis=1)
+    at = np.searchsorted(s, new)
+    same = (at < len(s)) & (np.abs(s[np.minimum(at, len(s) - 1)] - new) <= 1e-6)
+    out[same] = pts[at[same]]       # (the original nodes exactly as they were)
+    return out, new
+
+
+def _exclusive(turns):
+    """(left, right): is the leftmost lane of a turns tuple (turn:lanes, left to right) only a left turn, its rightmost
+    only a right turn?"""
+    if not turns or len(turns) < 2:
+        return False, False
+    return (bool(turns[0]) and set(turns[0]) <= LEFT_TURNS, bool(turns[-1]) and set(turns[-1]) <= RIGHT_TURNS)
+
+
+def _pocket_edge(d, which, g0, g1):
+    """(o_b, sigma) of the exclusive lane `which` ("L" / "R") of a direction d's lanes g0..g1: its outer edge (the
+    driver's left of the leftmost lane, the right of the rightmost) and the side the pocket opens to."""
+    if which == "L":
+        return (g1, 1) if d > 0 else (g0, -1)
+    return (g0, -1) if d > 0 else (g1, 1)
+
+
+def _pkey(p):
+    return (int(round(float(p[0]) * 1e7)), int(round(float(p[1]) * 1e7)))
+
+
+def _pocket_ends(feats):
+    """Per feature: (fid, its first ring, the keys of its two ends) or None, remembered with feats (keys: lon/lat to
+    1e-7 degree; segments meeting at a connector share the point exactly)."""
+    got = feats.__dict__.get("_pocket_ends")
+    if got is None:
+        got = []
+        for i in range(len(feats)):
+            parts = feats.parts(i)
+            if not parts or not parts[0] or len(parts[0][0]) < 2:
+                got.append(None)
+                continue
+            ring = np.asarray(parts[0][0], np.float64)
+            got.append((str(feats.ids[i]), ring, _pkey(ring[0]), _pkey(ring[-1])))
+        feats.__dict__["_pocket_ends"] = got
+    return got
+
+
+def _vkey(k):
+    return (int(k[0]) << 32) ^ (int(k[1]) & 0xFFFFFFFF)
+
+
+def _vertex_keys(feats):
+    """(key (N,) int64 of every coordinate as _vkey, the feature of each, the coordinate index of each feature's first
+    and last point), remembered with feats."""
+    got = feats.__dict__.get("_pocket_vkeys")
+    if got is None:
+        ll = np.round(np.asarray(feats.lonlat, np.float64) * 1e7).astype(np.int64)
+        keys = (ll[:, 0] << 32) ^ (ll[:, 1] & 0xFFFFFFFF) if len(ll) else np.zeros(0, np.int64)
+        ci = np.arange(len(ll))
+        ring = np.searchsorted(feats.coord_off, ci, side="right") - 1
+        part = np.searchsorted(feats.ring_off, ring, side="right") - 1
+        fi = np.searchsorted(feats.part_off, part, side="right") - 1
+        r0 = feats.ring_off[np.minimum(feats.part_off[:-1], len(feats.ring_off) - 2)]
+        first = feats.coord_off[r0]
+        last = feats.coord_off[np.minimum(r0 + 1, len(feats.coord_off) - 1)] - 1
+        got = feats.__dict__["_pocket_vkeys"] = (keys, fi, first, last)
+    return got
+
+
+def _travels(sp, at_end):
+    """+1: a one-way road's traffic leaves it through its end (at_end) / start, -1: comes in through it; 0: two-way."""
+    if not sp.oneway:
+        return 0
+    along = (sp.dir or 1) > 0
+    return 1 if along == at_end else -1
+
+
+def pocket_profiles(feats_list, urban_fn=None, widths=None, left_hand=False):
+    """{fid: Widening} of the roads of feats_list (the "roads" Features of the cells at hand; each road's spec and
+    geometry from the first that has it, as build_tile takes them) whose carriageway is not of one width (rules (a)
+    and (b) above); the others are not in it. Pure given its inputs; remembered for the last few cell lists."""
+    if not POCKETS_ON:
+        return {}
+    fl = [f for f in feats_list if f is not None and len(f)]
+    key = (tuple(id(f) for f in fl), urban_fn, widths, bool(left_hand))
+    with _POCKET_LOCK:
+        got = _POCKET_MEMO.get(key)
+        if got is not None and len(got[0]) == len(fl) and all(a is b for a, b in zip(got[0], fl)):
+            return got[1]
+    out = _pocket_profiles(fl, urban_fn, widths, left_hand)
+    with _POCKET_LOCK:
+        if len(_POCKET_MEMO) >= _POCKET_MEMO_N:
+            _POCKET_MEMO.pop(next(iter(_POCKET_MEMO)))
+        _POCKET_MEMO[key] = (fl, out)
+    return out
+
+
+def _unit_at(ring, at_end, leaving):
+    """A road's unit direction (lon scaled by cos lat) at its end (at_end) / start: into that point, or out of it."""
+    c = math.cos(math.radians(float(ring[0, 1])))
+    a, b = (ring[-2], ring[-1]) if at_end else (ring[1], ring[0])
+    v = (b[:2] - a[:2]) * (c, 1.0)
+    v = v / max(math.hypot(*v), 1e-15)
+    return -v if leaving else v
+
+
+def _pocket_profiles(fl, urban_fn, widths, left_hand):
+    roads = {}                          # fid -> (feats, i, spec, ring, name)
+    ends = {}                           # end key -> [(fid, at_end)]
+    for feats in fl:
+        specs = road_specs(feats, urban_fn, widths, left_hand)
+        names = feats.attrs.get("name")
+        for i, got in enumerate(_pocket_ends(feats)):
+            if got is None or specs[i] is None:
+                continue
+            fid, ring, k0, k1 = got
+            if fid in roads:
+                continue
+            roads[fid] = (feats, i, specs[i], ring, str(names[i]) if names is not None else "")
+            ends.setdefault(k0, []).append((fid, False))
+            ends.setdefault(k1, []).append((fid, True))
+    comps, added = {}, {}
+    # (b) the joints of two segments of one road whose widths differ: the wider one tapers there
+    cands = []                          # (key, the wider's fid, its end at the joint, |dw|, the pair's rank)
+    for k in sorted(ends):
+        rk = [POCKET_RANK.get(roads[f][2].cls, 7) for f, _e in ends[k]]
+        top = min(rk)
+        lst = [fe for fe, r in zip(ends[k], rk) if r == top]
+        if len(lst) != 2 or top >= 7:
+            continue
+        (fa, ea), (fb, eb) = lst
+        sa, sb = roads[fa][2], roads[fb][2]
+        if (fa == fb or sa.kind not in BUILT or sb.kind not in BUILT or sa.cls != sb.cls or not roads[fa][4]
+                or roads[fa][4] != roads[fb][4] or sa.oneway != sb.oneway or sa.median or sb.median):
+            continue
+        dw = sb.width - sa.width
+        if abs(dw) < POCKET_STEP_MIN_M:
+            continue
+        if sa.oneway and _travels(sa, ea) == _travels(sb, eb):
+            continue                    # (both leave or both come in: not one road going on)
+        if float(_unit_at(roads[fa][3], ea, False) @ _unit_at(roads[fb][3], eb, True)) < math.cos(
+                math.radians(POCKET_TURN_DEG)):
+            continue
+        cands.append((k, fb, eb, dw, top) if dw > 0 else (k, fa, ea, -dw, top))
+    if cands:
+        # the best rank of the other roads meeting at each joint: their ends, and the roads passing through it
+        other = {}
+        for k, *_ in cands:
+            got = [POCKET_RANK.get(roads[f][2].cls, 7) for f, _e in ends[k]]
+            other[_vkey(k)] = sorted(got)[2] if len(got) > 2 else 99
+        want = np.array(sorted(other), np.int64)
+        for feats in fl:
+            keys, fi, first, last = _vertex_keys(feats)
+            hit = np.flatnonzero(np.isin(keys, want))
+            if not len(hit):
+                continue
+            specs = road_specs(feats, urban_fn, widths, left_hand)
+            for ci in hit.tolist():
+                j = int(fi[ci])
+                if specs[j] is None or ci in (int(first[j]), int(last[j])):
+                    continue            # (a road's own end: counted above)
+                kk = int(keys[ci])
+                other[kk] = min(other[kk], POCKET_RANK.get(specs[j].cls, 7))
+        tapers = {}                     # fid -> [(at_end, [(o_b, sigma, e)] for its pocket lanes or None, dw)]
+        for k, fid, at_end, dw, top in cands:
+            feats, i, sp, ring, _nm = roads[fid]
+            trav = _travels(sp, at_end)     # (-1: the traffic comes in through the joint and goes on along it)
+            arriving = (sp.turns_f if at_end else sp.turns_b) if trav == 0 else \
+                (sp.turns_f or sp.turns_b) if trav > 0 else None
+            if arriving and any(t and set(t) != {"through"} for t in arriving):
+                continue                # (its turn lanes end there: the junction it is the approach to)
+            sided = None
+            lay = lane_layout(sp, left_hand) if sp.kind == "paved" and has_lane_tags(sp) and trav <= 0 else None
+            d = (-1 if at_end else 1) if trav == 0 else (sp.dir or 1)
+            for gd, n, g0, g1 in (lay["groups"] if lay is not None else ()):
+                turns = sp.turns_f if gd > 0 else sp.turns_b
+                if gd != d or not turns or len(turns) != n:
+                    continue
+                lw = (g1 - g0) / n
+                ex = [w for w, on in zip("LR", _exclusive(turns)) if on]
+                if ex and abs(dw - len(ex) * lw) <= 0.4 * lw:
+                    sided = [(*_pocket_edge(gd, w, g0, g1), dw / len(ex)) for w in ex]
+            # a pocket mapped as its own way starts at a side street (lower roads only); a width change of no known
+            # lane only where nothing but driveways and paths meet the road (at a junction its step is the junction's)
+            if other[_vkey(k)] <= (top if sided else POCKET_RANK["service"] - 1):
+                continue
+            tapers.setdefault(fid, []).append((at_end, sided, dw))
+        for fid in sorted(tapers):
+            lst = tapers[fid]
+            L = float(_ring_metric(roads[fid][3])[1][-1])
+            T = min(POCKET_TAPER_M, L / len(lst))
+            for at_end, sided, dw in lst:
+                if sided:
+                    for ob, sg, e in sided:
+                        comps.setdefault(fid, []).append(("ins", float(ob), sg, _ramp(L, at_end, T, -e)))
+                        comps[fid].append(("mid", 0.0, 0, _ramp(L, at_end, T, sg * e / 2)))
+                else:
+                    comps.setdefault(fid, []).append(("scale", 0.0, 0, _ramp(L, at_end, T, -dw)))
+    # (a) exclusive turn lanes the lane count leaves out: a pocket at their downstream end
+    for fid in sorted(roads):
+        feats, i, sp, ring, _nm = roads[fid]
+        if sp.kind != "paved" or not (sp.turns_f or sp.turns_b):
+            continue
+        lay = lane_layout(sp, left_hand)
+        if lay is None:
+            continue
+        L = None
+        for d, n, g0, g1 in lay["groups"]:
+            turns = sp.turns_f if d > 0 else sp.turns_b
+            ex = [w for w, on in zip("LR", _exclusive(turns)) if on]
+            if not ex or len(turns) != n + len(ex):
+                continue
+            lw = (g1 - g0) / n
+            for w in ex:
+                if w == "L" and sp.lanes_c:
+                    continue            # (it turns from the centre turn lane)
+                ob, sg = _pocket_edge(d, w, g0, g1)
+                if sp.median and sg == median_side(sp, left_hand) and median_width(sp) < lw + 1.0:
+                    continue            # (no room in a divided road's median)
+                if L is None:
+                    L = float(_ring_metric(ring)[1][-1])
+                kn = _pocket_knots(L, d > 0, lw)
+                comps.setdefault(fid, []).append(("ins", float(ob), sg, kn))
+                added.setdefault(fid, []).append((d, w, sg, float(ob), kn))
+    out = {}
+    for fid in sorted(comps):
+        feats, i, sp, ring, _nm = roads[fid]
+        c, s = _ring_metric(ring)
+        out[fid] = Widening(float(sp.width), float(s[-1]), tuple(comps[fid]), tuple(added.get(fid, ())), ring, c, s)
+    return out
 
 
 JOIN_GAP_M = 14.0       # sidewalk ends this close (and facing each other) are joined: a sharp corner / road merge
@@ -4689,11 +5114,43 @@ def drains(run, side, caps, walk_w=None):
     return res
 
 
+def _widened_chunks(look, spec, pts, wr, box):
+    """The carriageway chunks of a road not of one width (wr: (Widening, s at each point of pts)): its centreline's
+    pieces in the box with "wl" / "wr", the half width to its left / right at each node (roadmesh.ribbons)."""
+    wd, s = wr
+    out = []
+    for piece in clip_polyline(np.c_[pts, s], *box):
+        sp_ = simplify(piece)
+        sp_, ss = widen_nodes(wd, sp_[:, :3], sp_[:, 3])        # (simplify drops the knots of a straight road)
+        for c in split(densify(np.c_[sp_, ss])):
+            if len(c) < 2:
+                continue
+            el, er = widen_edges(wd, c[:, 3])
+            ch = _chunk(look, spec.width, c[:, :3])
+            ch["wl"] = [round(float(v), 3) for v in spec.width / 2 + el]
+            ch["wr"] = [round(float(v), 3) for v in spec.width / 2 + er]
+            out.append(ch)
+    return out
+
+
+def _widened_blockers(spec, pts, edges, gap=0.05):
+    """[(segment (2, 2), half width)] along a road's stretches wider than its width (edges: widen_edges at its points):
+    what crosses them is cut there too, as by its carriageway (build_tile's blockers)."""
+    el, er = edges
+    if not ((el > gap) | (er > gap)).any():
+        return []
+    c = offset_polyline(pts, (el - er) / 2)[:, :2]
+    hw = spec.width / 2 + (el + er) / 2
+    return [(c[j:j + 2].copy(), float(max(hw[j], hw[j + 1]))) for j in range(len(pts) - 1)
+            if max(el[j], el[j + 1], er[j], er[j + 1]) > gap]
+
+
 def build_tile(frame, tx, ty, cells, elev, urban_fn=None, walks=None, bridges=None, widths=None, props=None,
                lines=None, wires=None, town=None, park=None, left_hand=False, structures=(), mph=True, tunnels=None,
                buried=0.0, lamp_region=None,
                walls=None, deck_context=None, ground=None, terrain_paint=True, cover_out=None, walk_cuts=(),
-               signals=None, barriers=None, barrier_lines=None, barrier_homes=None):
+               signals=None, barriers=None, barrier_lines=None, barrier_homes=None,
+               pocket_cells=None):
     """The chunks of one tile. cells: the mapgeom.Features of the "roads" layer of every cell touching
     the tile; elev(lat, lon) -> metres (the DEM); urban_fn: as road_specs. Features in several cells are
     taken once (by id). The carriageways, then each road's sidewalks / gutters / markings (extras), cut
@@ -4706,7 +5163,8 @@ def build_tile(frame, tx, ty, cells, elev, urban_fn=None, walks=None, bridges=No
     made-up driveway: gasstations.tile_sites cuts). barriers: a list that gets the tile's highway barriers (barriers.py:
     median barriers, guardrails, noise walls; roadmesh.tunnel draws them), barrier_lines: OpenStreetMap's mapped ones
     near the tile (barriers.mapped_for), barrier_homes: the residential land use near it (barriers.residential_for: noise
-    walls). Pure given its inputs (sorted by feature id)."""
+    walls). pocket_cells: the "roads" Features of the cells within POCKET_REACH_M of the tile (the segments
+    continuing its roads: pocket_profiles), None: cells. Pure given its inputs (sorted by feature id)."""
     x0, y0, x1, y1 = tile_bbox(tx, ty)
     box = (x0 - OVERLAP, y0 - OVERLAP, x1 + OVERLAP, y1 + OVERLAP)
     near = (x0 - NEAR_M, y0 - NEAR_M, x1 + NEAR_M, y1 + NEAR_M)
@@ -4723,6 +5181,8 @@ def build_tile(frame, tx, ty, cells, elev, urban_fn=None, walks=None, bridges=No
                 continue
             seen[str(feats.ids[i])] = (feats, i, specs[i])
     rings = []                                  # (fid, spec, lon/lat ring) near the tile (xy at h = 0)
+    wids = pocket_profiles(cells if pocket_cells is None else pocket_cells, urban_fn, widths, left_hand)
+    road_wid = []                               # per ring: (Widening, m along its road at each point) or None
     for fid in sorted(seen):
         feats, i, spec = seen[fid]
         fb = feats.boxes(frame)[i]          # (the whole feature far from the tile: none of its parts is near)
@@ -4732,7 +5192,11 @@ def build_tile(frame, tx, ty, cells, elev, urban_fn=None, walks=None, bridges=No
             e, n = mapgeom.enu_xy(feats, frame, ring)
             if (e.max() < near[0] or e.min() > near[2] or n.max() < near[1] or n.min() > near[3]):
                 continue
+            wd = wids.get(fid)
+            if wd is not None:                  # (nodes at its profile's knots: its lines and edges follow them)
+                ring, rs = widen_nodes(wd, ring, widen_s(wd, ring))
             rings.append((fid, spec, ring))
+            road_wid.append(None if wd is None else (wd, rs))
     roads = []                                  # (fid, spec, centreline (k, 3), lon) near the tile
     if rings:                                   # one elevation call for every ring (the grader's cost
         lon = np.concatenate([r[:, 0] for _, _, r in rings])     # is per call: 2026-10-11 profile,
@@ -4756,7 +5220,7 @@ def build_tile(frame, tx, ty, cells, elev, urban_fn=None, walks=None, bridges=No
                 for c in split(densify(simplify(piece))):
                     if len(c) >= 2:
                         cover_out.append(_chunk(look_of(spec), spec.width, c))
-    for fid, spec, pts, _ in roads:
+    for k_road, (fid, spec, pts, _) in enumerate(roads):
         if ROADS_IN_GROUND:                     # the carriageway painted into the ground (surface.photo_roads)
             continue
         # no smooth ribbon over rough ground — but only where the ground layer will paint it (--surface on); with
@@ -4769,6 +5233,9 @@ def build_tile(frame, tx, ty, cells, elev, urban_fn=None, walks=None, bridges=No
             n = max(1, int(round(spec.width / look["strip"])))
             sw = spec.width / n
             lanes = [((k + 0.5) * sw - spec.width / 2, sw) for k in range(n)]
+        if road_wid[k_road] is not None and len(lanes) == 1:
+            chunks.extend(_widened_chunks(look, spec, pts, road_wid[k_road], box))
+            continue
         for off, lw in lanes:
             line = pts if off == 0.0 else offset_polyline(pts, off)
             for piece in clip_polyline(line, *box):
@@ -4814,8 +5281,15 @@ def build_tile(frame, tx, ty, cells, elev, urban_fn=None, walks=None, bridges=No
             walls[:] = [w for w in walls if not w.get("parapet")]
         barriers.extend(barriersmod.tile_barriers(frame, roads, elev, exact, decks=decks_near, mapped=barrier_lines,
                                                   parapets=par, left_hand=left_hand, homes=barrier_homes))
+    road_edges = [None if wr is None else widen_edges(*wr) for wr in road_wid]
+
+    def half_at(ri, vi, side):                  # (junctions: a widened road's curb where it meets another)
+        h = roads[ri][1].width / 2
+        if road_edges[ri] is None:
+            return h
+        return h + float(road_edges[ri][0 if side > 0 else 1][vi])
     corners, jcuts, crosswalks, jramps, jlines, jinternal = ({}, {}, [], {}, {}, set()) if walks is None else \
-        junctions.find(roads, has_sidewalks, None)
+        junctions.find(roads, has_sidewalks, None, half=half_at if any(e is not None for e in road_edges) else None)
     # (no curb extensions: they were on every town street with parking, after Fells Point's, and most streets have none:
     # the corners stuck out into the road in Tustin's suburbs, GitHub #208)
     # small road loops (roundabouts, turnaround loops): no sidewalks facing their inside, a curbed island instead
@@ -4856,16 +5330,20 @@ def build_tile(frame, tx, ty, cells, elev, urban_fn=None, walks=None, bridges=No
                 look = junctions.STOP_LINE if cw.get("stop") else junctions.CROSSWALK
                 chunks.append(_chunk(look, cw["w"], np.array([cw["a"], cw["b"]])))
     runs_near = []                              # sidewalk runs near the tile, before clipping (walks: below)
-    for fid, spec, pts, lon in roads:
-        ex = extras(spec, pts, lon, left_hand) if fid not in jinternal else []    # inside a junction: none
+    wide = [(roads[k][0], b) for k, wr in enumerate(road_wid) if wr is not None
+            for b in _widened_blockers(roads[k][1], roads[k][2], road_edges[k])]     # (a pocket's carriageway too)
+    for k_road, (fid, spec, pts, lon) in enumerate(roads):
+        ex = extras(spec, pts, lon, left_hand, road_wid[k_road]) if fid not in jinternal else []   # in a junction: none
         if not ex:
             continue
-        blockers = [(p2[:, :2], s2.width / 2 + CUT_MARGIN) for f2, s2, p2, _ in roads if f2 != fid]
+        more = [b for f2, b in wide if f2 != fid]
+        blockers = [(p2[:, :2], s2.width / 2 + CUT_MARGIN) for f2, s2, p2, _ in roads if f2 != fid] + \
+            [(xy, h + CUT_MARGIN) for xy, h in more]
         walk_blockers = [(p2[:, :2], s2.width / 2 if (fid, f2) in cornered else sidewalk_stop(spec, fid, s2, f2))
-                         for f2, s2, p2, _ in roads if f2 != fid] + list(walk_cuts)
+                         for f2, s2, p2, _ in roads if f2 != fid] + list(walk_cuts) + more
         # a median's band stops at the other carriageways' curbs only (their sidewalk is on their far side: it cut
         # one carriageway's half of Boston Street's median away)
-        curb_blockers = [(p2[:, :2], s2.width / 2) for f2, s2, p2, _ in roads if f2 != fid]
+        curb_blockers = [(p2[:, :2], s2.width / 2) for f2, s2, p2, _ in roads if f2 != fid] + more
         for look, w, line in ex:
             walk = look["m"] == SIDEWALK["m"]
             side = look.get("side")

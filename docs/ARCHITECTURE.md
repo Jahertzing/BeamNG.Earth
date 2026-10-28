@@ -1069,7 +1069,20 @@ three days of testing: dem 741 MB / 7.5k files, imagery 1.4 GB / 35k, deshadow 7
   lanes (the carriageway's class-rule parking replaced) and a white line along each; turn:lanes(:forward /
   :backward) put stroke arrows (shaft, head, bent stroke per turn side) 12 and 42 m before each lane's end,
   each stroke drawn whole or not at all (clear of the other carriageways). Roads without the tags are drawn
-  as before. Not done: tapers / widening into turn pockets (a road's width is constant along its mesh).
+  as before.
+- Turn pockets and tapers (`roads.pocket_profiles`, `widen_off` / `widen_edges`; 2026-10-28): a road's
+  carriageway may vary along it. Colorado's table counts the turn lane in `lanes` of a short way (median
+  ~95 m in Denver) a lane wider than the ways around it, so the width stepped at the split; now the wider
+  segment opens from the narrower's width over 30 m (both edges; where the difference is the exclusive turn
+  lanes leaving the joint, those lanes open and the rest shift over), at side streets too, never at the end
+  where its arrows end. A width change of no known lane tapers evenly, only mid-block (driveways). An
+  exclusive turn lane the lane count leaves out is added over the last 55 m + 30 m taper (left pockets
+  toward the centre line, right bays toward the curb). The profile moves the lane lines, centre line,
+  arrows, edge lines, gutters and sidewalks (`extras` / `lane_marks` wid=), the carriageway mesh
+  (chunk "wl" / "wr", `roadmesh.ribbons`), the ground's asphalt (`surface._road_segments`, `paint_roads`),
+  the junctions' curbs and crosswalks (`junctions.find` half=) and grading's core (`grading.widen_plan`).
+  Pure per road; road tiles look the joints up in the cells within `POCKET_REACH_M`. `BNE_POCKETS=off`
+  turns it off. Probe: `tools/pocket_probe.py` (top-down PNGs before / after).
 - Curb ramps: the tactile pad is the first 0.6 m of the slope (tinted yellow); brick sidewalks on 55 % of
   the streets of dense brick-region cores; parking lots (Overture infrastructure `parking`) are the
   asphalt ground layer (no grass); built-up land is the dirt layer.
