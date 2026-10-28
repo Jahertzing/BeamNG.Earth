@@ -73,7 +73,7 @@ M.SCHEMA = {
   parkedCars = { kind = 'enum', default = 'normal', values = { 'off', 'few', 'normal', 'many' }, label = 'Parked cars' },
   -- mailboxes, trash carts, bus stops, driveway cars and the other small things along the streets (server streetlife.py)
   streetLife = { kind = 'bool', default = true, label = 'Street life' },
-  staticCars = { kind = 'bool', default = true, label = 'Cars parked along the streets' },
+  staticCars = { kind = 'bool', default = false, label = 'Cars parked along the streets' },
   -- roads near the player (roads.lua; the server's --roads on)
   roads = { kind = 'bool', default = true, label = 'Roads' },
   -- the Denver region's DRCOG planimetrics (server drcog.py): launcher.py reads this file and starts the server with
