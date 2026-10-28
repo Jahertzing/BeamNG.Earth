@@ -72,6 +72,15 @@ class ClassifyTest(unittest.TestCase):
             self.assertEqual(sf.grass_tint(d, "c.ter", rgb), [150.0, 130.0, 90.0], "scrub: its grass")
             sf.write_ter(d, "e.ter", np.zeros((n, n), np.uint16), np.full((n, n), sf.DIRT, np.uint8))
             self.assertIsNone(sf.grass_tint(d, "e.ter", rgb), "no grass: none")
+            # a block kept by the revisit cache before the tint: from its base photo on disk
+            import types
+            Image.fromarray(rgb).save(os.path.join(d, "b_base.png"))
+            info = {"ter": "c.ter", "layers": ["x"]}
+            earthd.Server._tint_from_file(types.SimpleNamespace(out_dir=d), types.SimpleNamespace(id=1), 0, 0, info, "b_base.png")
+            self.assertEqual(info["grassTint"], [150.0, 130.0, 90.0])
+            info = {"ter": "c.ter"}
+            earthd.Server._tint_from_file(types.SimpleNamespace(out_dir=d), types.SimpleNamespace(id=1), 0, 0, info, "missing.png")
+            self.assertNotIn("grassTint", info, "no photo: none, no error")
 
     def test_photo_lawns_only_where_the_photo_is_green(self):
         import tempfile

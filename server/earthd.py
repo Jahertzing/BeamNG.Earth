@@ -1630,6 +1630,8 @@ class Server:
                     return self._finish_heightmap(anchor, cx, cy, info, t0, base)
                 info["base"] = name
                 self._base_kept(anchor, cx, cy, frozenset())    # (redone with its NAIP when stale: base_refresh)
+                if "grassTint" not in info and info.get("layers") and info.get("ter"):
+                    self._tint_from_file(anchor, cx, cy, info, name)    # (a block kept before the grass tint)
             info["seconds"] = time.perf_counter() - t0
             return info
         f0 = revisitmod.faults()
@@ -1931,6 +1933,16 @@ class Server:
         info["seconds"] = time.perf_counter() - t0
         info["zoom"] = anchor.hm_zoom
         return info
+
+    def _tint_from_file(self, anchor, cx, cy, info, name):
+        """info["grassTint"] (surface.grass_tint) from the base photo on disk: a block kept by the revisit cache before
+        the grass tint (2026-10-28) has none. Never raises."""
+        try:
+            with Image.open(os.path.join(self.out_dir, name)) as im:
+                rgb = np.asarray(im.convert("RGB"))
+            info["grassTint"] = surfacemod.grass_tint(self.out_dir, info["ter"], rgb)
+        except Exception as e:
+            log.info("grass tint %s from %s: %s", (anchor.id, cx, cy), name, e)
 
     def _base_later(self, key, fut, tries=4):
         """A block sent without its photo (a fast player): the photo, once rendered, onto the block's entry (later
