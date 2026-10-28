@@ -150,6 +150,48 @@ class MapDataTest(Sources, SmallBlocks, unittest.TestCase):
             ds = [d["dataset"] for p in cd.provenance for d in p.get("datasets", [])]
             self.assertIn(drcog.DATASET, ds)
 
+    def test_roads_come_with_their_edges(self):
+        # (fix/road-paint-perf: a cell's edges were first fetched by the ground photo's road widths, 2-3.5 s in it)
+        with mock.patch.dict(os.environ, {drcog.ENV: "1"}),                 mock.patch.object(drcog, "covers", return_value=True):
+            md, _ = self.mapdata(cache=os.path.join(self.tmp, "c3"))
+            got = {"coords": np.zeros((0, 2)), "off": np.array([0])}
+            with mock.patch.object(drcog.Drcog, "edges", return_value=got) as edges:
+                md.cell(mf.CELL, ("roads",))
+                md.layer_arrays(mf.CELL, "roads")
+            self.assertEqual(edges.call_count, 1, "once per cell")
+            md2, _ = self.mapdata(cache=os.path.join(self.tmp, "c4"))
+            with mock.patch.object(drcog.Drcog, "edges", side_effect=OSError("down")) as edges:
+                cd = md2.cell(mf.CELL, ("roads",))         # (the roads all the same)
+                self.assertGreater(len(cd.layers["roads"]), 0)
+                md2.layer_arrays(mf.CELL, "roads")
+            self.assertEqual(edges.call_count, 2, "a failed fetch is tried again")
+
+
+class MemoryTest(unittest.TestCase):
+    def test_lru_per_kind(self):
+        import mapcells
+        d = drcog.Drcog(os.path.join(os.path.dirname(__file__), "no-such-dir"), None)
+        built = []
+
+        def build(i):
+            def f():
+                built.append(i)
+                return {"i": np.array([i])}
+            return f
+        with mock.patch.object(drcog.np, "savez_compressed"), mock.patch.object(drcog.staging, "replace_cached"),                 mock.patch.object(drcog.os, "makedirs"),                 mock.patch.dict(drcog.MEM_CELLS, {"edges": 3, "roofprints": 2}):
+            keys = [mapcells.CellKey(14, 3400 + i, 6200) for i in range(5)]
+            for i in range(3):
+                d._cached("edges", keys[i], build(i))
+            for i in range(4):                          # roofprints do not push the edges out
+                d._cached("roofprints", keys[i], build(10 + i))
+            d._cached("edges", keys[0], build(99))      # (kept: no build; now the most recent)
+            d._cached("edges", keys[3], build(3))       # keys[1] goes, the least recent
+            d._cached("edges", keys[0], build(98))
+            d._cached("edges", keys[1], build(1))
+        self.assertEqual(built, [0, 1, 2, 10, 11, 12, 13, 3, 1])
+        self.assertEqual(len(d._mem["edges"]), 3)
+        self.assertEqual(len(d._mem["roofprints"]), 2)
+
 
 if __name__ == "__main__":
     unittest.main()

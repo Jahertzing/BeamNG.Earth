@@ -492,7 +492,40 @@ class MapData:
         return feats
 
     def layer_arrays(self, key, layer, kind="demand"):
-        """(arrays, hit) of one cell's layer: from the cache, or built and cached."""
+        """(arrays, hit) of one cell's layer: from the cache, or built and cached. A roads layer in the DRCOG region
+        comes with the cell's edges of pavement at hand (_edges_ahead)."""
+        got = self._layer_arrays(key, layer, kind)
+        if layer == "roads":
+            self._edges_ahead(_key(key), kind)
+        return got
+
+    def _edges_ahead(self, key, kind):
+        """The cell's DRCOG edges of pavement fetched (drcog.Drcog.edges: on disk after), once per cell per process,
+        when the source is on: the road widths ask for them first where the ground photo paints its roads, and a
+        cell's first fetch there (2-3.5 s, the paged ArcGIS query) held up its block's photo (fix/road-paint-perf,
+        2026-10-28: Denver's base photos took 14-19 s, nearly all of it the roads). Never fails the roads: the widths
+        fetch them themselves as before when they are not here."""
+        dc = self.drcog()
+        if dc is None:
+            return
+        import drcog
+        if not drcog.covers(key.bounds()):
+            return
+        with self._lock:
+            had = getattr(self, "_edges_had", None)
+            if had is None:
+                had = self._edges_had = set()
+            if key in had:
+                return
+        try:
+            dc.edges(key, kind)
+        except Exception as e:      # (deferred or failed: the widths ask again, as before)
+            log.debug("mapdata: drcog edges of %s ahead: %s: %s", key, type(e).__name__, e)
+            return
+        with self._lock:
+            had.add(key)
+
+    def _layer_arrays(self, key, layer, kind="demand"):
         if layer not in ALL_LAYERS:
             raise ValueError(f"unknown map layer {layer!r}; choose from {', '.join(ALL_LAYERS)}")
         key = _key(key)
