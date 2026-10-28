@@ -9,7 +9,8 @@ python launcher.py).
      Steam launch options are needed; through Steam when that is not possible (Steam not running) and for the
      Windows build under Proton (found from Steam's compatibility setting, else from the user folder the game
      wrote last). Windows: through Steam. Under Wine / Proton (the .exe started with protontricks) it cannot start
-     the game: it asks you to press Play in Steam.
+     the game: it asks you to press Play in Steam. Windows: the same grass patch, written into the running game's
+     memory by gcpatchwin.py (it checks the game's code and does nothing on another build).
   4. stops the server when the game closes (or on Ctrl+C / closing the window).
 
 It runs in a console window, like BeamMP's launcher: the .exe opens one when it has none, the AppImage opens a
@@ -17,7 +18,7 @@ terminal when started from a file manager (else it logs to ~/.cache/beamng-earth
 
     launcher.py                  everything
     launcher.py --no-game        only the server (start the game yourself)
-    launcher.py --no-gcpatch     the game without the grass patch
+    launcher.py --no-gcpatch     the game without the grass patch (Linux: tools/gcpatch, Windows: gcpatchwin.py)
     launcher.py --proton / --native   Linux: which build of the game to start (default: found)
     launcher.py -- --verbose     anything after -- goes to the server
 """
@@ -881,7 +882,7 @@ def main():
         return
     ap = argparse.ArgumentParser(description="Start the BeamNG.Earth world server and BeamNG.drive.")
     ap.add_argument("--no-game", action="store_true", help="only the server (start the game yourself)")
-    ap.add_argument("--no-gcpatch", action="store_true", help="Linux: start the game without the grass patch")
+    ap.add_argument("--no-gcpatch", action="store_true", help="start the game without the grass patch")
     ap.add_argument("--keep-mod", action="store_true", help="leave the game's copy of the mod as it is")
     ap.add_argument("--no-beammp", action="store_true",
                     help="do not start BeamMP (multiplayer) with the game (bmplaunch.py)")
@@ -1141,6 +1142,12 @@ def run(args):
             if wine:
                 say("(under Wine / Proton: on Linux the AppImage runs the server natively, faster)")
             proc = start_game(not args.no_gcpatch, build, args.gfx, user_dir)
+        if IS_WIN and not args.no_gcpatch and not wine:
+            # (Linux preloads tools/gcpatch into the game; Windows patches the running game from here, also one that
+            # was already running or that Steam started)
+            import gcpatchwin
+            if gcpatchwin.start(user_dir):
+                row("Grass patch", "on (kept across terrain block moves; --no-gcpatch turns it off)")
         say()
         say("In the game: Freeroam > BeamNG.Earth.  Closing the game stops the server.")
         say()

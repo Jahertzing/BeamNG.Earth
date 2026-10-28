@@ -12,7 +12,7 @@
 -- needs CPU placement (useNewPlacementGpu 0): GPU-placed cells only draw one frame later (a blank
 -- frame), and GPU placement reads a layer copy the hidden block never refreshes. The price is one
 -- slower frame per block move, which grows with the element count (the shares below). With the
--- optional tools/gcpatch preload library (this exact game build) the engine keeps the grass across
+-- optional tools/gcpatch preload library (Linux; gcpatchwin.py on Windows) the engine keeps the grass across
 -- block moves and that frame goes away; where the world really moves (teleport, rebase) core calls
 -- M.rebuild(), which works with or without it.
 --
