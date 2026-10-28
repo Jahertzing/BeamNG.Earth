@@ -15,6 +15,22 @@ ARCGIS_EXPORT = "bbox={bbox}&bboxSR=3857&imageSR=3857&size={size},{size}&format=
 WMS_4326 = ("SERVICE=WMS&REQUEST=GetMap&VERSION=1.3.0&STYLES=&CRS=EPSG:4326&BBOX={bbox4326}&WIDTH={size}&HEIGHT={size}"
             "&FORMAT=image/jpeg")
 
+# The place each regional source covers, for the player (netfetch.role_of: what a source that does not answer affects)
+PLACE = {
+    "ct2023": "Connecticut", "ma2025": "Massachusetts", "dc2025": "Washington, DC", "indiana": "Indiana",
+    "ohio": "Ohio", "ncarolina": "North Carolina", "penn": "Pennsylvania", "virginia": "Virginia",
+    "newyork": "New York State", "newjersey": "New Jersey", "delaware": "Delaware", "vermont": "Vermont",
+    "swiss": "Switzerland", "france": "France", "spain": "Spain", "netherlands": "the Netherlands",
+    "luxembourg": "Luxembourg", "austria": "Austria", "it_bolzano": "South Tyrol", "it_pcn": "Italy",
+    "poland": "Poland", "czechia": "Czechia", "estonia": "Estonia", "flanders": "Flanders (Belgium)",
+    "de_bayern": "Bavaria", "de_nrw": "North Rhine-Westphalia", "de_bw": "Baden-Wurttemberg",
+    "de_nds": "Lower Saxony", "de_berlin": "Berlin", "de_hessen": "Hesse", "japan": "Japan",
+    "au_nsw": "New South Wales", "au_tas": "Tasmania", "ontario": "Ontario",
+    "co_frederick": "Frederick, CO", "co_boulder_county": "Boulder County, CO", "co_thornton": "Thornton, CO",
+    "co_arapahoe": "Arapahoe County, CO", "co_douglas": "Douglas County, CO", "co_jeffco": "Jefferson County, CO",
+    "co_lakewood": "Lakewood, CO", "co_springs": "Colorado Springs",
+}
+
 # name: (url, attribution, (south, west, north, east), kind, leaf_off[, max_zoom])
 #   kind "xyz": an XYZ / TMS cache; "export": a WMS / ArcGIS export (lazy)
 #   max_zoom: the finest zoom asked (default 17); an export at 18 is one 1024 px image per z16 parent, its z17 tiles
