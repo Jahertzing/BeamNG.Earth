@@ -770,7 +770,9 @@ local function guard(b, all)
           stillSince[id] = nil
         end
         local d = pp and (p - pp):length() or math.huge
-        if all or toCut or not M.inside(b, p.x, p.y, M.GUARD_M) or M.stuck(stillSince[id], now, d) then
+        if pop.enabled() then
+          stillSince[id] = nil      -- (the population places the cars)
+        elseif all or toCut or not M.inside(b, p.x, p.y, M.GUARD_M) or M.stuck(stillSince[id], now, d) then
           stillSince[id] = nil
           -- behind the camera: the stock default is 100-500 m in front of it, where the player sees the car
           -- pop in and its tyres smoke as it lands (the photo comparisons, 2026-10-14)
@@ -812,6 +814,24 @@ M.MODES = { off = 0, light = 0.5, normal = 1, busy = 1.5 }
 M.LIGHT_MIN = 3
 M.BUSY_MAX = 24         -- every traffic car is a full physics car: a cap on the CPU it takes
 M.BUSY_MORE = 4         -- busy is at least this many more than normal
+
+-- The persistent traffic population (population.lua; the setting trafficPopulation, off by default until benched):
+-- ghosts on the server's whole graph, the nearest of them the real traffic cars, instead of recycling the cars by
+-- teleporting them ahead. While it runs the guard below moves no car (the population does) and the game's own
+-- recycling is off.
+M.POPULATION = false
+local pop = require('beamngEarth/population')
+
+function M.setPopulation(v)
+  M.POPULATION = v and true or false
+  if not M.POPULATION and pop.enabled() then pop.setEnabled(false) end
+  -- (traffic already running: at once; else when it starts)
+  local gt = rawget(_G, 'gameplay_traffic')
+  if M.POPULATION and not pop.enabled() and gt and gt.getState and gt.getState() == 'on' then
+    pop.setEnabled(true, M.MODES[M.choice.mode or M.MODE] or 1, M.rules.rightHandDrive)
+  end
+  return M.POPULATION
+end
 
 function M.setMode(v)
   if M.MODES[v] then M.MODE = v end
@@ -982,6 +1002,7 @@ local function startTraffic()
       amount < 0 and 'the game\'s' or tostring(amount), tostring(auto or '?')))
     if amount > 0 then
       setupCars(gt, amount, c.police)
+      if M.POPULATION then pop.setEnabled(true, M.MODES[c.mode or M.MODE] or 1, M.rules.rightHandDrive) end
       watch = { untilT = os.clock() + M.WATCH_S, seenOn = false, done = false }
     elseif amount < 0 then
       local ok, err = pcall(gt.setupTraffic, -1, { police = c.police })
@@ -1015,6 +1036,7 @@ end
 local heldActive = nil
 function M.onTeleport()
   respawnAll = true
+  if pop.enabled() then pop.reset() end
   if started and M.choice.traffic then  -- (each teleport: watched again, one more restart allowed)
     local gt0 = gameplay_traffic
     watch = { untilT = os.clock() + M.WATCH_S, seenOn = gt0 ~= nil and gt0.getState() == 'on', done = false }
@@ -1118,6 +1140,11 @@ function M.update(aid, b, gov)
       end
     end
   end
+  if pop.enabled() and applied then
+    pop.setGraph(graph)
+    local okP, errP = pcall(pop.update, b)
+    if not okP then log('W', 'beamngEarth', 'navgraph population: ' .. tostring(errP)) end
+  end
   if graph.anchor ~= aid then
     graph = nil
     return
@@ -1155,7 +1182,7 @@ function M.update(aid, b, gov)
       if gt and heldActive then
         pcall(gt.setActiveAmount, heldActive)
         heldActive = nil
-        if gt.forceTeleportAll then pcall(gt.forceTeleportAll) end
+        if gt.forceTeleportAll and not pop.enabled() then pcall(gt.forceTeleportAll) end
       else
         pcall(guard, b, true)
       end
@@ -1228,10 +1255,13 @@ function M.status()
            resetMs = stats.resetMs, signalsMs = stats.signalsMs, nodesMs = stats.nodesMs, gpsMs = stats.gpsMs,
            applyMs = stats.applyMs, guardMs = stats.guardMs, guardMaxMs = stats.guardMaxMs,
            routesKept = stats.routesKept, routesDropped = stats.routesDropped, routeDrops = stats.routeDrops,
-           traffic = gameplay_traffic and gameplay_traffic.getState() or nil }
+           traffic = gameplay_traffic and gameplay_traffic.getState() or nil,
+           population = pop.enabled() and pop.status() or nil }
 end
 
 function M.reset()
+  pop.setEnabled(false)
+  pop.reset()
   heads = {}            -- (the level took them with it)
   graph, applied, dirty, lastApply, persistent, ours, foreign = nil, nil, false, -math.huge, nil, false, false
   started, respawnAll, lastGuard, heldActive, watch = false, false, -math.huge, nil, nil

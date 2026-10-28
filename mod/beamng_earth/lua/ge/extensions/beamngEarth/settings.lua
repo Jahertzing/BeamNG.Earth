@@ -70,6 +70,8 @@ M.SCHEMA = {
   -- BeamNG's own AI traffic on our roads when the level-start configurator leaves it to the settings (its default):
   -- off, light, normal (the game's amount for this PC), busy (navgraph.lua MODES)
   aiTraffic = { kind = 'enum', default = 'normal', values = { 'off', 'light', 'normal', 'busy' }, label = 'AI traffic' },
+  -- the persistent traffic population (population.lua) instead of recycling the cars ahead: being tested (2026-10-28)
+  trafficPopulation = { kind = 'bool', default = false, label = 'Seamless traffic (test)' },
   -- BeamNG's own parked cars on our curbs, lots and aisles (parking.lua) when the level-start options leave them to
   -- the settings: off, few, normal (the game's parked-vehicle amount), many (navgraph.lua PARKED_MODES)
   parkedCars = { kind = 'enum', default = 'normal', values = { 'off', 'few', 'normal', 'many' }, label = 'Parked cars' },
@@ -117,7 +119,7 @@ M.SCHEMA = {
 }
 M.ORDER = { 'theDriveTime', 'theDriveAutodrive', 'rebaseDistance', 'viewDistanceMode', 'viewDistanceKm', 'hazeStrength',
   'colorGrade', 'skyMode', 'clouds', 'weatherMode', 'realGravity', 'groundCover', 'groundCoverDensity', 'groundCoverDistance',
-  'groundGrass', 'grassTint', 'grassCards', 'rocks', 'roads', 'cityGlow', 'nightAmbient', 'aiTraffic', 'parkedCars', 'streetLife', 'staticCars', 'drcog', 'lidarHeights', 'dashboardSatellite', 'hudVisible', 'statusBar',
+  'groundGrass', 'grassTint', 'grassCards', 'rocks', 'roads', 'cityGlow', 'nightAmbient', 'aiTraffic', 'trafficPopulation', 'parkedCars', 'streetLife', 'staticCars', 'drcog', 'lidarHeights', 'dashboardSatellite', 'hudVisible', 'statusBar',
   'placeNamesOnline', 'creditsVisible', 'beammpOnLaunch',
   'creditsCorner', 'creditsSize', 'cacheCapGb', 'devOutlineKm', 'devMapKm' }
 
@@ -303,6 +305,7 @@ M.APPLY = {
   end,
   rocks = function(v) require('beamngEarth/trees').setGroupEnabled({ 'rock', 'desert_rock' }, v) end,
   aiTraffic = function(v) require('beamngEarth/navgraph').setMode(v) end,     -- (from the next level start)
+  trafficPopulation = function(v) require('beamngEarth/navgraph').setPopulation(v) end,   -- (from the next level start)
   parkedCars = function(v) require('beamngEarth/navgraph').setParked(v) end,  -- (from the next level start)
   streetLife = function(v) local t = require('beamngEarth/trees') t.setGroupEnabled(t.STREET_LIFE, v) end,
   staticCars = function(v) local t = require('beamngEarth/trees') t.setGroupEnabled(t.STATIC_CARS, v) end,

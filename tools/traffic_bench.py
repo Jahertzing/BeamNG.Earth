@@ -168,6 +168,10 @@ def traffic_summary(path):
         "routes_dropped": (nav[-1].get("routesDropped") or 0) - (nav[0].get("routesDropped") or 0),
         # (mergeassist.lua: ramp cars given a speed cap to merge into a gap)
         "merge_assists": (nav[-1].get("mergeAssists") or 0) - (nav[0].get("mergeAssists") or 0),
+        # (population.lua, --population: ghosts made real, real made ghosts, ghosts come back, spare ghosts)
+        "pop": {k: ((nav[-1].get("population") or {}).get(k) or 0) - ((nav[0].get("population") or {}).get(k) or 0)
+                for k in ("promoted", "demoted", "recycled", "spares", "pushes")},
+        "pop_ghosts": (nav[-1].get("population") or {}).get("ghosts"),
         "nav_apply_ms_last": nav[-1].get("applyMs"),
         "guard_max_ms": max((n.get("guardMaxMs") or 0) for n in nav),
     }
@@ -181,6 +185,8 @@ def main():
     ap.add_argument("--settle", type=float, default=45.0)
     ap.add_argument("--modes", default="off,normal,busy")
     ap.add_argument("--pace", action="store_true", help="give each traffic car its pace (navgraph.lua paceLua)")
+    ap.add_argument("--population", action="store_true",
+                    help="the persistent traffic population (population.lua) instead of recycling the cars ahead")
     ap.add_argument("--rebase-in", default="", help="the mode during which the rebase distance is short (a distance "
                     "shorter than the route pins' spacing rebased ~390 times in 5 min, bench2: better a drive long "
                     "enough for the 15 km one)")
@@ -226,6 +232,9 @@ def main():
                     except (Exception, SystemExit):
                         pass
                 print(mode, "traffic state:", lua("return gameplay_traffic.getState()").strip(), flush=True)
+                if a.population:
+                    print(mode, "population:", lua("return tostring(require('beamngEarth/navgraph').setPopulation(true))"),
+                          flush=True)
                 if a.pace and not stop.wait(20):
                     print("paced", lua(PACE_LUA), "cars", flush=True)
             th = threading.Thread(target=poller, args=(os.path.join(d, "traffic.jsonl"), stop), daemon=True)
