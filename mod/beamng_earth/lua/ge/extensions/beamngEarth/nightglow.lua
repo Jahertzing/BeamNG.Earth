@@ -51,6 +51,9 @@ local function loadPlaces()
 end
 
 -- Pure: the glow of a place of rank r: radius, height (m).
+-- The places that glow (lat, lon, rank, name; nightambient.lua's city light too).
+function M.places() return loadPlaces() end
+
 function M.glowSize(r)
   local R = M.GLOW_R[math.max(0, math.min(M.GLOW_RANK_MAX, math.floor(r or M.GLOW_RANK_MAX)))]
   return R, math.max(M.GLOW_H_MIN_M, R * M.GLOW_H_SHARE)

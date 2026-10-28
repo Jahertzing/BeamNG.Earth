@@ -1,0 +1,36 @@
+[
+ {
+  "name": "off",
+  "lua": "local na = require('beamngEarth/nightambient') na.setMode('off') local nl = require('beamngEarth/nightlights') nl.applyLook()",
+  "undo": "local na = require('beamngEarth/nightambient') na.setMode('normal') local nl = require('beamngEarth/nightlights') nl.applyLook()",
+  "settle": 4
+ },
+ {
+  "name": "dim",
+  "lua": "local na = require('beamngEarth/nightambient') na.setMode('dim') local nl = require('beamngEarth/nightlights') nl.applyLook()",
+  "undo": "local na = require('beamngEarth/nightambient') na.setMode('normal') local nl = require('beamngEarth/nightlights') nl.applyLook()",
+  "settle": 4
+ },
+ {
+  "name": "normal",
+  "settle": 4
+ },
+ {
+  "name": "bright",
+  "lua": "local na = require('beamngEarth/nightambient') na.setMode('bright') local nl = require('beamngEarth/nightlights') nl.applyLook()",
+  "undo": "local na = require('beamngEarth/nightambient') na.setMode('normal') local nl = require('beamngEarth/nightlights') nl.applyLook()",
+  "settle": 4
+ },
+ {
+  "name": "nofill",
+  "lua": "local nl = require('beamngEarth/nightlights') nl.FILL.max = 0",
+  "undo": "local nl = require('beamngEarth/nightlights') nl.FILL.max = 96",
+  "settle": 4
+ },
+ {
+  "name": "oldlamps",
+  "lua": "local nl = require('beamngEarth/nightlights') nl.LIGHT.range, nl.LIGHT.inner, nl.LIGHT.outer = 36, 50, 130 nl.applyLook()",
+  "undo": "local nl = require('beamngEarth/nightlights') nl.LIGHT.range, nl.LIGHT.inner, nl.LIGHT.outer = 44, 60, 160 nl.applyLook()",
+  "settle": 4
+ }
+]

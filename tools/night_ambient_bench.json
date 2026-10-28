@@ -1,0 +1,21 @@
+{
+ "version": 1,
+ "about": "Streets at night for the night ambient (the user, 2026-10-28: 'outside of the direct cone is dark as heck'): tools/probe_look.py run --set tools/night_ambient_bench.json --variants tools/night_ambient_build_variants.json --perf 5 (night_ambient_variants.json: the same levers by hand, for a build without nightambient.lua). Street level and a little above, downtown, a main road and a suburb",
+ "defaults": {
+  "date": "2026-12-12",
+  "hour": 21.5,
+  "weather": "clear",
+  "views": [
+   {"name": "street", "agl": 1.7, "pitch": 0, "fov": 65},
+   {"name": "above", "agl": 18, "pitch": -14, "fov": 65}
+  ]
+ },
+ "places": [
+  {"id": "na_16th_lawrence", "name": "Downtown Denver, Lawrence St at 16th looking northwest: towers, shopfronts, lamps",
+   "lat": 39.7488, "lon": -104.9958, "heading": 315, "group": "night", "tags": ["colorado"]},
+  {"id": "na_broadway", "name": "Broadway at Colfax looking north-northwest: a wide lit main road",
+   "lat": 39.7401, "lon": -104.9876, "heading": 330, "group": "night", "tags": ["colorado"]},
+  {"id": "na_frederick", "name": "A Frederick residential street: houses, a few lamps, dark yards",
+   "lat": 40.0995, "lon": -104.9375, "heading": 0, "group": "night", "tags": ["colorado"]}
+ ]
+}

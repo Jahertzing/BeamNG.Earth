@@ -4,7 +4,7 @@ by side, so the look can be tuned from pictures instead of guesses.
 
     python3 tools/probe_look.py dump --out DIR                       the renderer state (look.lua dump) only
     python3 tools/probe_look.py run --set tools/look_bench.json --variants tools/look_variants.json --out DIR
-        [--places id,id] [--hours 9,17.5]
+        [--places id,id] [--hours 9,17.5] [--perf 5]
 
 run: tools/benchmark.py's machinery (Bench: refuses while the car moves, teleports, waits until the place is
 loaded, fixes the sky clock and a clear sky, restores everything at the end, also on Ctrl-C) with
@@ -16,6 +16,9 @@ column per variant).
 Variants file: [{"name": "base"}, {"name": "mie4", "sky": {"atmoMieScattering": [0.016, 0.016, 0.016]}}, ...]
 (look.lua apply(): sky, level, objects, consts, lua; "undo": lua run after the shot, for a variant whose lua
 changed a module's own state).
+
+--perf S: after each variant settles, a perfmon window of S seconds (fps, p95 ms; tools/benchmark.py's) too, in
+run.json's rows and under each picture in index.html: what a variant costs (the 2026-10-28 night lights).
 """
 import argparse
 import html
@@ -47,7 +50,9 @@ def write_index(out, rows, variants):
         h.append(f"<tr><td>{html.escape(r['label'])}</td>")
         for c in cols:
             f = r["shots"].get(c)
-            h.append(f"<td><a href='{f}'><img src='{f}'></a></td>" if f else "<td>-</td>")
+            p = r.get("perf", {}).get(c)
+            cap = f"<br>{p.get('fps')} fps, p95 {p.get('p95')} ms" if p else ""
+            h.append(f"<td><a href='{f}'><img src='{f}'></a>{cap}</td>" if f else "<td>-</td>")
         h.append("</tr>")
     h.append("</table>")
     (out / "index.html").write_text("\n".join(h))
@@ -62,6 +67,7 @@ def main(argv=None):
     ap.add_argument("--places", default=None)
     ap.add_argument("--hours", default=None, help="comma-separated local hours, overriding the set's")
     ap.add_argument("--force", action="store_true")
+    ap.add_argument("--perf", type=float, default=0.0, help="seconds of frame times per variant (0: none)")
     a = ap.parse_args(argv)
 
     out = Path(a.out)
@@ -110,13 +116,18 @@ def main(argv=None):
                         continue
                     time.sleep(opts.settle)
                     b.wait_ready(time.monotonic(), opts.view_timeout, need_anchor=False)
-                    row = {"label": f"{pl['id']} {hour:g}h {v['name']}", "shots": {}}
+                    row = {"label": f"{pl['id']} {hour:g}h {v['name']}", "shots": {}, "perf": {}}
                     for var in variants:
                         res = look(game, "apply", {k: var[k] for k in ("sky", "level", "objects", "consts", "lua")
                                                    if k in var})
                         if res and not res.get("ok"):
                             print(f"  {var['name']}: {res.get('errors')}", flush=True)
                         time.sleep(var.get("settle", VARIANT_SETTLE_S))
+                        if a.perf > 0:
+                            b.call("perfStart")
+                            time.sleep(a.perf)
+                            p = b.call("perfRead")
+                            row["perf"][var["name"]] = {k: p.get(k) for k in ("fps", "p50", "p95", "maxMs", "focused")}
                         stem = f"{pl['id']}__{hour:g}h__{v['name']}__{var['name']}"
                         dest = b.screenshot(str(out / stem))
                         row["shots"][var["name"]] = os.path.basename(dest)
@@ -124,6 +135,7 @@ def main(argv=None):
                         if var.get("undo"):         # a variant that changed a module's state in its lua
                             look(game, "apply", {"lua": var["undo"]})
                     rows.append(row)
+                    rec.setdefault("rows", []).append(row)
                     write_index(out, rows, variants)
     finally:
         try:

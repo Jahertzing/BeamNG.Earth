@@ -87,6 +87,9 @@ M.SCHEMA = {
   rocks = { kind = 'bool', default = true, label = 'Rocks' },
   -- a city's sky glow over it at night and the Castle Rock star (nightglow.lua)
   cityGlow = { kind = 'bool', default = true, label = 'City glow at night' },
+  -- the night's ambient light (nightambient.lua: a city's sky light, a starlit country's) and the lamps' fill
+  nightAmbient = { kind = 'enum', default = 'normal', values = { 'off', 'dim', 'normal', 'bright' },
+    label = 'Night ambient light' },
   -- Earth imagery on supported vehicle dashboard screens (dashboard.lua)
   dashboardSatellite = { kind = 'bool', default = true, label = 'Satellite on dashboard screens' },
   hudVisible = { kind = 'bool', default = false, label = 'Status HUD at level start' },
@@ -114,7 +117,7 @@ M.SCHEMA = {
 }
 M.ORDER = { 'theDriveTime', 'theDriveAutodrive', 'rebaseDistance', 'viewDistanceMode', 'viewDistanceKm', 'hazeStrength',
   'colorGrade', 'skyMode', 'clouds', 'weatherMode', 'realGravity', 'groundCover', 'groundCoverDensity', 'groundCoverDistance',
-  'groundGrass', 'grassTint', 'grassCards', 'rocks', 'roads', 'cityGlow', 'aiTraffic', 'parkedCars', 'streetLife', 'staticCars', 'drcog', 'lidarHeights', 'dashboardSatellite', 'hudVisible', 'statusBar',
+  'groundGrass', 'grassTint', 'grassCards', 'rocks', 'roads', 'cityGlow', 'nightAmbient', 'aiTraffic', 'parkedCars', 'streetLife', 'staticCars', 'drcog', 'lidarHeights', 'dashboardSatellite', 'hudVisible', 'statusBar',
   'placeNamesOnline', 'creditsVisible', 'beammpOnLaunch',
   'creditsCorner', 'creditsSize', 'cacheCapGb', 'devOutlineKm', 'devMapKm' }
 
@@ -294,6 +297,10 @@ M.APPLY = {
   grassTint = function(v) require('beamngEarth/groundcover').setTintEnabled(v) end,
   grassCards = function(v) require('beamngEarth/roads').grassCards = v and true or false end,
   cityGlow = function(v) require('beamngEarth/nightglow').setEnabled(v) end,
+  nightAmbient = function(v)
+    require('beamngEarth/nightambient').setMode(v)
+    require('beamngEarth/nightlights').applyLook()
+  end,
   rocks = function(v) require('beamngEarth/trees').setGroupEnabled({ 'rock', 'desert_rock' }, v) end,
   aiTraffic = function(v) require('beamngEarth/navgraph').setMode(v) end,     -- (from the next level start)
   parkedCars = function(v) require('beamngEarth/navgraph').setParked(v) end,  -- (from the next level start)
