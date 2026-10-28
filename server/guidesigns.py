@@ -1034,19 +1034,38 @@ class Plans:
         self._lock = threading.Lock()
         self._grid = None
 
+    SAME_M = 40.0       # an item of a later file this close to one of an earlier file's of its kind is that one
+
+    def _key(self, lat, lon):
+        return int(math.floor(lat / self.CELL)), int(math.floor(lon / self.CELL))
+
+    def _seen(self, grid, it):
+        """Whether an earlier file already has this sign (overlapping files: a region's inside the state's)."""
+        i, j = self._key(it["lat"], it["lon"])
+        kx = math.cos(math.radians(it["lat"]))
+        for di in (-1, 0, 1):
+            for dj in (-1, 0, 1):
+                for o in grid.get((i + di, j + dj), ()):
+                    if o["k"] == it["k"] and o.get("_f") != it["_f"] and math.hypot(
+                            (o["lat"] - it["lat"]) * 111_195.0, (o["lon"] - it["lon"]) * 111_195.0 * kx) < self.SAME_M:
+                        return True
+        return False
+
     def _load(self):
-        grid = {}
+        paths = []
         for d in self.dirs:
-            if not os.path.isdir(d):
-                continue
-            for name in sorted(os.listdir(d)):
-                if not name.endswith(".json.gz"):
+            if os.path.isdir(d):
+                paths += [os.path.join(d, n) for n in os.listdir(d) if n.endswith(".json.gz")]
+        paths.sort(key=lambda p: (-os.path.getsize(p), p))     # the biggest (the whole state's) first
+        grid = {}
+        for fi, path in enumerate(paths):
+            with gzip.open(path, "rt", encoding="utf-8") as f:
+                data = json.load(f)
+            for it in plan(data):
+                it["_f"] = fi
+                if fi and self._seen(grid, it):
                     continue
-                with gzip.open(os.path.join(d, name), "rt", encoding="utf-8") as f:
-                    data = json.load(f)
-                for it in plan(data):
-                    key = (int(math.floor(it["lat"] / self.CELL)), int(math.floor(it["lon"] / self.CELL)))
-                    grid.setdefault(key, []).append(it)
+                grid.setdefault(self._key(it["lat"], it["lon"]), []).append(it)
         return grid
 
     def grid(self):

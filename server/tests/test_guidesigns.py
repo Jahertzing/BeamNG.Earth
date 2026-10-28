@@ -142,6 +142,11 @@ class Plan(unittest.TestCase):
             p = gs.Plans((d,))
             got = p.near(_lat(2900), LON0 - 0.01, _lat(3100), LON0 + 0.01)
             self.assertIn("gore", {i["k"] for i in got})
+            n = len(got)
+            with gzip.open(os.path.join(d, "overlap.json.gz"), "wt") as f:   # a second file over the same road
+                json.dump(_net(), f)
+            p = gs.Plans((d,))
+            self.assertEqual(len(p.near(_lat(2900), LON0 - 0.01, _lat(3100), LON0 + 0.01)), n)
 
 
 class Tile(unittest.TestCase):
