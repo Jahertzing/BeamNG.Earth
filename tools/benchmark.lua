@@ -205,6 +205,7 @@ function B.teleport(cfg)
   local st = coreState()
   local before = st and st.anchorId or nil
   local ok, r = pcall(core.teleport, cfg.lat, cfg.lon, nil, { record = false }) -- not in the recent places
+  if ok and r == true then B.place = { tonumber(cfg.lat), tonumber(cfg.lon) } end
   return toJson({ ok = ok and r == true, anchorBefore = before, error = (not ok) and tostring(r) or nil,
     status = st and st.status or nil })
 end
@@ -343,13 +344,19 @@ local function showPlayer()
   hiddenVeh = nil
 end
 
--- cfg: { e, n } (m east / north of the anchor = the place) or { lat, lon }; { alt } (m: world z with
+-- cfg: { e, n } (m east / north of the place teleported to) or { lat, lon }; { alt } (m: world z with
 -- e / n, the height above the ellipsoid with lat / lon) or { agl } (m above the ground there, else above the player's ground); dir { x, y, z }; fov.
+-- (The place is not always the anchor: a teleport near a baked route lands on the route's anchor, routepins.lua, and
+-- the place is then km from it; the 2026-10-28 street life run shot Capitol Hill and 16th St both at that anchor.)
 function B.view(cfg)
   cfg = decode(cfg)
   local st = coreState()
   if not st or not st.anchor then return toJson({ ok = false, error = 'no anchor' }) end
   local x, y, zGeo = cfg.e or 0, cfg.n or 0, nil
+  if B.place and not (cfg.lat and cfg.lon) then
+    local px, py = st.anchor:geodeticToEnu(B.place[1], B.place[2], 0)
+    x, y = x + px, y + py
+  end
   if cfg.lat and cfg.lon then
     x, y, zGeo = st.anchor:geodeticToEnu(cfg.lat, cfg.lon, cfg.alt or 0)
   end
