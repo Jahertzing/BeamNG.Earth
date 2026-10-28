@@ -447,3 +447,14 @@ class BridgeProfilesTest(unittest.TestCase):
         k = 5                                   # ramp point 20 m from the split, 2.4 m off the mainline
         j = int(np.argmin(np.abs(main[:, 0] - ramp[k, 0])))
         self.assertLess(abs(out[1][k] - out[0][j]), abs(zs[1][k] - zs[0][j]) / 2 + 1e-9)
+
+
+class NonFiniteTest(unittest.TestCase):
+    def test_nan_vertex_left_out_not_the_tile(self):
+        """A NaN vertex (a tunnel mesh on Jeff's PC, 2026-10-28) leaves out its triangles; the rest is written."""
+        P = np.array([[0, 0, 0], [1, 0, 0], [0, 1, 0], [np.nan, 1, 0], [1, 1, 0]], np.float64)
+        T = np.array([[0, 1, 2], [1, 3, 2], [1, 4, 2]])
+        with tempfile.TemporaryDirectory() as d, self.assertLogs("earthd.roadmesh", "WARNING"):
+            path = os.path.join(d, "t.cdae")
+            roadmesh.write(path, (P, T, np.zeros((5, 2)), ["m"], np.zeros(3, np.int64)))
+            self.assertTrue(cdae.read(path))

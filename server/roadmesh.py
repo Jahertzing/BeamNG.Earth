@@ -15,11 +15,15 @@ materials render on a mesh (probe 2026-10-11: they are translucent with zwrite, 
 ribbons in one mesh draw in a fixed order and do not flicker). No collision: the tyres stay on the
 terrain, whose surface masks carry the asphalt / dirt ground models. Pure given elev.
 """
+import logging
 import math
+import os
 
 import numpy as np
 
 import cdae
+
+log = logging.getLogger("earthd.roadmesh")
 
 DRAPE_STEP = 2.0        # m between ribbon cross-sections (the physics block's lattice)
 LIFT = {"base": 0.0, "gutter": 0.005, "mark": 0.01}   # m above the physics ground (lifted under roads
@@ -1133,5 +1137,16 @@ def _tunnel_lamps(P, T, UV, M, nv, mid, u, z, hw, origin):
 
 
 def write(path, mesh):
+    """The mesh as a .cdae at path. Triangles touching a non-finite vertex are left out (one warning naming the file):
+    a NaN would otherwise fail the whole tile in cdae's packing."""
     P, T, UV, mats, M = mesh
+    P, T = np.asarray(P), np.asarray(T)
+    bad = ~np.isfinite(P).all(axis=1)
+    if bad.any():
+        keep = ~bad[T].any(axis=1)
+        log.warning("%s: %d non-finite vertices, %d of %d triangles left out", os.path.basename(path),
+                    int(bad.sum()), int((~keep).sum()), len(T))
+        T, M = T[keep], np.asarray(M)[keep]
+        new = np.cumsum(~bad) - 1                   # the finite vertices only, renumbered
+        P, UV, T = P[~bad], np.asarray(UV)[~bad], new[T]
     return cdae.write(path, P, T, uvs=UV, material=mats, tri_materials=M, object_name="road")
