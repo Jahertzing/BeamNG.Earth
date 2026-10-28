@@ -257,10 +257,22 @@ class MapData:
         return {"pipeline": VERSION, "overture": self.release, "worldcover": maprasters.WORLDCOVER_RELEASE,
                 "canopy": maprasters.CHM_RELEASE}
 
+    def regional(self):
+        """osmtags.Regional over this cache's regional tables (tools/osm_tag_table.py), made when first asked for."""
+        with self._lock:
+            if getattr(self, "_regional", None) is None:
+                import osmtags
+                self._regional = osmtags.Regional(self.raw_dir)
+            return self._regional
+
     def path(self, key, layer):
         source, release = _source(layer, self.release)
         lv = LAYER_VERSIONS.get(layer)
         name = layer if lv is None else f"{layer}.{lv}"
+        if layer == "roads":
+            tag = self.regional().covering(key.bounds())
+            if tag is not None:         # a cell inside a regional OSM table: built with its tags, kept under its tag
+                name = f"{name}.{tag}"
         return os.path.join(self.cache_dir, "mapdata", f"v{VERSION}", source, release, name,
                             str(key.z), str(key.x), f"{key.y}.npz")
 
@@ -342,6 +354,12 @@ class MapData:
             feats, sources = self.overture.query(layer, key, kind)
             if osm is not None:
                 feats = self._osm(feats, osm.result())
+                tag = self.regional().covering(key.bounds())
+                if tag is not None:
+                    import osmtags
+                    recs = feats.attrs.get("src_record")
+                    ways = [osmtags.way_id(str(r)) for r in recs] if recs is not None else []
+                    osmtags.join_regional(feats, self.regional().tags(tag, ways))
             ox, oy = mapcells.owner(feats.attrs.get("cx", np.zeros(0)), feats.attrs.get("cy", np.zeros(0)), key.z)
             feats.own = (ox == key.x) & (oy == key.y)
             if feats.clipped is not None:

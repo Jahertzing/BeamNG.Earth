@@ -70,6 +70,108 @@ NAME_MATCH_M = 25.0     # m a segment's middle may lie outside the bbox of the s
 RACEWAY_COLUMNS = ("id", "highway", "name", "surface", "width", "lanes", "layer", "bridge", "tunnel", "oneway")
 
 
+# Regional tables (tools/osm_tag_table.py, from Geofabrik extracts): the highway tags Layercake does not carry, which
+# turn lanes, uneven lane splits, centre turn lanes, on-street parking and per-side sidewalks need (feature
+# turn-lanes). A road cell inside a table's box gets one text column per key ("osm_" + the key with ':' as '_', ""
+# where the way has none) and is kept under the table's tag (mapdata.MapData.path); a cell outside every table is
+# built exactly as before (no columns).
+REGIONAL_DIR = "osmregions"
+REGIONAL_KEYS = ("turn:lanes", "turn:lanes:forward", "turn:lanes:backward", "turn:lanes:both_ways",
+                 "lanes:forward", "lanes:backward", "lanes:both_ways", "centre_turn_lane",
+                 "placement", "placement:forward", "placement:backward",
+                 "width:lanes", "width:lanes:forward", "width:lanes:backward",
+                 "parking:left", "parking:right", "parking:both",
+                 "parking:lane:left", "parking:lane:right", "parking:lane:both",
+                 "parking:left:orientation", "parking:right:orientation", "parking:both:orientation",
+                 "sidewalk:left", "sidewalk:right", "sidewalk:both",
+                 "cycleway", "cycleway:left", "cycleway:right", "cycleway:both")
+
+
+def regional_column(key):
+    """The attrs column of a regional key: "turn:lanes:forward" -> "osm_turn_lanes_forward"."""
+    return "osm_" + key.replace(":", "_")
+
+
+class Regional:
+    """The regional tables in <raw>/osmregions/*.npz (tools/osm_tag_table.py), read when first asked for. covering():
+    the table a cell lies in, tags(): its ways' tags."""
+
+    def __init__(self, raw_dir):
+        self.dir = os.path.join(raw_dir, REGIONAL_DIR)
+        self._lock = threading.Lock()
+        self._index = None          # [(tag, bbox, path)] sorted by tag
+        self._tables = {}           # tag -> (ids, row offsets, keys, values)
+
+    def index(self):
+        with self._lock:
+            if self._index is None:
+                idx = []
+                try:
+                    names = sorted(n for n in os.listdir(self.dir) if n.endswith(".npz"))
+                except OSError:
+                    names = []
+                for n in names:
+                    path = os.path.join(self.dir, n)
+                    try:
+                        with np.load(path, allow_pickle=False) as z:
+                            idx.append((str(z["tag"]), tuple(float(v) for v in z["bbox"]), path))
+                    except Exception as e:      # a broken table is left out
+                        log.warning("osmtags: regional table %s unreadable: %s: %s", n, type(e).__name__, e)
+                self._index = sorted(idx)
+            return self._index
+
+    def covering(self, bounds):
+        """The tag of the table whose box holds the cell's bounds (lon0, lat0, lon1, lat1) wholly, the first by tag
+        when several do; None outside every table."""
+        lon0, lat0, lon1, lat1 = bounds
+        for tag, (x0, y0, x1, y1), _ in self.index():
+            if x0 <= lon0 and lon1 <= x1 and y0 <= lat0 and lat1 <= y1:
+                return tag
+        return None
+
+    def _table(self, tag):
+        with self._lock:
+            t = self._tables.get(tag)
+        if t is not None:
+            return t
+        path = next(p for g, _, p in self.index() if g == tag)
+        with np.load(path, allow_pickle=False) as z:
+            ids, row, key, val, keys = z["ids"], z["row"], z["key"], z["val"], [str(k) for k in z["keys"]]
+        off = np.searchsorted(row, np.arange(len(ids) + 1))
+        t = (ids, off, key, val, keys)
+        with self._lock:
+            self._tables[tag] = t
+        return t
+
+    def tags(self, tag, way_ids):
+        """{way id: {key: value}} of the given ways (those the table has)."""
+        ids, off, key, val, keys = self._table(tag)
+        want = np.array(sorted({int(w) for w in way_ids if w is not None}), np.int64)
+        if not len(want) or not len(ids):
+            return {}
+        k = np.searchsorted(ids, want)
+        k = np.minimum(k, len(ids) - 1)
+        hit = ids[k] == want
+        out = {}
+        for w, r in zip(want[hit].tolist(), k[hit].tolist()):
+            out[w] = {keys[int(key[j])]: str(val[j]) for j in range(int(off[r]), int(off[r + 1]))}
+        return out
+
+
+def join_regional(feats, tags):
+    """The regional tags (Regional.tags) of each road feature's way as text columns (regional_column; "" where none),
+    for every key in REGIONAL_KEYS. Only a feature's own way counts (a segment from a relation has none here: the
+    same-named way of join() may be the other carriageway, its forward / backward lanes the wrong way round)."""
+    import mapgeom as mg
+    recs = feats.attrs.get("src_record")
+    n = len(feats)
+    ids = [way_id(str(recs[i])) if recs is not None else None for i in range(n)]
+    for k in REGIONAL_KEYS:
+        feats.attrs[regional_column(k)] = mg.text_column([tags.get(w, {}).get(k, "") if w is not None else ""
+                                                          for w in ids])
+    return feats
+
+
 def way_id(record):
     """The OSM way id of an Overture source record ("w1360453999@2" -> 1360453999), else None."""
     m = re.match(r"^w(\d+)", record or "")
