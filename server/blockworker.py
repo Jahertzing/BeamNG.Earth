@@ -97,6 +97,7 @@ class _State:
                 if self.graders[aid] is not None:
                     self.graders[aid].wet = self.sea.depth if getattr(self, "sea", None) is not None else None
                     self.graders[aid].dem = self.dem          # (its urgent lane: _plan_missing)
+                    self.graders[aid].surface = decklidar.surface_for(self.md, self.dem)  # (motorways as measured)
                     self.graders[aid].shared = plancache.for_grader(self.cache_dir, self.graders[aid], self.widths,
                                                                    self.graders[aid].wet)
                 for old in sorted(self.chunks)[:-ANCHORS_KEPT]:

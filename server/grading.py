@@ -293,17 +293,143 @@ def clip_polyline(xy, box):
     return [np.array(r, np.float64) for r in runs if len(r) >= 2]
 
 
+# Motorways at the height USGS lidar measured them (2026-10-28, Denver's Mousetrap): the DEM there is a bare earth
+# without most of the interchange's fills, its ramps and I-70 running 4-9 m over it for hundreds of metres (the lidar's
+# surface model, decklidar.Dsm), so every ramp climbed onto its bridge from the flat and the decks stood over roads
+# they should clear by little. A motorway's or trunk's (and their links') profile is raised to the road surface the
+# lidar shows along it (lidar_lift: a line fitted to its lowest points over LIFT_WIN_M either way; vehicles, gantries
+# and the decks over it stand higher, and points within LIFT_OCC_M of a bridge's deck are left out, the road under them
+# straight across), where that is over LIFT_DEAD_M above the DEM (noise, the road's own crown), at most LIFT_MAX_M. The
+# grading raises the ground to it: an embankment. Never lowered (the bare earth keeps cuttings). BNE_ROAD_LIDAR=off:
+# the DEM alone.
+LIDAR_ON = os.environ.get("BNE_ROAD_LIDAR", "on") != "off"
+LIDAR_CLASSES = ("motorway", "trunk")
+LIDAR_END_ARCS_M = np.arange(6.0, 25.0, 3.0)    # m along a bridge off its abutment where the lidar measures its deck
+LIDAR_END_SPREAD_M = 2.0    # m: measurements further apart than this are not one deck (another over it, a truck)
+LIDAR_UNDER_MIN_M = 4.0    # m: the lidar's surface over a road's crossing under a bridge this far over the road is the deck
+LIDAR_END_TOL_M = 0.3       # m over the measured deck an approach may still rise to (its own smoothing)
+LIFT_BASE_M = 16.0      # m either way: the bare earth's running median a hole's lift is held over
+LIFT_WIN_M = 20.0     # m either way (a short window: a fill ending into the bare earth kept its height to its end)
+LIFT_DEAD_M = 0.5
+LIFT_MAX_M = 15.0
+LIFT_OCC_M = 3.0
+LIFT_MIN_N = 6          # measured samples a window needs
+LIFT_GAP_M = 250.0      # m: a stretch hidden under decks this long gets the lift either side of it, straight across
+LIFT_GRADE = 0.10       # the lidar's road climbs at most this steeply (a bump over it: not the road)
+LIFT_FIT_TOL_M = 0.3    # m over the window's fitted line a point is not the road's (dropped, the line fitted again)
+LIFT_FIT_ITERS = 4
+LIFT_HOLD_M = 60.0      # m: past the last measured point the lift holds this far, fading out over as much again
+
+
+def lidar_lift(xy, z, surf, occluders=()):
+    """m to raise the profile z (at the even samples xy (n, 2), PROFILE_STEP or so apart) by: surf (n,) the lidar's
+    surface there (NaN: none); occluders [(xy (k, 2), half width m)]: the decks over roads (their samples left out).
+    Pure."""
+    xy = np.asarray(xy, np.float64)
+    z = np.asarray(z, np.float64)
+    n = len(z)
+    h = np.array(surf, np.float64)
+    if n < 2 or not np.isfinite(h).any():
+        return np.zeros(n)
+    for oxy, half in occluders:
+        oxy = np.asarray(oxy, np.float64)[:, :2]
+        if len(oxy) < 2:
+            continue
+        reach = half + LIFT_OCC_M
+        lo, hi = oxy.min(0) - reach, oxy.max(0) + reach
+        near = (xy[:, 0] >= lo[0]) & (xy[:, 0] <= hi[0]) & (xy[:, 1] >= lo[1]) & (xy[:, 1] <= hi[1])
+        if not near.any():
+            continue
+        q = xy[near]
+        P, ab = oxy[:-1], np.diff(oxy, axis=0)
+        L2 = np.maximum((ab * ab).sum(1), 1e-12)
+        t = np.clip(((q[:, None, :] - P[None]) * ab[None]).sum(2) / L2[None], 0.0, 1.0)
+        dist = np.hypot(*(q[:, None, :] - (P[None] + t[..., None] * ab[None])).transpose(2, 0, 1)).min(1)
+        h[np.flatnonzero(near)[dist < reach]] = np.nan
+    s = np.r_[0.0, np.cumsum(np.hypot(*np.diff(xy, axis=0).T))]
+    step = float(np.median(np.diff(s))) or PROFILE_STEP
+    # the road's surface: per sample, a line through the lidar's points LIFT_WIN_M either way fitted to the lowest of
+    # them (those over it by LIFT_FIT_TOL_M dropped, again: vehicles, gantries, a deck the occluders missed stand
+    # over the road, nothing under it). A percentile of lidar - DEM had a road level on its fill where the DEM climbed
+    # 22 % out of I-70's pit come out 2.6 m under the lidar's at an I-25 deck's abutment (2026-10-28).
+    r = max(1, int(round(LIFT_WIN_M / step)))
+    hp = np.r_[np.full(r, np.nan), h, np.full(r, np.nan)]
+    sp = np.r_[np.full(r, np.nan), s, np.full(r, np.nan)]
+    W = np.lib.stride_tricks.sliding_window_view(hp, 2 * r + 1)
+    X = np.lib.stride_tricks.sliding_window_view(sp, 2 * r + 1) - s[:, None]
+    m = np.isfinite(W) & np.isfinite(X)
+    Wz, Xz = np.where(m, W, 0.0), np.where(m, X, 0.0)
+    T = np.full(n, np.nan)
+    with np.errstate(invalid="ignore", divide="ignore"):
+        for _ in range(LIFT_FIT_ITERS):
+            w = m.astype(np.float64)
+            S0, S1, S2 = w.sum(1), (w * Xz).sum(1), (w * Xz * Xz).sum(1)
+            Sy, Sxy = (w * Wz).sum(1), (w * Xz * Wz).sum(1)
+            det = S0 * S2 - S1 * S1
+            ok = (S0 >= LIFT_MIN_N) & (det > 1e-9)
+            slope = np.where(ok, (S0 * Sxy - S1 * Sy) / np.where(ok, det, 1.0), 0.0)
+            icpt = np.where(ok, (Sy - slope * S1) / np.where(S0 > 0, S0, 1.0), np.nan)
+            T = np.where(ok, icpt, np.nan)
+            m = m & (Wz - (icpt[:, None] + slope[:, None] * Xz) <= LIFT_FIT_TOL_M)
+    good = np.isfinite(T)
+    if not good.any():
+        return np.zeros(n)
+    # (the holes' lift is held over the bare earth's running median, LIFT_BASE_M either way, not its every dip)
+    rb = max(1, int(round(LIFT_BASE_M / step)))
+    zp = np.r_[np.full(rb, np.nan), z, np.full(rb, np.nan)]
+    base = np.nanmedian(np.lib.stride_tricks.sliding_window_view(zp, 2 * rb + 1), axis=1)
+    if not good.all():
+        # where the decks over it hide the road (the Mousetrap's I-25 under three levels of ramps), straight across
+        # between the measured either side (a hole had the road fall 6 m to the bare earth between two decks it led
+        # onto), up to LIFT_GAP_M; past the last measured point the lift held for LIFT_HOLD_M, fading out over as much
+        gi = np.flatnonzero(good)
+        rel = T - base
+        fill = np.interp(s, s[gi], T[gi])
+        d0 = np.clip(s[gi[0]] - s, 0.0, None)
+        d1 = np.clip(s - s[gi[-1]], 0.0, None)
+        wt = np.clip(2.0 - np.maximum(d0, d1) / LIFT_HOLD_M, 0.0, 1.0)
+        held = base + np.where(s < s[gi[0]], rel[gi[0]], rel[gi[-1]])
+        fill = np.where((d0 > 0) | (d1 > 0), base + (held - base) * wt, fill)
+        for a, b in zip(gi[:-1], gi[1:]):
+            if b - a > 1 and s[b] - s[a] > LIFT_GAP_M:
+                mid = slice(a + 1, b)
+                near_a = s[mid] - s[a] < s[b] - s[mid]
+                wm = np.clip(2.0 - np.minimum(s[mid] - s[a], s[b] - s[mid]) / LIFT_HOLD_M, 0.0, 1.0)
+                fill[mid] = base[mid] + np.where(near_a, rel[a], rel[b]) * wm
+        T = np.where(good, T, fill)
+    # no road climbs faster than LIFT_GRADE: what the fit still has over it (a deck read over the road for 40 m, the
+    # occluders missing it: I-70's viaduct over I-25, 9 m up) is a bump this takes off
+    T = T.copy()
+    ds = np.diff(s) * LIFT_GRADE
+    for i in range(1, n):
+        T[i] = min(T[i], T[i - 1] + ds[i - 1])
+    for i in range(n - 2, -1, -1):
+        T[i] = min(T[i], T[i + 1] + ds[i])
+    # up to it where it stands over LIFT_DEAD_M (noise, the road's own crown), all of it from a metre more on (no step
+    # where it starts), the DEM's every dip with it (the DEM fell 2.2 m in the last 6 m before an I-25 deck whose road
+    # the lidar read straight on)
+    rel = np.clip(T - z, 0.0, LIFT_MAX_M)
+    return np.where(rel > LIFT_DEAD_M, rel - LIFT_DEAD_M * np.clip(1.0 - (rel - LIFT_DEAD_M), 0.0, 1.0), 0.0)
+
+
+def lidar_ok(spec):
+    """Does this road's profile follow the lidar (lidar_lift)?"""
+    return LIDAR_ON and spec is not None and spec.cls in LIDAR_CLASSES and spec.kind in roadsmod.BUILT
+
+
 def plan_road(frame, lonlat, spec, elev):
     """The Plan of one road part (lonlat (k, 2)); elev(lat, lon) -> m at PROFILE_ZOOM. Pure given elev."""
     return plan_roads(frame, [(lonlat, spec)], elev)[0]
 
 
-def plan_roads(frame, parts, elev, abut=None, ext=None, pins=None, cuts=True):
+def plan_roads(frame, parts, elev, abut=None, ext=None, pins=None, cuts=True, lidar=None):
     """plan_road for many (lonlat, spec) parts with one elev call (its cost is per call); abut: per part (start, end)
     flags, the ends leading onto a bridge (fill_abutment); ext: per part (before, after), the lines (k, 2) in the frame
     from its start / end outward along the part the road goes on in (Grader._extensions), or None: their ground is in
     the part's profile smoothing; pins: per part (start, end) heights its ends are held at, or None (Grader._pins: a
-    road ending on a more smoothed one meets it at its height). Pure given elev."""
+    road ending on a more smoothed one meets it at its height); lidar: (surface(lat, lon) -> m or NaN, occluders(xy) ->
+    the decks near the points xy (lidar_lift)) or None: the motorways' profiles raised to it. Pure given elev and
+    lidar."""
     if not parts:
         return []
     ll = np.concatenate([lonlat for lonlat, _ in parts])
@@ -342,7 +468,22 @@ def plan_roads(frame, parts, elev, abut=None, ext=None, pins=None, cuts=True):
         xy, before, after, step = pr
         nb, na = len(before), len(after)
         zx = zall[k:k + nb + len(xy) + na]
+        sx = np.concatenate([before, xy, after]) if lidar is not None and lidar_ok(spec) else None
         k += nb + len(xy) + na
+        measured = (False, False)
+        if sx is not None and len(sx) > 1:
+            try:
+                sla, slo, _ = frame.enu_to_geodetic(sx[:, 0], sx[:, 1], 0.0)
+                surf = np.asarray(lidar[0](sla, slo), np.float64)     # (heights as elev's: the DEM's)
+                add = lidar_lift(sx, zx, surf, lidar[1](sx))
+                zx = zx + add
+                # an end the lidar raised is at its measured height: no fill_abutment grade carried onto it (it
+                # carried a DEM dip's slope 3 m over an I-25 deck's measured end)
+                measured = (bool(add[nb] > 0.0), bool(add[nb + len(xy) - 1] > 0.0))
+            except Exception as e:      # the DEM's profile, not kept (revisit.fault)
+                import revisit
+                log.debug("grading: road lidar: %s: %s", type(e).__name__, e)
+                revisit.fault()
         ab = (False, False)
         if abut is not None and ABUT_FILL_ON:
             ab = (bool(abut[j][0]), bool(abut[j][1]))
@@ -352,7 +493,7 @@ def plan_roads(frame, parts, elev, abut=None, ext=None, pins=None, cuts=True):
                 zx, na = zx[:len(zx) - na], 0
             z = zx[nb:nb + len(xy)]
             for at_end in (False, True):
-                if ab[int(at_end)]:
+                if ab[int(at_end)] and not measured[int(at_end)]:
                     z = fill_abutment(z, at_end)
             zx = np.concatenate([zx[:nb], z, zx[nb + len(xy):]])
         pin = pins[j] if pins is not None else (None, None)
@@ -650,7 +791,8 @@ class Grader:
                 except Exception as e:      # each part smoothed alone rather than no grading
                     log.debug("grading: road chains of %s: %s: %s", key, type(e).__name__, e)
             pclip = []
-            for fid, part, cl, p in zip(ids, parts, clipped, plan_roads(self.frame, parts, self.elev, abut, ext, pins)):
+            for fid, part, cl, p in zip(ids, parts, clipped, plan_roads(self.frame, parts, self.elev, abut, ext, pins,
+                                                                        lidar=self._lidar())):
                 if p is not None:
                     p.rid = road_id(fid)
                     plans.append((fid, p))
@@ -709,6 +851,57 @@ class Grader:
         else:
             covers, opens, keeps = [], [], []
         return plans, keeps, covers, opens
+
+    surface = None      # surface(lat, lon) -> the lidar's surface height or NaN (decklidar.Surface): lidar_lift
+
+    def _lidar(self):
+        """plan_roads' lidar: (surface, the decks near some points), or None (no surface)."""
+        if self.surface is None or not LIDAR_ON:
+            return None
+        return self.surface, self._decks_near
+
+    def _decks_near(self, xy):
+        """[(xy (k, 2) in the frame, half width m)] of the bridges' decks (any road or railway) in the map cells of the
+        points xy (n, 2) and ~60 m round them (a cell's features are those meeting it: a deck over a point is in the
+        point's cell; lidar_lift leaves out the samples under them)."""
+        xy = np.asarray(xy, np.float64)
+        la, lo, _ = self.frame.enu_to_geodetic(xy[:, 0], xy[:, 1], 0.0)
+        keys = set(mapcells.cells_for_points(np.asarray(la), np.asarray(lo), 0.0006, 0.0008))     # (~60 m round)
+        out = []
+        lo_b, hi_b = xy.min(0) - 60.0, xy.max(0) + 60.0
+        for k in sorted(keys, key=str):
+            for dxy, half in self._cell_decks(k):
+                if (dxy.max(0) >= lo_b).all() and (dxy.min(0) <= hi_b).all():
+                    out.append((dxy, half))
+        return out
+
+    def _cell_decks(self, key):
+        memo = self.__dict__.setdefault("_deck_memo", {})
+        with self.lock:
+            got = memo.get(key)
+        if got is not None:
+            return got
+        got = []
+        try:
+            feats = self.md.cell(key, layers=("roads",), kind="demand").layers.get("roads")
+        except Exception as e:      # (its roads lifted with what is known)
+            log.debug("grading: decks of %s: %s: %s", key, type(e).__name__, e)
+            feats = None
+        if feats is not None and len(feats):
+            bs = roadsmod.bridge_specs(feats)
+            for i in range(len(feats)):
+                rngs = roadsmod.level_ranges(feats, i)
+                if not any(k == "bridge" for _a, _b, k in rngs):
+                    continue
+                half = bs[i].width / 2 if bs[i] is not None else 3.0
+                for ring in roadsmod.bridge_parts(feats, i):
+                    e, n, _ = self.frame.geodetic_to_enu(ring[:, 1], ring[:, 0], 0.0)
+                    got.append((np.stack([np.asarray(e), np.asarray(n)], axis=1), half))
+        with self.lock:
+            if len(memo) > 256:
+                memo.clear()
+            memo[key] = got
+        return got
 
     def _chain_cands(self, key, feats=None, specs=None):
         """The graded ground parts of cell key's roads, as the continuations at a node in it are looked for (every cell
@@ -880,7 +1073,7 @@ class Grader:
                 preps = [self._strong_part(*asks[n]) for n in jobs]
                 parts = [(part, asks[n][0][4]) for n, (part, _last, _whole) in zip(jobs, preps)]
                 ext = self._extensions(parts, [asks[n][0][5] for n in jobs])
-                plans = plan_roads(self.frame, parts, self.elev, None, ext, cuts=False)
+                plans = plan_roads(self.frame, parts, self.elev, None, ext, cuts=False, lidar=self._lidar())
                 for n, (part, last, whole), p in zip(jobs, preps, plans):
                     self._strong_keep(asks[n][0], keys[n], p, last, whole)
             except Exception as e:      # one at a time, each its own failure (_stronger_z)
@@ -938,7 +1131,7 @@ class Grader:
             part, last, whole = self._strong_part(cand, at_last)
             # (the profile alone: its cutting's walls cost most of a plan and no height, 2026-10-25)
             p = plan_roads(self.frame, [(part, cand[4])], self.elev, None,
-                           self._extensions([(part, cand[4])], [cand[5]]), cuts=False)[0]
+                           self._extensions([(part, cand[4])], [cand[5]]), cuts=False, lidar=self._lidar())[0]
             self._strong_keep(cand, k, p, last, whole)
         except Exception as e:      # not held rather than no grading
             log.debug("grading: pin height of %s: %s: %s", cand[5], type(e).__name__, e)
@@ -985,7 +1178,9 @@ class Grader:
         raised ground, 2026-10-20 I-20 in Greene County, AL). Major roads (APPROACH_SKIP) are never raised."""
         # every plan end at once: near the cell, and on a bridge end of its own cell (most touch none)
         pe = np.array([[p.xy[0][:2], p.xy[-1][:2]] for _f, p in plans], np.float64).reshape(-1, 2)
-        ok = np.repeat([s is not None and not _never_raised(s) for s in specs], 2)
+        # (nor a road at the lidar's height: its fill is measured, the approach's raise on it counted the fill twice)
+        lid = self._lidar() is not None
+        ok = np.repeat([s is not None and not _never_raised(s) and not (lid and lidar_ok(s)) for s in specs], 2)
         touch = self._abut_ends(key, pe, ok).reshape(-1, 2)
         for i, (fid, p) in enumerate(plans):
             if not touch[i].any():
@@ -999,6 +1194,8 @@ class Grader:
                 if got is None:
                     continue
                 lift, others = got[0], got[1]
+                if got[3] is not None:      # no higher than the lidar's deck over the plan's own end
+                    lift = min(lift, max(0.0, got[3] + LIDAR_END_TOL_M - float(p.z[-1 if at_end else 0])))
                 a = approach_add(p.xy, at_end, lift, p.half, others)
                 if a is not None:
                     add = a if add is None else np.maximum(add, a)
@@ -1086,6 +1283,21 @@ class Grader:
                     got[1] += self._end_raised(b[-1])
                 ez[j] = got
             return got
+        lid = self._lidar()
+
+        def lidar_deck(pt):         # the lidar's surface over the crossing: the deck's top, or None
+            if lid is None:
+                return None
+            try:
+                la_, lo_, _ = self.frame.enu_to_geodetic(np.array([pt[0]]), np.array([pt[1]]), 0.0)
+                h = float(np.asarray(lid[0](np.asarray(la_), np.asarray(lo_)), f64).ravel()[0])
+            except Exception:
+                return None
+            return h if math.isfinite(h) else None
+
+        def decklidar_clear():
+            import decklidar
+            return decklidar.lidar_road_clear()
         cands = []
         for i, cr in enumerate(crs):
             if not cr:
@@ -1101,16 +1313,22 @@ class Grader:
                 ze = deck_ends(bi)
                 corridor = np.clip([arc_b - roadsmod.DECK_CLEAR_REACH_M, arc_b + roadsmod.DECK_CLEAR_REACH_M], 0.0, L)
                 deck = float(np.min(ze[0] + (ze[1] - ze[0]) * corridor / L))
+                seen = lidar_deck(pt)
                 # where along this road (its nearest vertex segment)
                 t = np.clip(((pt - xy[:-1]) * ab).sum(1) / np.maximum((ab * ab).sum(1), 1e-12), 0.0, 1.0)
                 j = int(np.argmin(np.linalg.norm(xy[:-1] + t[:, None] * ab - pt, axis=1)))
-                cands.append((i, float(s[j] + t[j] * (s[j + 1] - s[j])), deck))
+                cands.append((i, float(s[j] + t[j] * (s[j + 1] - s[j])), deck, seen))
         if not cands:
             return
         zc = self._under_ground(lines, [ground[g][1:] for g in gids], cands)
         requirements = []
-        for (i, sc, deck), z in zip(cands, zc):
-            target = max(deck - UNDER_CLEAR_M, z - UNDER_MAX_DROP_M)
+        for (i, sc, deck, seen), z in zip(cands, zc):
+            target = deck - UNDER_CLEAR_M
+            if seen is not None and seen - z > LIDAR_UNDER_MIN_M and seen > deck - LIDAR_UNDER_MIN_M:
+                # the lidar's deck over the crossing (not the road: near the abutments' height, well over the ground)
+                # and its real clearance: the road under a deck lower than the rule wants is not dug out under it
+                target = seen - decklidar_clear() - ROAD_LIFT
+            target = max(target, z - UNDER_MAX_DROP_M)
             if target < z - 0.1:
                 requirements.append((i, sc, z - target))
         if not requirements:
@@ -1151,7 +1369,7 @@ class Grader:
         """
         f64 = np.float64
         pts, spans = [], []
-        for i, sc, _d in cands:
+        for i, sc, *_d in cands:
             sg, med = smooth[i]
             xy = lines[i]
             s = np.r_[0.0, np.cumsum(np.hypot(*np.diff(xy, axis=0).T))]
@@ -1200,7 +1418,7 @@ class Grader:
         got = self._end_lift(xy)
         if got is None:
             return 0.0
-        lift, others, approaches = got
+        lift, others, approaches = got[:3]
         best = 0.0
         for line, half in approaches:
             at_end = bool(np.hypot(*(line[-1] - xy)) <= np.hypot(*(line[0] - xy)))
@@ -1421,8 +1639,42 @@ class Grader:
             return np.asarray(self.elev(la_, lo_), np.float64)
         for end, lift in bridge_lifts(bridge, bridges, ground, z_at, chain, rails):
             if np.hypot(*(end - xy)) <= APPROACH_TOUCH_M:
-                return lift, others, approaches
+                deck = self._lidar_deck_end(bridge, xy)
+                if deck is not None:
+                    lift = min(lift, max(0.0, deck + LIDAR_END_TOL_M - float(z_at(np.asarray([xy], np.float64))[0])))
+                return lift, others, approaches, deck
         return None
+
+    def _lidar_deck_end(self, bridge, xy):
+        """The height of the deck the lidar measured off bridge end xy, which its abutment rises at most to
+        (LIDAR_END_ARCS_M along the bridge, their median, a gantry's or a higher deck's points over it left out; a
+        spread over LIDAR_END_SPREAD_M: not one deck), or None (no lidar, too few points). The approach ramps were raised
+        for the deck the old clearance rule wanted (roads.DECK_ROAD_CLEAR), 3-4 m over the real deck in the Mousetrap,
+        whose ramps then fell 23 % onto it."""
+        if self._lidar() is None:
+            return None
+        try:
+            b = np.asarray(bridge, np.float64)[:, :2]
+            if np.hypot(*(b[-1] - xy)) < np.hypot(*(b[0] - xy)):
+                b = b[::-1]
+            s = np.r_[0.0, np.cumsum(np.hypot(*np.diff(b, axis=0).T))]
+            a = LIDAR_END_ARCS_M[LIDAR_END_ARCS_M < s[-1] - LIDAR_END_ARCS_M[0]]
+            if len(a) < 3:
+                return None
+            p = np.stack([np.interp(a, s, b[:, 0]), np.interp(a, s, b[:, 1])], 1)
+            la, lo, _ = self.frame.enu_to_geodetic(p[:, 0], p[:, 1], 0.0)
+            h = np.asarray(self.surface(np.asarray(la), np.asarray(lo)), np.float64)
+            h = h[np.isfinite(h)]
+            if len(h):
+                h = h[h <= np.median(h) + 1.0]
+            if len(h) < 3 or np.ptp(h) > LIDAR_END_SPREAD_M:
+                return None
+            return float(np.median(h))
+        except Exception as e:      # the rule's lift, not kept (revisit.fault)
+            import revisit
+            log.debug("grading: lidar abutment: %s: %s", type(e).__name__, e)
+            revisit.fault()
+            return None
 
     def _longest(self, fid, j, ring, key):
         """Part j of tunnel fid as the cells at its ends have it, the longest (a part comes clipped differently in

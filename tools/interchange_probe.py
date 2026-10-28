@@ -30,8 +30,8 @@ import numpy as np  # noqa: E402
 
 # I-25's big interchanges from Frederick through Denver to Castle Rock (lat, lon, radius m)
 PLACES = {
-    "i25_e470": (40.0002, -104.9821, 700),
-    "i25_us36_i270": (39.8165, -104.9903, 800),
+    "i25_e470": (39.9822, -104.9890, 800),
+    "i25_us36_i270": (39.8180, -104.9860, 900),
     "mousetrap_i70": (39.7800, -104.9894, 600),
     "i25_6th_ave": (39.7256, -105.0005, 600),
     "i25_i225": (39.6412, -104.8985, 700),
@@ -42,6 +42,7 @@ STEEP = 0.075       # a deck's grade over this (8 m sampled) is a failure
 KINK = 0.04         # a change of grade over this between two 4 m steps
 STEP_M = 0.15       # m: a height step at a deck's end
 VERBOSE = False
+DUMP = False
 END_SKIP_M = 25.0   # m off a shared end where decks overlap in plan by construction (a fork, a merge)
 
 
@@ -73,11 +74,18 @@ def near_end(s, L, m=END_SKIP_M):
     return s < m or L - s < m
 
 
-def check(parts, levels, grounds, ground_z, under_d):
-    """Failures [(kind, x, y, text)] of the solved decks parts [(fid, spec, xy, z)] (levels: their map levels)."""
+def check(parts, levels, grounds, ground_z, under_d, measured=()):
+    """Failures [(kind, x, y, text)] of the solved decks parts [(fid, spec, xy, z)] (levels: their map levels;
+    measured: the parts the lidar measured, whose headroom is the lidar's, decklidar.lidar_road_clear)."""
     import roads
     fails = []
-    need = roads.MIN_BRIDGE_HEADROOM_M + under_d - 0.05
+    rule = roads.MIN_BRIDGE_HEADROOM_M + under_d - 0.05
+
+    def need_of(k):
+        if k in measured:
+            import decklidar
+            return decklidar.lidar_road_clear() - 0.05
+        return rule
     xyz = [(np.asarray(xy, float)[:, :2], np.asarray(z, float)) for _, _, xy, z in parts]
     S = [arcs(xy) for xy, _ in xyz]
     ends = np.array([p for xy, _ in xyz for p in (xy[0], xy[-1])]).reshape(-1, 2)
@@ -115,7 +123,7 @@ def check(parts, levels, grounds, ground_z, under_d):
                 if VERBOSE:
                     print(f"      x {parts[hi][0][:8]} L{levels[hi]:g} {max(a, b):.1f} over {parts[lo][0][:8]} "
                           f"L{levels[lo]:g} {min(a, b):.1f}: {dz:.2f} m at ({x:.0f}, {y:.0f})")
-                if dz < need and dz > FLUSH_M:
+                if dz < need_of(hi) and dz > FLUSH_M:
                     fails.append(("cross", x, y, f"{parts[hi][0][:8]} L{levels[hi]:g} over {parts[lo][0][:8]} "
                                                  f"L{levels[lo]:g}: {dz:.2f} m"))
                 elif dz <= FLUSH_M and levels[i] != levels[j]:
@@ -140,7 +148,7 @@ def check(parts, levels, grounds, ground_z, under_d):
                     if (np.hypot(*(ends - q[a_]).T) < END_SKIP_M + reach).any():
                         continue
                 dz = abs(float(np.interp(t[a_], S[i], zi)) - float(np.interp(sj, S[j], zj)))
-                if FLUSH_M < dz < need and (worst is None or dz < worst[0]):
+                if FLUSH_M < dz < min(need_of(i), need_of(j)) and (worst is None or dz < worst[0]):
                     worst = (dz, q[a_])
             if worst is not None:
                 fails.append(("stack", *worst[1], f"{parts[i][0][:8]} L{levels[i]:g} / {parts[j][0][:8]} "
@@ -158,7 +166,7 @@ def check(parts, levels, grounds, ground_z, under_d):
                 if near_end(sk, S[k][-1], roads.AT_GRADE_REACH_M) or near_end(sg, gs[-1], 1.0):
                     continue
                 dz = float(np.interp(sk, S[k], z)) - float(ground_z(np.array([[x, y]]))[0])
-                if dz < need:
+                if dz < need_of(k):
                     fails.append(("under", x, y, f"{parts[k][0][:8]} L{levels[k]:g} {dz:.2f} m over {gname}"))
     return fails
 
@@ -238,7 +246,7 @@ def sections(path, parts, levels):
     img.save(path)
 
 
-def probe(name, la, lo, radius, cache_dir, out, lidar=True):
+def probe(name, la, lo, radius, cache_dir, out, lidar=True):  # noqa: C901
     import geodesy
     import grading
     import mapcells
@@ -255,6 +263,9 @@ def probe(name, la, lo, radius, cache_dir, out, lidar=True):
     frame = geodesy.EnuFrame(la, lo)
     sample = lambda a, b: dem.sample(a, b, grading.PROFILE_ZOOM)  # noqa: E731
     grader = grading.Grader(frame, md, sample)
+    if lidar:
+        import decklidar
+        grader.surface = decklidar.surface_for(md, dem)
 
     def elev(a, b):
         return grader.apply(a, b, sample(a, b), grading.ROAD_LIFT)
@@ -302,8 +313,10 @@ def probe(name, la, lo, radius, cache_dir, out, lidar=True):
                 if (np.abs(e) < radius + 50).any() and (np.abs(n) < radius + 50).any():
                     grounds.append((f"{str(feats.ids[i])[:8]} {rs[i].cls}{' link' if rs[i].link else ''} "
                                     f"{str(feats.attrs['name'][i])[:24]}".strip(), np.stack([e, n], 1)))
+    meas_obs = None
     if lidar and bp.surface is not None and parts:     # how the decks sit against the lidar
         obs, _ = bp._observed([p[2] for p in parts], [p[1].width for p in parts], levels)
+        meas_obs = obs
         res, n_meas = [], 0
         for k, p in enumerate(parts):
             o = None if obs is None else obs[k]
@@ -315,11 +328,18 @@ def probe(name, la, lo, radius, cache_dir, out, lidar=True):
             if VERBOSE:
                 print(f"      lidar {p[0][:8]} L{levels[k]:g}: {ok.mean() * 100:.0f} % measured, deck - lidar median "
                       f"{np.median(np.asarray(p[3])[ok] - o[ok]):+.2f} m, worst {np.abs(np.asarray(p[3])[ok] - o[ok]).max():.2f} m")
+        if DUMP:
+            import pickle
+            with open(os.path.join(out, f"{name}_decks.pkl"), "wb") as f:
+                pickle.dump({"parts": [(p[0], p[1].width, np.asarray(p[2]), np.asarray(p[3])) for p in parts],
+                             "levels": levels, "obs": obs,
+                             "ground": [bp._ground(np.asarray(p[2])[:, :2]) for p in parts]}, f)
         if res:
             print(f"    lidar: {n_meas} of {len(parts)} parts measured; |deck - lidar| median {np.median(res):.2f} m, "
                   f"95th {np.percentile(res, 95):.2f} m")
     under_d = roadmesh.DECK_DEPTH + roadmesh.GIRDER_D
-    fails = check(parts, levels, grounds, bp._ground, under_d) + ends_steps(parts, grounds, bp._ground)
+    measured = {k for k in range(len(parts)) if meas_obs is not None and meas_obs[k] is not None}
+    fails = check(parts, levels, grounds, bp._ground, under_d, measured) + ends_steps(parts, grounds, bp._ground)
     fails = [f for f in fails if abs(f[1]) <= radius and abs(f[2]) <= radius]
     kinds = {}
     for f in fails:
@@ -345,15 +365,18 @@ def main():
     ap.add_argument("--cache-dir", default=os.path.expanduser("~/.cache/beamng-earth"))
     ap.add_argument("--out", default="interchange_probe")
     ap.add_argument("--no-lidar", action="store_true", help="the decks without the lidar's heights (decklidar)")
+    ap.add_argument("--dump", action="store_true", help="the solved decks, the lidar's and the ground under them as "
+                                                         "<out>/<place>_decks.pkl")
     ap.add_argument("-v", "--verbose", action="store_true", help="every deck-over-deck crossing")
     a = ap.parse_args()
-    global VERBOSE
-    VERBOSE = a.verbose
+    global VERBOSE, DUMP
+    VERBOSE, DUMP = a.verbose, a.dump
     if a.at:
         la, lo = (float(v) for v in a.at.split(","))
         places = {"at": (la, lo, a.radius)}
     else:
         places = {k: v for k, v in PLACES.items() if not a.only or k in a.only.split(",")}
+    os.makedirs(a.out, exist_ok=True)
     res = [probe(k, *v, a.cache_dir, a.out, not a.no_lidar) for k, v in places.items()]
     with open(os.path.join(a.out, "summary.json"), "w") as f:
         json.dump(res, f, indent=1)

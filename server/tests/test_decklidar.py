@@ -57,7 +57,8 @@ class ObservationsTest(TestCase):
         z, ok = decklidar.filled(s, obs, base)
         self.assertTrue((z[(s > 80) & (s < 120)] > 8.0).all() and (z[(s > 80) & (s < 120)] < 12.0).all())
         self.assertAlmostEqual(z[0], 8.0 * (1 - min(1.0, 44.0 / decklidar.END_BLEND_M)), places=6)
-        self.assertEqual(int(ok.sum()), int(np.isfinite(obs).sum()))
+        self.assertTrue(ok[(s > 40) & (s < 80)].all() and not ok[s < 40].any() and not ok[s > 160].any())
+        self.assertFalse(ok[(s > 80) & (s < 120)].any())   # (a 44 m gap: not held)
 
 
 class SurfaceTest(TestCase):
@@ -125,3 +126,48 @@ class DeckProfileTest(TestCase):
         zs = roads.deck_profile([a, b], ground, [], levels=[1.0, 1.0], widths=[12.0, 12.0], observed=[obs, None])
         self.assertLess(abs(zs[0][-1] - zs[1][0]), 0.02)
         self.assertGreater(zs[0][-1], 6.0)
+
+
+class AbutmentConsistentTest(TestCase):
+    def test_drops_what_no_deck_reaches_from_its_abutment(self):
+        s = np.arange(0.0, 101.0, 4.0)
+        obs = np.full_like(s, 5.0)
+        obs[s < 24] = 9.0                               # another deck over the first 20 m
+        got = decklidar.abutment_consistent(s, obs, 0.0, None)
+        self.assertTrue(np.isnan(got[s < 24]).all())
+        self.assertTrue(np.isfinite(got[s > 60]).all())
+
+
+class LidarLiftTest(TestCase):
+    def setUp(self):
+        import grading
+        self.g = grading
+        self.xy = np.c_[np.arange(0.0, 400.0, 2.0), np.zeros(200)]
+
+    def test_a_fill_the_dem_lacks(self):
+        z = np.full(200, 100.0)
+        surf = 100.0 + np.clip(np.minimum(self.xy[:, 0] - 50, 350 - self.xy[:, 0]) * 0.05, 0.0, 6.0)
+        lift = self.g.lidar_lift(self.xy, z, surf)
+        ok = (self.xy[:, 0] > 90) & (self.xy[:, 0] < 310)
+        np.testing.assert_allclose(lift[ok], (surf - z)[ok], atol=0.3)     # (its corners rounded)
+        self.assertTrue((lift[self.xy[:, 0] < 50] == 0.0).all())     # (no fill: not raised)
+
+    def test_a_dem_dip_at_a_bridge_end_and_a_deck_over_the_road(self):
+        z = np.full(200, 100.0)
+        z[-4:] = [99.0, 98.5, 98.0, 97.5]               # the DEM dips into the bridge's gap
+        surf = np.full(200, 100.0)
+        over = np.abs(self.xy[:, 0] - 200) < 20
+        surf[over] = 109.0                              # a viaduct over it, not among the occluders
+        lift = self.g.lidar_lift(self.xy, z, surf)
+        self.assertLess(float(lift[over].max()), 0.05)   # the deck is not the road
+        np.testing.assert_allclose(z[-3:] + lift[-3:], 100.0, atol=0.2)
+        self.assertLess(float(np.abs(np.diff(z + lift)).max()), 0.6)    # (no step where it starts)
+
+    def test_under_decks_straight_across(self):
+        z = np.full(200, 100.0)
+        surf = np.full(200, 105.0)
+        hidden = np.abs(self.xy[:, 0] - 200) < 40
+        surf[hidden] = 120.0
+        occ = [(np.array([[200.0, -50.0], [200.0, 50.0]]), 40.0)]
+        lift = self.g.lidar_lift(self.xy, z, surf, occ)
+        np.testing.assert_allclose(lift, 5.0, atol=0.1)

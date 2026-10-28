@@ -22,7 +22,8 @@ first within each; what is on disk already, known missing or in the region's man
            where that one has gaps (past its county line), and to NAIP where no regional source has it;
            USGS z16-z15 over the region, z14-z12 over --far-km
   mapdata  the z14 cells, every layer but the skyline's (CELL_LAYERS), for the pinned Overture release, with DRCOG's
-           roofprints in its area as the server builds them (--drcog, default on as the settings page)
+           roofprints in its area as the server builds them (--drcog, default on as the settings page), and 3DEP's
+           lidar surface (decklidar.Dsm) of the cells with a bridge or a motorway: the decks' and the fills' heights
 Every host runs at once, each within its policy (netfetch.POLICIES: rate, requests at once); a host stops for the day
 at its soft daily budget (the game needs the rest; --over-budget: on at half rate) and the next run resumes there.
 Finished keys go to <world>/regions/<region>.done (the manifest; --recheck ignores it), what was asked to
@@ -734,6 +735,7 @@ def run_all(net, img, dem, md, plan, manifest, only, over_budget=False, stop=Non
         for key, prio, layers in plan["cells"]:
             if cell_tok(key, layers) not in manifest:
                 ln.put(prio, (key, layers))
+        deck_lidar_lane(run, md, plan["cells"], manifest)
         if plan.get("skyline"):
             def sky_one(item, prio):
                 key, layers = item
@@ -771,6 +773,50 @@ def run_all(net, img, dem, md, plan, manifest, only, over_budget=False, stop=Non
                     ln.put(prio, key)
     run.go()
     return run
+
+
+def deck_lidar_lane(run, md, cells, manifest):
+    """The lidar's surface (decklidar.Dsm) of the cells whose roads have a bridge or a motorway or trunk: the decks'
+    heights and the motorways' fills (grading.lidar_lift) are built from it, so a place loads without the tile service
+    (2026-10-28: the Mousetrap's decks and I-25's fills off the lidar; Jeff's rule, everything pre-built, nothing
+    streamed). A cell without them is skipped (a few MB each: the 16 tiles of a z14 cell)."""
+    import decklidar
+    import grading
+    import lidarheights
+    import roads as roadsmod
+    if not decklidar.ON or getattr(md, "raw_dir", None) is None:
+        return
+    dsm = decklidar.Dsm(md.raw_dir, md.fetcher)
+
+    def wants(key):
+        feats = md.cell(key, layers=("roads",), kind="demand").layers.get("roads")
+        if feats is None or not len(feats):
+            return False
+        specs = roadsmod.road_specs(feats)
+        if any(grading.lidar_ok(s) for s in specs):
+            return True
+        return any(s is not None for s in roadsmod.bridge_specs(feats))
+
+    def dsm_one(key, prio):
+        t = tok("dsm", key.z, key.x, key.y)
+        if t in manifest:
+            return False
+        path = os.path.join(dsm.dir, str(key.z), str(key.x), f"{key.y}.npz")
+        if cachemod.exists(path):
+            manifest.add(t)
+            return False
+        if not wants(key):
+            manifest.add(t)
+            return False
+        if not run.budget_ok(run.lanes["deck lidar"]):
+            return "deferred"
+        dsm.mosaic(key, kind="demand")
+        manifest.add(t)
+        return True
+    ln = run.lane("deck lidar", netfetch.host_of(lidarheights.TILES), 2, dsm_one)
+    for key, prio, _layers in cells:
+        if tok("dsm", key.z, key.x, key.y) not in manifest:
+            ln.put(prio, key)
 
 
 def edges_path(dc, key):

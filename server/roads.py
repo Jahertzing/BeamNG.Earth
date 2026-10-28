@@ -2158,9 +2158,9 @@ def deck_profile_once(lines, ground_fn, crossings=(), clear=None, grade=None, li
         # water clearance stood the New York Thruway's deck over the Vloman Kill 5 m up in its first 3.6 m, a wall an
         # AI car hit at 65 mph (2026-10-27)
         cap[k] = np.minimum(cap[k], np.maximum(np.maximum(steep[k], g), np.where(np.isfinite(z), z, -np.inf)))
-        if meas[k] is not None:
+        if meas[k] is not None:     # measured: the lidar's height, whatever the rules above want (it is as built)
             import decklidar
-            cap[k] = np.maximum(cap[k], np.where(meas[k], z + decklidar.OBS_TOL_M, -np.inf))
+            cap[k] = np.where(meas[k], np.maximum(z + decklidar.OBS_TOL_M, g), cap[k])
         zz = np.maximum(np.minimum(np.maximum(z, req[k]), cap[k]), g)
         if deg[a] == 1:                         # an abutment keeps the ground's height
             zz[0] = z[0]
@@ -2197,6 +2197,10 @@ def _observed_start(zs, edges, deg, observed):
     for k, (a, b, s) in enumerate(edges):
         ob = observed[k] if k < len(observed) else None
         if ob is None or len(ob) != len(zs[k]) or not np.isfinite(zs[k]).all():
+            continue
+        ob = decklidar.abutment_consistent(s, ob, zs[k][0] if deg[a] == 1 else None,
+                                           zs[k][-1] if deg[b] == 1 else None)
+        if ob is None:
             continue
         z, ok = decklidar.filled(s, ob, zs[k])
         zs[k] = decklidar.end_blend(s, z, zs[k][0], zs[k][-1], deg[a] == 1, deg[b] == 1)
@@ -4417,7 +4421,8 @@ class BridgeProfiles:
             nav = 0.0
         required = [(c[0], c[1], z) for c, z in zip(cr, road_z)]
         levels, widths = [pool[k][3] for k in comp], [pool[k][0].width for k in comp]
-        observed, clear_of = self._observed(lines, widths, levels)
+        others = [(v[1], v[0].width, v[3]) for k, v in pool.items() if k not in set(comp)]
+        observed, clear_of = self._observed(lines, widths, levels, others)
         rails = [(c[0], c[1], z, DECK_ROAD_CLEAR if clear_of is None else clear_of[c[0]]) for c, z in zip(rcr, rail_z)]
         zs = deck_profile(lines, self._ground, required + rails + self._water(lines, nav), levels=levels, widths=widths,
                           pins=_ground_pins(lines, gl), observed=observed, clear_of=clear_of)
@@ -4428,9 +4433,9 @@ class BridgeProfiles:
                         MIN_BRIDGE_HEADROOM_M, [(comp[i], round(h, 2)) for i, h in deficits[:3]])
         return zs
 
-    def _observed(self, lines, widths, levels):
+    def _observed(self, lines, widths, levels, others=()):
         """(per part the lidar's deck heights or None, per part the clearance it keeps over what it crosses), or (None,
-        None) without the lidar (decklidar)."""
+        None) without the lidar (decklidar). others: [(xy, width, level)] of the decks round them in other chains."""
         if self.surface is None or not lines:
             return None, None
         import decklidar
@@ -4440,7 +4445,7 @@ class BridgeProfiles:
             z = np.asarray(self.surface(la, lo), np.float64)
             return self.frame.geodetic_to_enu(la, lo, z)[2]
         try:
-            obs = decklidar.observations(lines, widths, levels, surface_xy)
+            obs = decklidar.observations(lines, widths, levels, surface_xy, others)
         except Exception as ex:     # the decks as made without it, not kept (revisit.fault)
             import revisit
             log.debug("deck lidar: %s: %s", type(ex).__name__, ex)

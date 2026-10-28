@@ -1465,6 +1465,7 @@ class Server:
                                                   self.road_widths)
                 anchor.grader.wet = self.sea.depth if self.sea is not None else None    # (no dams: underwater tunnels)
                 anchor.grader.dem = self.dem                # (its urgent lane: _plan_missing)
+                anchor.grader.surface = decklidarmod.surface_for(self.mapdata, self.dem)  # (motorways as measured)
                 anchor.grader.shared = plancachemod.for_grader(self.cache_dir, anchor.grader, self.road_widths,
                                                               anchor.grader.wet)
             return anchor.grader

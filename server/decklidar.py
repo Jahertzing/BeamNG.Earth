@@ -27,17 +27,23 @@ import numpy as np
 log = logging.getLogger("earthd.decklidar")
 
 ON = os.environ.get("BNE_DECK_LIDAR", "on") != "off"
-VERSION = 1             # in the revisit / plan caches' keys with the bridges (a change makes the decks again)
+VERSION = 2             # in the plan caches' signature (plancache.lidar_tag): a change grades the roads again
+                        # (2: lidar_lift's fitted road, abutment checks, same-level crossings free)
 SIDE_SHARE = 0.25       # samples this share of the deck's width either side of its centre line (and on it)
 RUN_N = 5               # stations in the running median (DECK_STEP apart: 16 m)
 SPIKE_UP_M = 1.0        # a station this far over the running median: a vehicle, a gantry, a pole
 SPIKE_DOWN_M = 1.5      # ... this far under: a pixel off the deck's edge
+OCC_MIN_W_M = 9.0       # m: a deck at least this wide over another (a one-lane ramp's shoulders and parapets)
 OCC_MARGIN_M = 1.5      # m past another deck's half width a station counts as under or across it
 END_FREE_M = 20.0       # m off a shared end where joined parts overlap (a fork, a merge): not an occlusion
 MIN_SHARE = 0.3         # of a part's stations measured, at least, for the lidar to shape it ...
 MIN_N = 4               # ... and this many
+CROSS_FREE_M = 30.0     # m either way of a crossing with a deck of its own level: not measured (observations)
+HOLD_GAP_M = 20.0       # m: a gap this short is held to the line between its sides (a longer one: free to clear)
 GAP_FILL_M = 80.0       # m: a gap between measured stations this short is filled straight between them
 OBS_TOL_M = 0.3         # m the deck may leave the measurement for its curves and grades
+ABUT_GRADE = 0.08       # a deck climbs off its abutment at most this steeply (abutment_consistent) ...
+ABUT_TOL_M = 1.0        # ... give or take this
 END_BLEND_M = 30.0      # m from an abutment over which the measurement gives way to the graded ground's height
 LIDAR_HEADROOM_M = 4.6  # m under a measured deck's girders (CDOT's 16.5 ft standard is 5.03 m; older ones 14.5 ft)
 
@@ -246,13 +252,15 @@ def _dist_to(q, line):
     return d[np.arange(len(q)), m], s[m] + t[np.arange(len(q)), m] * np.sqrt(L2[m])
 
 
-def observations(lines, widths, levels, surface_xy):
+def observations(lines, widths, levels, surface_xy, others=()):
     """Per deck part (lines: (k, 2) ENU points DECK_STEP apart; widths m; levels: the map's), the lidar's deck surface
     height at each point or NaN; None for a part measured too little (MIN_SHARE, MIN_N). surface_xy(xy (n, 2)) ->
-    heights (NaN: none). Pure given surface_xy."""
+    heights (NaN: none); others: [(xy, width, level)] of the decks round them in other chains (over them too). Pure
+    given surface_xy."""
     pts = [np.asarray(ln, np.float64)[:, :2] for ln in lines]
-    lo_b = [p.min(0) for p in pts]
-    hi_b = [p.max(0) for p in pts]
+    occ = [(p, float(w), float(lv)) for p, w, lv in zip(pts, widths, levels)] + \
+        [(np.asarray(q, np.float64)[:, :2], float(w), float(lv)) for q, w, lv in others]
+    occ_b = [(q.min(0), q.max(0)) if len(q) else (np.zeros(2), np.zeros(2)) for q, _w, _l in occ]
     out = []
     for k, p in enumerate(pts):
         if len(p) < 2:
@@ -270,15 +278,16 @@ def observations(lines, widths, levels, surface_xy):
         # under (or across, at the same level) another deck: the lidar saw that one
         ends = (p[0], p[-1])
         s = np.r_[0.0, np.cumsum(np.hypot(*np.diff(p, axis=0).T))]
-        for j, q in enumerate(pts):
-            if j == k or len(q) < 2 or levels[j] < levels[k]:
+        lo_k, hi_k = p.min(0), p.max(0)
+        for j, (q, wj, lj) in enumerate(occ):
+            if j == k or len(q) < 2 or lj < levels[k]:
                 continue
-            reach = float(widths[j]) / 2 + OCC_MARGIN_M
-            if (hi_b[j] + reach < lo_b[k]).any() or (hi_b[k] + reach < lo_b[j]).any():
+            reach = max(wj, OCC_MIN_W_M) / 2 + OCC_MARGIN_M     # (a ramp's map width is its lane, its deck wider)
+            if (occ_b[j][1] + reach < lo_k).any() or (hi_k + reach < occ_b[j][0]).any():
                 continue
             dist, _ = _dist_to(p, q)
             hit = dist < reach
-            if levels[j] == levels[k]:
+            if lj == levels[k]:
                 # joined parts of one level overlap near their shared end (a fork): both one surface there
                 shared = [e for e in ends if min(np.hypot(*(q[0] - e)), np.hypot(*(q[-1] - e))) < 1.0]
                 for e in shared:
@@ -286,20 +295,70 @@ def observations(lines, widths, levels, surface_xy):
                 # side by side (one deck's two carriageways): not across it
                 if hit.any() and hit.mean() > 0.5:
                     continue
+                # across one of its own level: which is on top the map does not say and the lidar saw one of them, so
+                # neither is measured CROSS_FREE_M either way (a gap that long the solver lifts the upper one over: C-470's
+                # one-lane ramps, all level 1, read the same 1790 m where they cross, 4 m apart once solved)
+                if hit.any():
+                    sh = s[hit]
+                    hit = hit | (np.abs(s[:, None] - sh[None, :]) <= CROSS_FREE_M).any(1)
             obs[hit] = np.nan
-        med = _run_median(obs, RUN_N)
-        with np.errstate(invalid="ignore"):
-            bad = (obs - med > SPIKE_UP_M) | (med - obs > SPIKE_DOWN_M)
-        obs[bad] = np.nan
-        n = int(np.isfinite(obs).sum())
-        out.append(obs if n >= MIN_N and n >= MIN_SHARE * len(obs) and s[-1] > 0 else None)
+        out.append(_clean(s, obs))
     return out
+
+
+TREND_N = 13            # stations in the trend's running median (52 m: an overpass, a stack of them)
+TREND_M = 1.2           # m off the trend: not this deck
+MAX_STEP_GRADE = 0.12   # a measured grade between neighbouring stations steeper than this: one of them is not the deck
+
+
+def _clean(s, obs):
+    """obs (at arcs s) without what is not the deck's surface: off a running median (TREND_N stations) by TREND_M,
+    spikes off a short one (RUN_N: a truck, a gantry), then the station of a pair climbing steeper than MAX_STEP_GRADE
+    that lies farther off the trend, until none does; None when too little is left (MIN_SHARE, MIN_N). Pure."""
+    obs = np.array(obs, np.float64)
+    trend = _run_median(obs, TREND_N)
+    with np.errstate(invalid="ignore"):
+        obs[np.abs(obs - trend) > TREND_M] = np.nan
+    med = _run_median(obs, RUN_N)
+    with np.errstate(invalid="ignore"):
+        obs[(obs - med > SPIKE_UP_M) | (med - obs > SPIKE_DOWN_M)] = np.nan
+    trend = _run_median(obs, TREND_N)
+    for _ in range(len(obs)):
+        idx = np.flatnonzero(np.isfinite(obs))
+        if len(idx) < 2:
+            break
+        g = np.abs(np.diff(obs[idx])) / np.maximum(np.diff(s[idx]), 1e-6)
+        worst = int(np.argmax(g))
+        if g[worst] <= MAX_STEP_GRADE:
+            break
+        a, b = idx[worst], idx[worst + 1]
+        da = abs(obs[a] - trend[a]) if np.isfinite(trend[a]) else 0.0
+        db = abs(obs[b] - trend[b]) if np.isfinite(trend[b]) else 0.0
+        obs[a if da >= db else b] = np.nan
+    n = int(np.isfinite(obs).sum())
+    return obs if n >= MIN_N and n >= MIN_SHARE * len(obs) and s[-1] > 0 else None
+
+
+def abutment_consistent(s, obs, z0, z1):
+    """obs (at arcs s) without the stations no deck could reach from its abutments (z0 at s 0, z1 at the end; None:
+    a joint) climbing ABUT_GRADE (plus ABUT_TOL_M): another deck over the end (a ramp's first 20 m read 5.5 m over its
+    abutment under the Mousetrap's upper levels, then climbed 24 % to it); None when too little is left. Pure."""
+    obs = np.array(obs, np.float64)
+    s = np.asarray(s, np.float64)
+    for ze, d in ((z0, s), (z1, s[-1] - s)):
+        if ze is None or not math.isfinite(ze):
+            continue
+        with np.errstate(invalid="ignore"):
+            obs[np.abs(obs - ze) > ABUT_GRADE * d + ABUT_TOL_M] = np.nan
+    n = int(np.isfinite(obs).sum())
+    return obs if n >= MIN_N and n >= MIN_SHARE * len(obs) else None
 
 
 def filled(s, obs, base):
     """The measured profile obs (NaN gaps) at arcs s, its gaps up to GAP_FILL_M filled straight between the measured
     points either side, longer gaps and unmeasured ends going over to base (the deck as made without the lidar) offset
-    to meet the measurements: (z, measured mask). Pure."""
+    to meet the measurements: (z, held mask: the measured stations and the short gaps filled between them, the
+    stretch the deck keeps to). Pure."""
     s = np.asarray(s, np.float64)
     obs = np.asarray(obs, np.float64)
     base = np.asarray(base, np.float64)
@@ -309,6 +368,7 @@ def filled(s, obs, base):
     z = base.copy()
     idx = np.flatnonzero(ok)
     z[ok] = obs[ok]
+    held = ok.copy()
     # inner gaps
     for a, b in zip(idx[:-1], idx[1:]):
         if b - a <= 1:
@@ -316,6 +376,8 @@ def filled(s, obs, base):
         mid = slice(a + 1, b)
         if s[b] - s[a] <= GAP_FILL_M:
             z[mid] = np.interp(s[mid], [s[a], s[b]], [obs[a], obs[b]])
+            if s[b] - s[a] <= HOLD_GAP_M:   # a gantry, a truck: as straight as the deck between (else 1 m humps)
+                held[mid] = True        # (a longer gap, a deck crossing it, is free to clear it)
         else:       # base, shifted by the measurements' offsets at each side (linear between)
             da, db = obs[a] - base[a], obs[b] - base[b]
             z[mid] = base[mid] + np.interp(s[mid], [s[a], s[b]], [da, db])
@@ -327,7 +389,7 @@ def filled(s, obs, base):
     if b < len(z) - 1:
         u = np.clip((s[b + 1:] - s[b]) / END_BLEND_M, 0.0, 1.0)
         z[b + 1:] = base[b + 1:] + (obs[b] - base[b]) * (1.0 - u)
-    return z, ok
+    return z, held
 
 
 def end_blend(s, z, z0, z1, at_start, at_end):
