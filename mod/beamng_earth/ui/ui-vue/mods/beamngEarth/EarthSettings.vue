@@ -295,6 +295,7 @@ const settingsSchema = [
       { id: "groundCoverDistance", type: "select", default: "normal", name: "Grass distance", desc: "How far from the car the grass and shrubs reach. Near: short grass to 50 m, long grass to 70 m (the old setting). Normal: about what the game's own maps use (long grass to 120 m, shrubs to 150 m). Far: long grass to 200 m, shrubs to 250 m. Farther grass has more blades, so like density it makes the slower regrow frame each time the ground under the car moves longer.",
         options: [ { label: "Near", value: "near" }, { label: "Normal", value: "normal" }, { label: "Far", value: "far" } ] },
       { id: "roads", type: "bool", default: true, name: "Roads", desc: "Real roads from OpenStreetMap / Overture within about 600 m of the car: paved roads as asphalt, gravel and dirt roads and tracks as worn dirt tracks, and the same surfaces under the tyres. Bridges, tunnels, markings and junction shapes come later." },
+      { id: "drcog", type: "bool", default: true, name: "Denver-region buildings and road widths (DRCOG)", desc: "In the Denver region (the DRCOG area, Frederick included), buildings come from DRCOG's 2024 aerial survey: their measured outlines and heights, in place of the map's footprints they match; street widths come from its edges of pavement. No effect elsewhere. Data: DRCOG Regional Data Catalog (Denver Regional Council of Governments), CC BY 3.0, https://data.drcog.org. Takes effect at the next start of the app." },
     ],
   },
   {

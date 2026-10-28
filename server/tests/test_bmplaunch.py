@@ -200,6 +200,26 @@ class ChildEnv(unittest.TestCase):
                          "not packaged: the player's own path kept")
 
 
+class DrcogSetting(unittest.TestCase):
+    """The mod's setting "drcog" (settings/beamngEarth.json) -> the server's --drcog (launcher.setting_flags)."""
+    def test_flag_from_the_setting(self):
+        import launcher
+        with tempfile.TemporaryDirectory() as user:
+            self.assertEqual(launcher.setting_flags(user), ["--drcog", "on"], "on by default (no settings file)")
+            os.makedirs(os.path.join(user, "settings"))
+            with open(os.path.join(user, "settings", "beamngEarth.json"), "w") as f:
+                json.dump({"clouds": False}, f)
+            self.assertEqual(launcher.setting_flags(user), ["--drcog", "on"], "on when the file has no value")
+            with open(os.path.join(user, "settings", "beamngEarth.json"), "w") as f:
+                json.dump({"drcog": False}, f)
+            self.assertEqual(launcher.setting_flags(user), ["--drcog", "off"])
+            self.assertEqual(bmplaunch.mod_setting(user, "missing", 7), 7)
+
+    def test_server_knows_the_flag(self):
+        src = (Path(__file__).resolve().parents[1] / "earthd.py").read_text(encoding="utf-8")
+        self.assertIn('ap.add_argument("--drcog"', src)
+
+
 class OnLaunch(unittest.TestCase):
     """The mod's setting "Start BeamMP with BeamNG.Earth" (beammpOnLaunch in settings/beamngEarth.json)."""
     def test_setting(self):
