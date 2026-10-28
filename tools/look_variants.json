@@ -1,10 +1,10 @@
 [
- {"name": "base"},
- {"name": "nograde", "lua": "require('beamngEarth/grade').setMode('off') require('beamngEarth/grade').update(false)",
-  "undo": "require('beamngEarth/grade').setMode('colorado')"},
- {"name": "haze0", "lua": "require('beamngEarth/haze').setStrength(0)", "undo": "require('beamngEarth/haze').setStrength(0.5)", "settle": 4},
- {"name": "haze1", "lua": "require('beamngEarth/haze').setStrength(1)", "undo": "require('beamngEarth/haze').setStrength(0.5)", "settle": 4},
- {"name": "nofog", "level": {"fogDensity": 0}},
- {"name": "vivid", "lua": "require('beamngEarth/grade').setMode('vivid')", "undo": "require('beamngEarth/grade').setMode('colorado')", "settle": 3.5},
- {"name": "ev_plus05", "objects": {"PostEffectLocalExposureObject": {"exposureBiasEV": "+0.5"}}}
+ {"name": "before", "level": {"fogDensity": "*3.3333"},
+  "lua": "require('beamngEarth/grade').setMode('off') require('beamngEarth/grade').update(false) require('beamngEarth/haze').setStrength(0)",
+  "undo": "require('beamngEarth/grade').setMode('colorado') require('beamngEarth/haze').setStrength(0.5)", "settle": 4},
+ {"name": "after"},
+ {"name": "haze03", "lua": "require('beamngEarth/haze').setStrength(0.3)", "undo": "require('beamngEarth/haze').setStrength(0.5)", "settle": 4},
+ {"name": "haze07", "lua": "require('beamngEarth/haze').setStrength(0.7)", "undo": "require('beamngEarth/haze').setStrength(0.5)", "settle": 4},
+ {"name": "natural", "lua": "require('beamngEarth/grade').setMode('natural')", "undo": "require('beamngEarth/grade').setMode('colorado')", "settle": 3.5},
+ {"name": "vivid", "lua": "require('beamngEarth/grade').setMode('vivid')", "undo": "require('beamngEarth/grade').setMode('colorado')", "settle": 3.5}
 ]
