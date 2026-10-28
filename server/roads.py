@@ -5117,7 +5117,7 @@ SOUND_SHORT_TUNNEL_M = 120.0
 SOUND_BOX_M, SOUND_TURN, SOUND_DZ_M, SOUND_EXTEND_M = 60.0, math.radians(10.0), 1.0, 1.0
 
 
-def _point_along(line, dist):
+def _along(line, dist):
     """The point dist along polyline line (k, 3) from its start (its end if shorter)."""
     seg = np.hypot(*np.diff(line[:, :2], axis=0).T)
     for i, L in enumerate(seg):
@@ -5143,7 +5143,7 @@ def sound_boxes(chunks):
             n = np.asarray(c["n"], np.float64)[:, :3]
             for end, line in ((0, n), (1, n[::-1])):
                 if not short and (c.get("portal") or (False, False))[end] and len(line) >= 2:
-                    p = _point_along(line, SOUND_PORTAL_IN_M)
+                    p = _along(line, SOUND_PORTAL_IN_M)
                     d = line[1, :2] - line[0, :2]
                     out += [float(SOUND_PORTAL), round(float(p[0]), 2), round(float(p[1]), 2),
                             round(float(p[2]) + SOUND_PORTAL_UP, 2), 0.0, 0.0, 0.0,
