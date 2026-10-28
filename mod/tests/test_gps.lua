@@ -83,6 +83,31 @@ T.check(#jn == 3 and jn[1] == 'w', 'the edge\'s start put in front')
 jn = G.joinStart({ 'w', 'j', 's' }, 'w', 'j', g2)
 T.check(#jn == 3, 'already starting there: unchanged')
 
+-- a path that starts several nodes ahead (5th Street, Frederick 2026-10-28: the planner's first node was past the
+-- one-way split; the AI cut straight across to it onto a kerb): joined along the graph through the split
+do
+  local g = { a = { pos = { x = 0, y = 0 }, links = { b = {} } },
+              b = { pos = { x = 50, y = 0 }, links = { c = { oneWay = true, inNode = 'b' }, x = { oneWay = true, inNode = 'x' } } },
+              c = { pos = { x = 80, y = 8 }, links = { d = { oneWay = true, inNode = 'c' } } },
+              d = { pos = { x = 110, y = 10 }, links = {} },
+              t = { pos = { x = 140, y = 30 }, links = { d = {} } },
+              u = { pos = { x = 200, y = 30 }, links = { t = {} } },
+              x = { pos = { x = 80, y = -8 }, links = { y = {} } }, y = { pos = { x = 110, y = -10 }, links = {} } }
+  local j = G.joinStart({ 't', 'u' }, 'a', 'b', g)
+  T.check(table.concat(j, ',') == 'a,b,c,d,t,u', 'joined through the westbound branch: ' .. table.concat(j, ','))
+  j = G.joinStart({ 'q', 'd', 't', 'u' }, 'a', 'b', g)
+  T.check(table.concat(j, ',') == 'a,b,c,d,t,u', 'to the first of its nodes the car can reach: ' .. table.concat(j, ','))
+  j = G.joinStart({ 'y' }, 'a', 'b', g)
+  T.check(table.concat(j, ',') == 'y', 'reachable only against a one-way edge: left as it was')
+  j = G.joinStart({ 'z', 'a', 'b', 'c' }, 'a', 'b', g)
+  T.check(table.concat(j, ',') == 'a,b,c', 'a path from behind the car: from its edge on')
+  local saved = G.JOIN_M
+  G.JOIN_M = 60
+  j = G.joinStart({ 't', 'u' }, 'a', 'b', g)
+  T.check(table.concat(j, ',') == 't,u', 'farther than JOIN_M: left as it was')
+  G.JOIN_M = saved
+end
+
 -- the AI's path across a road-graph change: from the edge under the car, as far as every step is an edge in both graphs
 do
   local function n(x, links) return { pos = { x = x, y = 0 }, links = links } end

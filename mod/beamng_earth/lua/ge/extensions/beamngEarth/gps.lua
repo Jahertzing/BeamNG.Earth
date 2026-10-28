@@ -451,20 +451,82 @@ function M.edgeUnder(nodes, px, py, hx, hy)
   if best then return best[1], best[2] end
 end
 
+-- Pure: the shortest drivable way (node ids after `from`, the target last) from node `from` to the nearest of
+-- targets (id -> true) in nodes, at most maxM long and maxHops steps, and the target reached; nil when none is.
+-- Edges are read from both of their nodes (M.edge: the game keeps each on one only).
+function M.bridge(nodes, from, targets, maxHops, maxM)
+  if not (nodes and nodes[from]) then return nil end
+  local adj = {}
+  local function add(x, y, e)
+    if nodes[x] and nodes[y] and drivable(e, x) then
+      adj[x] = adj[x] or {}
+      adj[x][#adj[x] + 1] = y
+    end
+  end
+  for id, n in pairs(nodes) do
+    for other, e in pairs(n.links or {}) do add(id, other, e); add(other, id, e) end
+  end
+  local dist, hops, prev, done = { [from] = 0 }, { [from] = 0 }, {}, {}
+  while true do
+    local u, du = nil, math.huge
+    for id, d in pairs(dist) do if not done[id] and d < du then u, du = id, d end end
+    if not u then return nil end
+    done[u] = true
+    if u ~= from and targets[u] then
+      local out = {}
+      local x = u
+      while x ~= from do table.insert(out, 1, x); x = prev[x] end
+      return out, u
+    end
+    if hops[u] < maxHops then
+      local pu = nodes[u].pos
+      for _, v in ipairs(adj[u] or {}) do
+        local pv = nodes[v].pos
+        local d = du + math.sqrt((pv.x - pu.x) ^ 2 + (pv.y - pu.y) ^ 2)
+        if d <= maxM and not done[v] and d < (dist[v] or math.huge) then
+          dist[v], hops[v], prev[v] = d, hops[u] + 1, u
+        end
+      end
+    end
+  end
+end
+
+M.JOIN_LOOK = 6      -- the planner's first nodes the car's edge is joined to ...
+M.JOIN_HOPS = 8      -- ... by at most this many graph steps ...
+M.JOIN_M = 300       -- ... and this far
+
 -- Pure: the AI's path starting on the edge (a -> b) under the car: the planner's path starts at the node nearest
 -- the car, which can be past a turn just ahead; the AI went straight for it, across the corner and into a pole
--- (Fells Point 2026-10-14).
+-- (Fells Point 2026-10-14). It can also start several nodes on (the stock planner drops the nodes the car projects
+-- past): joined only when it was one step from b, the AI cut straight across a one-way split of 5th Street onto a
+-- kerb at The Drive's Frederick start (2026-10-28, six crashes in a route bake). Now the path goes from a and b along
+-- the graph to the first of its JOIN_LOOK nodes reachable (the nodes before that are behind the car); unchanged when
+-- none is.
 function M.joinStart(ids, a, b, nodes)
   if not a or #ids == 0 then return ids end
-  local out = {}
-  if ids[1] == b then
-    out[1] = a
-  elseif ids[1] ~= a then
-    if not (nodes and M.edge(nodes, b, ids[1])) then return ids end
-    out[1], out[2] = a, b
+  local look = math.min(#ids, M.JOIN_LOOK)
+  local function from(k, head)
+    local out = {}
+    for _, id in ipairs(head) do out[#out + 1] = id end
+    for i = k, #ids do out[#out + 1] = ids[i] end
+    return out
   end
-  for _, id in ipairs(ids) do out[#out + 1] = id end
-  return out
+  for k = 1, look do
+    if ids[k] == a and ids[k + 1] == b then return from(k, {}) end
+  end
+  for k = 1, look do
+    if ids[k] == b then return from(k, { a }) end
+  end
+  if nodes and M.edge(nodes, b, ids[1]) then return from(1, { a, b }) end
+  if not nodes then return ids end
+  local targets = {}
+  for k = 1, look do if ids[k] ~= a then targets[ids[k]] = k end end
+  local way, hit = M.bridge(nodes, b, targets, M.JOIN_HOPS, M.JOIN_M)
+  if not way then return ids end
+  local head = { a, b }
+  for i = 1, #way - 1 do head[#head + 1] = way[i] end
+  M.joinBridges = (M.joinBridges or 0) + 1
+  return from(targets[hit], head)
 end
 
 -- (debug) the AI's new paths: M.TRACE = true logs each with the car's position and its first nodes'
