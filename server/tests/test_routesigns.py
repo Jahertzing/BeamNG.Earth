@@ -243,17 +243,23 @@ class MastArms(unittest.TestCase):
         mesh = gs.Mesh()
         self.assertEqual(gs.mast_arm_signs(mesh, self.roads, (0, 0, 256, 256), self.names, [self.boom]), 1)
         P = np.asarray(mesh.P)
-        text = np.array([P[t[0]] for t, m in zip(mesh.T, mesh.M) if m == gs.M_TEXT])
+        text = np.array([P[t[0]] for t, m in zip(mesh.T, mesh.M) if m == gs.M_LETTER])
         self.assertTrue(len(text))
         self.assertGreater(text[:, 2].min(), 0.15 + 4.9)                    # under the arm, clear of the traffic
-        self.assertLess(text[:, 2].max(), 0.15 + gs._arm_z(text[:, 0].max() * -1 + 106.0))
+        self.assertLess(text[:, 2].max(), 0.15 + gs.MAST_ARM[-1][1] + 0.1)              # (level, at the arm)
         self.assertLess(text[:, 0].max(), 106.0 - gs.MAST_SIGN_AT[0])          # out along the arm, over the road
         self.assertGreater(text[:, 0].min(), 106.0 - gs.MAST_SIGN_AT[1])       # short of its head
         self.assertLess(abs(text[:, 1].mean() - 90.0), 0.5)
-        t = [t for t, m in zip(mesh.T, mesh.M) if m == gs.M_TEXT]
+        t = [t for t, m in zip(mesh.T, mesh.M) if m == gs.M_LETTER]
         nrm = [np.cross(P[b] - P[a], P[c] - P[a]) for a, b, c in t]
         self.assertTrue(all(v[1] < 0 for v in nrm))                    # facing the northbound drivers
         self.assertGreater(np.ptp(text[:, 0]), 1.0)                    # "E Colfax Ave" reads across
+
+    def test_lettering_is_geometry(self):
+        mesh = gs.Mesh()
+        gs.mast_arm_signs(mesh, self.roads, (0, 0, 256, 256), self.names, [self.boom])
+        self.assertNotIn(gs.M_TEXT, mesh.M)                             # (no glyph atlas: sharp up close)
+        self.assertLess(len(mesh.P), 1500)                              # (a tile holds dozens)
 
     def test_tile_and_none(self):
         t = gs.tile(None, self.roads, (0, 0, 256, 256), names=self.names, booms=[self.boom])
