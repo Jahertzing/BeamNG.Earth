@@ -117,6 +117,52 @@ class DetailServerTest(ServerHarness):
 
 
 
+class DetailRevisitTest(ServerHarness):
+    """A block built again (evicted, a later session in the same place) comes from the revisit cache (blockcache.py):
+    the same heights, .ter and base photo, its packed photo in the game's terrain texture cache again."""
+    near_visual = "detail"
+    with_imagery = True
+    cells = 64
+    block = 512
+
+    def test_a_block_built_again_comes_from_the_revisit_cache(self):
+        c = self.c
+        self.hello()
+        aid = self.prepare_anchor(1, LAT, LON)["anchorId"]
+        c.send({"type": "commit_anchor", "anchorId": aid})
+        c.send({"type": "commit_terrain", "anchorId": aid, "cx": 0, "cy": 0})
+        key = (aid, 128.0, -128.0)
+
+        def build(rid):
+            c.send({"type": "prepare_terrain", "requestId": rid, "anchorId": aid, "cx": 130.0, "cy": -190.0})
+            tr, _ = c.until(lambda m: m["type"] == "terrain_ready" and m.get("requestId") == rid, timeout=60)
+            info = self.server.hm[key]
+            files = {}
+            for n in (self.server.hm_name(key), info["ter"], info["base"]):
+                with open(os.path.join(self.server.out_dir, n), "rb") as f:
+                    files[n] = f.read()
+            return tr, info, files
+        tr1, info1, files1 = build(9)
+        self.assertNotIn("revisit", info1["stages"])
+        self.server.hm_committed.clear(); self.server.hm_sent.clear()
+        old_cache = earthd.HM_CACHE
+        earthd.HM_CACHE = 0
+        try:
+            self.server.evict_heightmaps()
+        finally:
+            earthd.HM_CACHE = old_cache
+        self.assertFalse(os.path.exists(self.fs(tr1["base"])))
+        tr2, info2, files2 = build(10)
+        self.assertIn("revisit", info2["stages"], "read back, not built")
+        self.assertNotEqual(info2["ter"], info1["ter"], "a new .ter name (the engine skips one it has)")
+        self.assertEqual(sorted(files1.values()), sorted(files2.values()))
+        self.assertEqual((tr2["base"], tr2["baseSize"]), (tr1["base"], tr1["baseSize"]))
+        for k in ("zBase", "maxHeight", "q"):
+            self.assertEqual(info2[k], info1[k])
+        self.assertTrue(os.path.exists(os.path.join(self.tmp.name, "temp", "art", "terrainmaterialcache",
+                                                    terraincache.base_key(tr2["base"], earthd.BASE_AO_VFS) + ".dds")))
+
+
 class DetailBaseRefreshTest(ServerHarness):
     """A block whose base photo was rendered before its NAIP tiles arrived (lazy source) is rendered again
     once they are all on disk, under a new name, and the mod is told (block_base)."""
