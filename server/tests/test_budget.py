@@ -37,6 +37,17 @@ class BudgetTest(unittest.TestCase):
         with mock.patch.dict(os.environ, {"BNGE_BUDGET": "desktop"}):
             self.assertFalse(budget.small(8.0))
 
+    def test_large_machines_keep_more_map_data(self):
+        with mock.patch.dict(os.environ, {"BNGE_BUDGET": ""}):
+            self.assertTrue(budget.large(64.0))
+            self.assertFalse(budget.large(32.0) or budget.large(None) and budget.total_gb() is None)
+            with mock.patch.object(budget, "total_gb", return_value=64.0):
+                self.assertFalse(budget.apply())
+            self.assertEqual((mapdata.MEM_MB, roadwidth.WALL_CELLS),
+                             (budget.LARGE_MAPDATA_MB, budget.LARGE_WALL_CELLS))
+        with mock.patch.dict(os.environ, {"BNGE_BUDGET": "desktop"}):
+            self.assertFalse(budget.large(64.0), "forced desktop sizes")
+
     def test_road_processes_by_threads_and_memory(self):
         self.assertEqual(budget.road_processes(16, 62.0), 4)
         self.assertEqual(budget.road_processes(12, 16.0), 3)     # (16 GB: not four ~1.5 GB processes)
