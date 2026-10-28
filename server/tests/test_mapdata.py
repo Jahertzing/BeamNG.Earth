@@ -527,7 +527,7 @@ class StacOneFileTest(unittest.TestCase):
         """A collection of one file lists only its own extent (Overture 2026-10-21.0's buildings/building_part): that
         box is the file's, not \"1 items but 0 file boxes\"."""
         with tempfile.TemporaryDirectory() as tmp:
-            idx = overture.StacIndex("2026-10-21.0", tmp, None)
+            idx = overture.StacIndex("2099-01-01.0", tmp, None)  # no bundled index for it
             box = [-179.1, -71.7, 177.5, 78.9]
             coll = {"links": [{"rel": "item", "href": "https://x/00000.json"}], "extent": {"spatial": {"bbox": [box]}}}
             d = idx._dir("buildings", "building_part")
