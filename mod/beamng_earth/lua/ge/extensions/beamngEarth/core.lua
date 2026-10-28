@@ -88,6 +88,8 @@ nightlights.providers.tunnel = function() return ambience.tunnelLights() end
 gasstations.onCollide = roads.markCollisionDirty
 local navgraph = require('beamngEarth/navgraph')
 local postfx = require('beamngEarth/postfx')       -- no far depth-of-field blur in our level
+local haze = require('beamngEarth/haze')           -- the sky's aerosol: distance haze (hazeStrength)
+local grade = require('beamngEarth/grade')         -- our colour grade post effect (colorGrade)
 local gps = require('beamngEarth/gps')               -- the game's GPS route to a place picked on the world map
 local collisionfoci = require('beamngEarth/collisionfoci') -- other vehicles' collision islands
 local terrainpatch = require('beamngEarth/terrainpatch')   -- ground under the islands off the terrain block
@@ -1862,6 +1864,12 @@ local function onUpdate(dtReal, dtSim)
   for k in pairs(marks) do marks[k] = nil end
   local t = hitchClock()
   postfx.update(st.inOurLevel)
+  do
+    local okH, errH = pcall(haze.update, st.inOurLevel, st.player and st.player.z)
+    if not okH and not st.hazeWarned then st.hazeWarned = true; log('W', 'beamngEarth', 'haze: ' .. tostring(errH)) end
+    local okG, errG = pcall(grade.update, st.inOurLevel)
+    if not okG then grade.setMode('off'); log('W', 'beamngEarth', 'grade: ' .. tostring(errG) .. '; off this session') end
+  end
   local stg = rawget(_G, 'beamngEarth_settings')
   if stg and stg.redirectBigMap then stg.redirectBigMap(st.inOurLevel) end
   if st.inOurLevel then gps.update(st.anchor, st.player) end
@@ -2114,6 +2122,8 @@ local function onClientEndMission()
   hudapps.unhookCityZone()
   hudapps.unhookMinimapNorth()
   postfx.restore()
+  haze.restore()
+  grade.restore()
   pcall(terrainpatch.clear)
   pcall(gasstations.reset)
   pcall(farcars.reset)
@@ -2178,6 +2188,8 @@ local function onExtensionUnloaded()
   terrain.delete()
   -- M1h: the level stays loaded; give it back its sky and view distance
   horizon.restoreSky()
+  haze.restore()
+  grade.restore()
   if st.visibleDistance and horizon.setVisibleDistance(VISIBLE_DISTANCE) then st.visibleDistance = nil end
 end
 

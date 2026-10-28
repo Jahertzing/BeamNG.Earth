@@ -1,0 +1,9 @@
+[
+ {"name": "base"},
+ {"name": "nofog", "level": {"fogDensity": 0}},
+ {"name": "fogx3", "level": {"fogDensity": "*3"}},
+ {"name": "mie3", "sky": {"atmoMieScattering": "*3", "atmoMieExtinction": "*3"}},
+ {"name": "mie3_h2", "sky": {"atmoMieScattering": "*3", "atmoMieExtinction": "*3", "atmoMieScaleHeight": 2.0}},
+ {"name": "ray_mie6", "sky": {"atmoMieScattering": "*6", "atmoMieExtinction": "*6", "atmoMieScaleHeight": 1.6}},
+ {"name": "ev_plus05", "objects": {"PostEffectLocalExposureObject": {"exposureBiasEV": "+0.5"}}}
+]
