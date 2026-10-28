@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Turn pockets and tapers seen from above (roads.pocket_profiles, feature turn-pockets): the road tiles around a few
-places built offline from the cached map data, before (BNE_POCKETS off) and after, drawn as PNGs: asphalt dark grey,
+places built offline from the cached map data, before (BNE_TURN_POCKETS=off) and after, as PNGs: asphalt dark grey,
 sidewalks light grey, corner asphalt grey, white and yellow markings, turn arrows red. The ground is flat (the shapes
 only); the carriageway is drawn as its mesh (roads.ROADS_IN_GROUND off: the ground's photo and masks paint the same
 edges, surface._road_segments). Prints each place's build time both ways and how many roads are not of one width.
@@ -22,7 +22,9 @@ import numpy as np  # noqa: E402
 PLACES = {      # name -> (lat, lon): Colorado's regional OSM table covers them
     "denver_colfax_broadway": (39.7400, -104.9874),     # (Colfax's segments come from its route relation: no tags)
     "denver_20th_st": (39.75227, -104.99172),           # a left pocket mapped as its own way, from a side street
-    "frederick_co52_colorado_blvd": (40.0874, -104.9421),   # (CO-52: lane counts only, steps at its junctions)
+    "frederick_co52_colorado_blvd": (40.0874, -104.9421),   # CO-52 (CDOT's lanes): centre lane arrows at the junction
+    "frederick_co52_step_west": (40.0877, -104.9494),   # ... its centre turn lane opening from a side street
+    "frederick_co52_near_i25": (40.0877, -104.9725),
     "thornton_136th_washington": (39.9211, -104.9400),  # a backward left pocket the lane count leaves out
     "thornton_128th": (39.92848, -104.96248),           # pockets mapped as their own ways
 }

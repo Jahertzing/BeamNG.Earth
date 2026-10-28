@@ -1081,8 +1081,19 @@ three days of testing: dem 741 MB / 7.5k files, imagery 1.4 GB / 35k, deshadow 7
   arrows, edge lines, gutters and sidewalks (`extras` / `lane_marks` wid=), the carriageway mesh
   (chunk "wl" / "wr", `roadmesh.ribbons`), the ground's asphalt (`surface._road_segments`, `paint_roads`),
   the junctions' curbs and crosswalks (`junctions.find` half=) and grading's core (`grading.widen_plan`).
-  Pure per road; road tiles look the joints up in the cells within `POCKET_REACH_M`. `BNE_POCKETS=off`
+  Pure per road; road tiles look the joints up in the cells within `POCKET_REACH_M`. `BNE_TURN_POCKETS=off`
   turns it off. Probe: `tools/pocket_probe.py` (top-down PNGs before / after).
+- Turn lanes without turn:lanes (rule (c), 2026-10-28): CDOT counts a stretch's left turn lanes into its
+  lanes (a painted median: `lanes_c`; else the direction's lanes), and its stretches are short, so CO-52
+  through Frederick widens near its junctions by segment; those steps now taper too (a centre turn lane
+  opening from nothing, other lane counts evenly, at side streets, never across a junction of roads of its
+  rank). At a junction a tertiary or higher road crosses (slip roads do not count), a trunk / primary /
+  secondary approach in a regional table's area without OSM turn lanes gets a left arrow in its centre turn
+  lane, or in its leftmost lane where it has a lane more than goes on beyond the junction, or, where neither
+  CDOT nor an override gives its lanes and it has 4+ through lanes (a divided carriageway 2+), an inferred
+  left pocket (as rule (a)). `BNE_TURN_POCKETS=tags` keeps rules (a) / (b) only. Turn arrows keep clear of
+  crosswalks and stop lines. Not done: CDOT's turn lane counts as their own columns (they are folded into
+  the lanes; a column would rebuild every Colorado road cell), right-turn bays without OSM tags.
 - Curb ramps: the tactile pad is the first 0.6 m of the slope (tinted yellow); brick sidewalks on 55 % of
   the streets of dense brick-region cores; parking lots (Overture infrastructure `parking`) are the
   asphalt ground layer (no grass); built-up land is the dirt layer.
