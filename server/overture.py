@@ -216,7 +216,10 @@ class StacIndex:
             raw = self._json(f"{STAC_ROOT}/{self.release}/{theme}/{typ}/collection.json",
                              os.path.join(self._dir(theme, typ), "collection.json"), kind)
             items = [link["href"] for link in raw["links"] if link.get("rel") == "item"]
-            bboxes = raw["extent"]["spatial"]["bbox"][1:]
+            boxes = raw["extent"]["spatial"]["bbox"]
+            bboxes = boxes[1:]
+            if len(items) == 1 and not bboxes and boxes:    # one file: only the collection's own box (2026-10-21.0's
+                bboxes = boxes[:1]                          # buildings/building_part)
             if len(items) != len(bboxes):
                 raise OvertureError(f"STAC {theme}/{typ}: {len(items)} items but {len(bboxes)} file boxes")
             c = {"items": items, "bboxes": bboxes, "license": raw.get("license")}

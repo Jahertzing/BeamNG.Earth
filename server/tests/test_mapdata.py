@@ -522,6 +522,21 @@ class Sources:
         return md, t
 
 
+class StacOneFileTest(unittest.TestCase):
+    def test_one_file_without_its_own_box(self):
+        """A collection of one file lists only its own extent (Overture 2026-10-21.0's buildings/building_part): that
+        box is the file's, not \"1 items but 0 file boxes\"."""
+        with tempfile.TemporaryDirectory() as tmp:
+            idx = overture.StacIndex("2026-10-21.0", tmp, None)
+            box = [-179.1, -71.7, 177.5, 78.9]
+            coll = {"links": [{"rel": "item", "href": "https://x/00000.json"}], "extent": {"spatial": {"bbox": [box]}}}
+            d = idx._dir("buildings", "building_part")
+            os.makedirs(d)
+            with open(os.path.join(d, "collection.json"), "w") as f:
+                json.dump(coll, f)
+            self.assertEqual(idx.collection("buildings", "building_part")["bboxes"], [box])
+
+
 @needs_duckdb
 class StacTest(Sources, SmallBlocks, unittest.TestCase):
     def test_files_for_cell(self):
