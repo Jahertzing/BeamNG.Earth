@@ -331,7 +331,10 @@ class Write(unittest.TestCase):
                 self.assertEqual(data["sign"]["shape"], "/vfs/sign_1_0_0.cdae")
             if signs["col"] is not None:
                 self.assertIn("signcol", data["colliders"])
-                self.assertTrue(os.path.exists(os.path.join(d, "signcol_1_0_0.cdae")))
+                with open(os.path.join(d, "signcol_1_0_0.cdae"), "rb") as f:
+                    body = f.read()
+                self.assertNotIn(b"bngEarthDae", body, "a material the level has (no engine error per collider)")
+                self.assertIn(b"bngEarthFar_v3", body)
         self.assertIn("sign", roads.shape_files(1, 0, 0))
 
 
