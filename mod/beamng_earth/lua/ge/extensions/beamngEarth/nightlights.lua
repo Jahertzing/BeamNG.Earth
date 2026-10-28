@@ -85,12 +85,32 @@ M.providers = {}
 local pool = {}          -- { id, at (lens table or nil) }
 
 -- Whether it is night by the stock environment (nil when there is no time of day, as in the main menu).
+-- Not while the sun drawn is up (the sky's ScatterSky, sunUp): the clock and the drawn sun can disagree (2026-10-28: a
+-- night hour written to the TimeOfDay left the sun of the morning, and the lamps, windows and the city glow's dome
+-- lit up in broad daylight).
 function M.isNight()
   local env = rawget(_G, 'core_environment')
   if type(env) ~= 'table' or type(env.getLightState) ~= 'function' then return nil end
   local ok, st = pcall(env.getLightState)
   if not ok or type(st) ~= 'table' then return nil end
-  return st.isNight == true
+  return st.isNight == true and M.sunUp() ~= true
+end
+
+M.SUN_UP_DEG = 2.0          -- the drawn sun this high over the horizon is day, whatever the clock says
+-- Pure: is a ScatterSky elevation e (degrees, 0 to 180 over the horizon from the east, as the sky reads it) a sun up?
+function M.sunUpAt(e)
+  e = tonumber(e)
+  if not e then return nil end
+  e = e % 360
+  return e > M.SUN_UP_DEG and e < 180 - M.SUN_UP_DEG
+end
+
+-- Is the level's drawn sun up (nil without a ScatterSky)?
+function M.sunUp()
+  local names = scenetree.findClassObjects and scenetree.findClassObjects('ScatterSky')
+  local o = names and names[1] and scenetree.findObject(names[1])
+  if not o then return nil end
+  return M.sunUpAt(o.elevation)
 end
 
 -- The local clock and date of the level's TimeOfDay (sky.lua's convention: time 0 = noon), nil fields without one.
