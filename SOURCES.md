@@ -72,7 +72,8 @@ Baden-Wurttemberg (`owsproxy.lgl-bw.de`), Lower Saxony (`opendata.lgln.niedersac
 Colorado's Front Range: Frederick (`gis.frederickco.gov`), Boulder County (`maps.bouldercounty.org`), Thornton
 (`maps.thorntonco.gov`), Arapahoe County (`gis.arapahoegov.com`), Douglas County (`apps.douglas.co.us`), Jefferson
 County (`gisportal.jeffco.us`), Lakewood (`egis.lakewood.org`), Colorado Springs (`gis.coloradosprings.gov`), Larimer
-County (`maps1.larimer.org`) and Pitkin County (`maps.pitkincounty.com`).
+County (`maps1.larimer.org`), Pitkin County (`maps.pitkincounty.com`), Arvada (`maps.arvada.org`), La Plata County
+(`utility.arcgis.com`, the county's ArcGIS Online item) and Vail (`gis.vailgov.com`).
 
 ## Land cover, trees and water
 

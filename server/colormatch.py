@@ -984,7 +984,7 @@ class ColorMatch:
     def _load(self, rk, kind):
         """(seams / field of rk (EMPTY for a field marker), meta), or None if absent or stale
         (another VERSION, reference chain, region zoom or mode)."""
-        npz, none = self._paths(rk, kind)
+        npz, none = map(cachemod.resolve, self._paths(rk, kind))
         if os.path.exists(none):
             try:
                 with open(none, "rb") as f:
@@ -1034,7 +1034,7 @@ class ColorMatch:
     # (a field is decoded by field(), on a tile worker, outside the lock)
     def _on_disk(self, rk):
         """True (a field file of rk), False (its no-seam marker) or None: stat calls only."""
-        npz, none = self._paths(rk, "field")
+        npz, none = map(cachemod.resolve, self._paths(rk, "field"))
         return True if os.path.exists(npz) else False if os.path.exists(none) else None
 
     def _peek(self, rk):
@@ -1190,6 +1190,17 @@ class ColorMatch:
                     fn(rk, F is not EMPTY)
                 except Exception:
                     log.exception("colormatch listener")
+
+    def build(self, rk):
+        """Compute and keep rk's field now, in the calling thread, unless it is on disk (the world folder's or the
+        cache's; tools/preload.py's derive lane, its bound imagery the pre-load's). True when computed."""
+        if self._on_disk(rk) is not None:
+            return False
+        t0 = time.perf_counter()
+        F, info = self._compute_field(rk)
+        info["seconds"] = round(time.perf_counter() - t0, 2)
+        self._store(rk, "field", F, info)
+        return True
 
     def _log_region(self, rk, F, m, cached):
         """Once per region: seams in reach (count, length, step %), time, cache hit."""

@@ -1,0 +1,244 @@
+{
+  "bne_sl_black": {
+    "name": "bne_sl_black",
+    "mapTo": "bne_sl_black",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "ae44cd69-5a28-5e72-a76f-1e8a3cfef249",
+    "Stages": [
+      {
+        "baseColorFactor": [
+          0.03,
+          0.03,
+          0.03,
+          1.0
+        ],
+        "metallicFactor": 0.3,
+        "roughnessFactor": 0.45
+      },
+      {},
+      {},
+      {}
+    ]
+  },
+  "bne_sl_grey": {
+    "name": "bne_sl_grey",
+    "mapTo": "bne_sl_grey",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "28d978c2-acf8-5854-b221-3a92e836fcb3",
+    "Stages": [
+      {
+        "baseColorFactor": [
+          0.42,
+          0.43,
+          0.44,
+          1.0
+        ],
+        "metallicFactor": 0.7,
+        "roughnessFactor": 0.4
+      },
+      {},
+      {},
+      {}
+    ]
+  },
+  "bne_sl_red": {
+    "name": "bne_sl_red",
+    "mapTo": "bne_sl_red",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "d9ea3d09-bf83-5ab2-934c-2baa9caf147a",
+    "Stages": [
+      {
+        "baseColorFactor": [
+          0.62,
+          0.05,
+          0.04,
+          1.0
+        ],
+        "metallicFactor": 0.0,
+        "roughnessFactor": 0.5
+      },
+      {},
+      {},
+      {}
+    ]
+  },
+  "bne_sl_wood": {
+    "name": "bne_sl_wood",
+    "mapTo": "bne_sl_wood",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "bcf081e3-c078-593c-8c95-5f2e11ed1f32",
+    "Stages": [
+      {
+        "baseColorFactor": [
+          0.36,
+          0.27,
+          0.18,
+          1.0
+        ],
+        "metallicFactor": 0.0,
+        "roughnessFactor": 0.85
+      },
+      {},
+      {},
+      {}
+    ]
+  },
+  "bne_sl_steel": {
+    "name": "bne_sl_steel",
+    "mapTo": "bne_sl_steel",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "a8170c04-2375-5538-b1a3-9b0d287d3792",
+    "Stages": [
+      {
+        "baseColorFactor": [
+          0.08,
+          0.08,
+          0.08,
+          1.0
+        ],
+        "metallicFactor": 0.6,
+        "roughnessFactor": 0.5
+      },
+      {},
+      {},
+      {}
+    ]
+  },
+  "bne_sl_cbu": {
+    "name": "bne_sl_cbu",
+    "mapTo": "bne_sl_cbu",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "ad1bb7ad-88dc-5bbb-8d34-0b7c7f936cc9",
+    "Stages": [
+      {
+        "baseColorFactor": [
+          0.55,
+          0.5,
+          0.4,
+          1.0
+        ],
+        "metallicFactor": 0.4,
+        "roughnessFactor": 0.45
+      },
+      {},
+      {},
+      {}
+    ]
+  },
+  "bne_sl_cbu_seam": {
+    "name": "bne_sl_cbu_seam",
+    "mapTo": "bne_sl_cbu_seam",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "9f66687a-5479-56c7-b8af-4a292925afde",
+    "Stages": [
+      {
+        "baseColorFactor": [
+          0.22,
+          0.2,
+          0.16,
+          1.0
+        ],
+        "metallicFactor": 0.3,
+        "roughnessFactor": 0.6
+      },
+      {},
+      {},
+      {}
+    ]
+  },
+  "bne_sl_lock": {
+    "name": "bne_sl_lock",
+    "mapTo": "bne_sl_lock",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "99a6a178-370b-5186-816d-537c7c3b6e10",
+    "Stages": [
+      {
+        "baseColorFactor": [
+          0.75,
+          0.75,
+          0.73,
+          1.0
+        ],
+        "metallicFactor": 0.9,
+        "roughnessFactor": 0.3
+      },
+      {},
+      {},
+      {}
+    ]
+  },
+  "bne_sl_cart": {
+    "name": "bne_sl_cart",
+    "mapTo": "bne_sl_cart",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "7e692fc6-478d-55ef-8987-47ab398bcfc2",
+    "Stages": [
+      {
+        "baseColorFactor": [
+          0.1,
+          0.1,
+          0.11,
+          1.0
+        ],
+        "metallicFactor": 0.0,
+        "roughnessFactor": 0.7
+      },
+      {},
+      {},
+      {}
+    ]
+  },
+  "bne_sl_cart_blue": {
+    "name": "bne_sl_cart_blue",
+    "mapTo": "bne_sl_cart_blue",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "62d7d689-1dcb-5945-a541-e808d12d3be8",
+    "Stages": [
+      {
+        "baseColorFactor": [
+          0.05,
+          0.18,
+          0.45,
+          1.0
+        ],
+        "metallicFactor": 0.0,
+        "roughnessFactor": 0.65
+      },
+      {},
+      {},
+      {}
+    ]
+  },
+  "bne_sl_tyre": {
+    "name": "bne_sl_tyre",
+    "mapTo": "bne_sl_tyre",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "6f3f2181-bccb-5933-8d4d-0dcca5f4b309",
+    "Stages": [
+      {
+        "baseColorFactor": [
+          0.03,
+          0.03,
+          0.03,
+          1.0
+        ],
+        "metallicFactor": 0.0,
+        "roughnessFactor": 0.9
+      },
+      {},
+      {},
+      {}
+    ]
+  }
+}

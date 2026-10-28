@@ -29,6 +29,8 @@ local ui = require('beamngEarth/ui')
 local net = require('beamngEarth/net')
 local credits = require('beamngEarth/credits')
 local places = require('beamngEarth/places')
+local haze = require('beamngEarth/haze')
+local grade = require('beamngEarth/grade')
 
 M.FILE = '/settings/beamngEarth.json'
 M.VERSION = 1
@@ -45,7 +47,11 @@ M.SCHEMA = {
     max = rebase.MAX_DISTANCE, label = 'Rebase distance (m)' },
   viewDistanceMode = { kind = 'enum', default = 'horizon', values = { 'fixed', 'horizon' }, label = 'View distance' },
   viewDistanceKm = { kind = 'number', default = 100, min = 20, max = 1000, label = 'Fixed view distance (km)' },
-  hazeStrength = { kind = 'number', default = 0, min = 0, max = 1, label = 'Distance haze (placeholder)' },
+  -- the aerosol of the sky's aerial perspective (haze.lua): 0 = the stock clean air, 1 = a hazy summer day
+  hazeStrength = { kind = 'number', default = 0.5, min = 0, max = 1, label = 'Distance haze' },
+  -- our own colour grade on the tone mapped image (grade.lua): BeamNG 0.40 dropped the stock one
+  colorGrade = { kind = 'enum', default = 'colorado', values = { 'off', 'natural', 'colorado', 'vivid' },
+    label = 'Colour grade' },
   skyMode = { kind = 'enum', default = 'real', values = { 'real', 'manual' }, label = 'Sky' },
   clouds = { kind = 'bool', default = true, label = 'Clouds' },
   weatherMode = { kind = 'enum', default = 'real', values = { 'real', 'manual' }, label = 'Weather' },
@@ -57,9 +63,16 @@ M.SCHEMA = {
   groundCoverDistance = { kind = 'enum', default = 'normal', values = { 'near', 'normal', 'far', 'max' }, label = 'Grass distance' },
   -- the grass grain in the ground tiles past the 3D grass (satmat.lua GRASS_LAYER; the server's grass masks)
   groundGrass = { kind = 'bool', default = true, label = 'Grass in the distant ground' },
+  -- grass cards on grassland from the 3D grass out to ~1 km (roads.lua M.grassCards; the server's grasscards.py)
+  grassCards = { kind = 'bool', default = true, label = 'Grass to 1 km' },
   -- BeamNG's own AI traffic on our roads when the level-start configurator leaves it to the settings (its default):
   -- off, light, normal (the game's amount for this PC), busy (navgraph.lua MODES)
   aiTraffic = { kind = 'enum', default = 'normal', values = { 'off', 'light', 'normal', 'busy' }, label = 'AI traffic' },
+  -- BeamNG's own parked cars on our curbs, lots and aisles (parking.lua) when the level-start options leave them to
+  -- the settings: off, few, normal (the game's parked-vehicle amount), many (navgraph.lua PARKED_MODES)
+  parkedCars = { kind = 'enum', default = 'normal', values = { 'off', 'few', 'normal', 'many' }, label = 'Parked cars' },
+  -- mailboxes, trash carts, bus stops, driveway cars and the other small things along the streets (server streetlife.py)
+  streetLife = { kind = 'bool', default = true, label = 'Street life' },
   -- roads near the player (roads.lua; the server's --roads on)
   roads = { kind = 'bool', default = true, label = 'Roads' },
   -- the Denver region's DRCOG planimetrics (server drcog.py): launcher.py reads this file and starts the server with
@@ -97,8 +110,8 @@ M.SCHEMA = {
   updateDismissed = { kind = 'string', default = '', maxLen = 40, label = 'Update notice dismissed (version)' },
 }
 M.ORDER = { 'theDriveTime', 'theDriveAutodrive', 'rebaseDistance', 'viewDistanceMode', 'viewDistanceKm', 'hazeStrength',
-  'skyMode', 'clouds', 'weatherMode', 'realGravity', 'groundCover', 'groundCoverDensity', 'groundCoverDistance',
-  'groundGrass', 'rocks', 'roads', 'cityGlow', 'aiTraffic', 'drcog', 'lidarHeights', 'dashboardSatellite', 'hudVisible', 'statusBar',
+  'colorGrade', 'skyMode', 'clouds', 'weatherMode', 'realGravity', 'groundCover', 'groundCoverDensity', 'groundCoverDistance',
+  'groundGrass', 'grassCards', 'rocks', 'roads', 'cityGlow', 'aiTraffic', 'parkedCars', 'streetLife', 'drcog', 'lidarHeights', 'dashboardSatellite', 'hudVisible', 'statusBar',
   'placeNamesOnline', 'creditsVisible', 'beammpOnLaunch',
   'creditsCorner', 'creditsSize', 'cacheCapGb', 'devOutlineKm', 'devMapKm' }
 
@@ -275,9 +288,12 @@ M.APPLY = {
   groundCoverDensity = function(v) require('beamngEarth/groundcover').setDensity(v) end,
   groundCoverDistance = function(v) require('beamngEarth/groundcover').setReach(v) end,
   groundGrass = function(v) require('beamngEarth/satmat').GRASS_LAYER = v and true or false end,
+  grassCards = function(v) require('beamngEarth/roads').grassCards = v and true or false end,
   cityGlow = function(v) require('beamngEarth/nightglow').setEnabled(v) end,
   rocks = function(v) require('beamngEarth/trees').setGroupEnabled({ 'rock', 'desert_rock' }, v) end,
   aiTraffic = function(v) require('beamngEarth/navgraph').setMode(v) end,     -- (from the next level start)
+  parkedCars = function(v) require('beamngEarth/navgraph').setParked(v) end,  -- (from the next level start)
+  streetLife = function(v) local t = require('beamngEarth/trees') t.setGroupEnabled(t.STREET_LIFE, v) end,
   roads = function(v)
     local core = ext('beamngEarth_core')
     if core and core.setRoadsEnabled then core.setRoadsEnabled(v) else require('beamngEarth/roads').setEnabled(v) end
@@ -305,7 +321,8 @@ M.APPLY = {
     local dev = ext('beamngEarth_dev')
     if dev and dev.setParam then dev.setParam('mapKm', v) end
   end,
-  -- hazeStrength: a placeholder until the haze exists (v1.4 M1h)
+  hazeStrength = function(v) haze.setStrength(v) end,
+  colorGrade = function(v) grade.setMode(v) end,
 }
 
 function M.apply(key)

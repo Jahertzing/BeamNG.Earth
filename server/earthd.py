@@ -89,13 +89,16 @@ import surface as surfacemod  # noqa: E402
 import navgraph as navgraphmod  # noqa: E402
 import prewarm as prewarmmod  # noqa: E402
 import parking as parkingmod  # noqa: E402
+import streetlife as streetlifemod  # noqa: E402
 import gasstations as gasstationsmod  # noqa: E402
 import roads as roadsmod  # noqa: E402
+import decklidar as decklidarmod  # noqa: E402
 import rails as railsmod  # noqa: E402
 import randomplace as randomplacemod  # noqa: E402
 import placepreview as placepreviewmod  # noqa: E402
 import pools as poolsmod  # noqa: E402
 import plancache as plancachemod  # noqa: E402
+import worldvol  # noqa: E402
 import grading as gradingmod  # noqa: E402
 import roadmesh as roadmeshmod  # noqa: E402
 import roadwidth as roadwidthmod  # noqa: E402
@@ -119,6 +122,7 @@ import seatiles as seatilesmod  # noqa: E402
 import vegetation as vegetationmod
 import buildings as buildingsmod  # noqa: E402
 import skyline as skylinemod  # noqa: E402
+import grasscards as grasscardsmod  # noqa: E402
 import rockface as rockfacemod  # noqa: E402
 import riverlines as riverlinesmod  # noqa: E402
 import groundahead as groundaheadmod  # noqa: E402
@@ -533,7 +537,7 @@ class Server:
                  colormatch="off", credits=None, cache=None, retex_rate=RETEX_RATE, surface=None,
                  mapdata=None, grading=False, road_widths=False, block_pools=(), sidewalks=True, buildings=False, traffic=False, far_pool=None,
                  road_pool=None, airports_db=None, sea=None, vegetation=None, leaf_on=True, season_mode="off",
-                 far_bld_pool=None, gas_stations=False, skyline=False):
+                 far_bld_pool=None, gas_stations=False, skyline=False, grass_cards=False):
         """kfun: K(L) for every level (default: the layout's K table); near_radii: the min-level
         radii (default: the layout's); cells: 32 (v1.3.1) or 64 (M1, mesh mode only); tex: texture
         px per level from the finest (default: tex_near, tex_near, tex_far with 32 cells,
@@ -576,7 +580,9 @@ class Server:
         self.near_visual = near_visual
         # the near tiles' asphalt layer (mesh mode: the tiles are the ground seen; surface.road_mask)
         self.road_masks = roadsmod.ROADS_IN_GROUND and near_visual not in BLOCK_DRAWN
-        # the ground tiles' grass layer (mesh mode, with surfaces: surface.grass_mask)
+        # the ground tiles' grass layer (mesh mode, with surfaces: surface.grass_mask). Not in terrain / detail mode
+        # (in-game 2026-10-28, detail mode: the layer turns the far tiles' version-1 materials to 1.5, which drew the
+        # photo washed out, and the grass detail normal map drew grassland navy)
         self.grass_masks = near_visual not in BLOCK_DRAWN
         if tex is None and cells == 32:
             tex = (tex_near, tex_near, tex_far)         # the v1.3.1 rule: the two finest levels are near
@@ -740,6 +746,8 @@ class Server:
         if surface is not None and self.airports is not None:      # the runways painted in (GitHub #337)
             surface.extra_pads = self.airports.runway_pads
         self.mapdata = mapdata      # mapdata.MapData for the roads (--roads on), else None
+        if mapdata is not None:     # (the junctions' mapped traffic signals: roads.pocket_profiles' rule (c))
+            roadsmod.SIGNALS_FN = roadsmod.signals_provider(mapdata)
         if mapdata is not None and getattr(mapdata, "dem", 0) is None:
             mapdata.dem = self.dem  # (gradesep's ground)
         self.grading = bool(grading) and mapdata is not None   # ground graded under roads (grading.py)
@@ -747,6 +755,9 @@ class Server:
         self.sidewalks = sidewalks  # raised sidewalk meshes with the road tiles (sidewalks.py)
         self.buildings = buildings  # building meshes with the road tiles (buildings.py)
         self.skyline = bool(skyline) and bool(buildings)    # the tall buildings to 40 km (skyline.py; --skyline on)
+        # grass cards past the 3D grass (grasscards.py; --grass-cards on): with the surfaces and worker processes, in any
+        # mode (on the DEM: in terrain / detail mode the drawn block's ground, graded only at the roads the mask cuts)
+        self.grass_cards = bool(grass_cards) and surface is not None
         # gas stations with refuelling with the road tiles (gasstations.py; the user, 2026-10-23)
         # (the settings page's switch turns them off and on again: set_gas_stations; never on without the flag)
         self.gas_allowed = bool(gas_stations) and mapdata is not None
@@ -1090,6 +1101,7 @@ class Server:
                     anchor.bridges.wet = self.sea.depth if self.sea is not None else None
                     anchor.bridges.infra_fn = lambda key: self.mapdata.cell(
                         key, layers=("infrastructure",), kind="demand").layers.get("infrastructure")
+                    anchor.bridges.surface = decklidarmod.surface_for(self.mapdata, self.dem)
             for fid, _spec, xy, z, _lon in anchor.bridges.parts(feats, (x - w, y - w, x + w, y + w)):
                 decks.setdefault(fid, []).append((np.asarray(xy, np.float64)[:, :2], np.asarray(z, np.float64)))
         except Exception as e:          # no decks: the graph follows the ground under bridges
@@ -1162,6 +1174,20 @@ class Server:
         return buildingsmod.skyline_tile(anchor.frame, ux, uy, self.mapdata,
                                          lambda la, lo: self.ground(anchor.frame, la, lo, self.dem.sample(la, lo, zoom)),
                                          self.out_dir, self.vfs_dir, aid, self.lamp_region(anchor))
+
+    def build_grass_card_tile(self, aid, tx, ty):
+        """grasscards.py: the grass card tile of road tile square (tx, ty) of anchor aid, or None (its land cover not
+        cached yet, or no worker processes). Worker threads (the Connection's grfar Tracker)."""
+        anchor = self.anchors.get(aid)
+        if anchor is None or not self.grass_cards or self.far_bld_pool is None:
+            return None
+        tex = None
+        if self.imagery is not None:
+            im = self.imagery
+            tex = {"chain": [src.name for src in im.chain], "tone": self.tone, "leaf_on": im.leaf_on,
+                   "season_mode": im.season_mode}
+        return self.far_bld_pool.submit(blockworker.grass_cards_tile, aid, anchor.lat, anchor.lon, anchor.zooms[0],
+                                        tx, ty, self.out_dir, self.vfs_dir, tex).result()
 
     def build_far_bridge_tile(self, aid, tx, ty):
         """buildings.far_bridge_tile: a far bridge (render-only) tile of anchor aid, or None (its road cells not at
@@ -1266,6 +1292,7 @@ class Server:
                 anchor.bridges.wet = self.sea.depth if self.sea is not None else None    # (decks clear the water)
                 anchor.bridges.infra_fn = lambda key: self.mapdata.cell(
                     key, layers=("infrastructure",), kind="demand").layers.get("infrastructure")
+                anchor.bridges.surface = decklidarmod.surface_for(self.mapdata, self.dem)
             if anchor.tunnels is None:
                 anchor.tunnels = roadsmod.TunnelProfiles(
                     anchor.frame, lambda key: self.mapdata.cell(key, layers=("roads",), kind="demand").layers.get("roads"),
@@ -1298,15 +1325,19 @@ class Server:
             return roadsmod.block_arch_raise(anchor.tunnels, cell_fn, anchor.frame, la, lo, elev(la, lo),
                                              (box[0] - 8, box[1] - 8, box[2] + 8, box[3] + 8))
         cover = []                      # the ground carriageways for the decks' parapets (roadmesh.deck ground=)
+        pocket_cells = [cell_fn(k) for k in roadsmod.cells_of_tile(anchor.frame, tx, ty, roadsmod.POCKET_REACH_M)]
+        signs = []                      # highway signs (guidesigns.py)
+        tile_ground = lambda x, y: roadmeshmod.drawn_ground(anchor.frame, drawn, np.c_[x, y],  # noqa: E731
+                                                            self.anchor_q(anchor))
         chunks = roadsmod.build_tile(anchor.frame, tx, ty, cells, elev, urban, walks=walks, deck_context=ctx, bridges=anchor.bridges,
+                                     pocket_cells=pocket_cells,     # (the segments going on: their tapers)
                                      walk_cuts=fuel_cuts,    # (the stations' made-up driveways: no sidewalk across them)
                                      widths=self.road_widths, props=props, lines=lines, wires=wires, town=town, park=park,
                                      left_hand=self.left_hand(anchor), mph=self.mph(anchor), buried=self.buried(anchor),
                                      lamp_region=self.lamp_region(anchor),
                                      structures=buildingsmod.centres(items, tx, ty) if items else (),
                                      tunnels=anchor.tunnels, walls=rwalls,
-                                     ground=lambda x, y: roadmeshmod.drawn_ground(anchor.frame, drawn, np.c_[x, y],
-                                                                                  self.anchor_q(anchor)),
+                                     ground=tile_ground,
                                      terrain_paint=self.surface is not None, cover_out=cover,
                                      signals=furnituremod.signals_for(
                                          self.mapdata, anchor.frame,
@@ -1317,7 +1348,8 @@ class Server:
                                          roadsmod.cells_of_tile(anchor.frame, tx, ty, blockworker.SIGNALS_MARGIN_M)),
                                      barrier_homes=barriersmod.residential_for(
                                          self.mapdata, anchor.frame,
-                                         roadsmod.cells_of_tile(anchor.frame, tx, ty, blockworker.BARRIER_HOMES_MARGIN_M)))
+                                         roadsmod.cells_of_tile(anchor.frame, tx, ty, blockworker.BARRIER_HOMES_MARGIN_M)),
+                                     signs=signs)
         chunks += railsmod.tile_chunks(anchor.frame, tx, ty, cells)     # railway and tram tracks on the ground
         if self.airports is not None:   # runway markings, drawn by the road mesh like the lane lines
             chunks += self.airports.tile_chunks(anchor.frame, tx, ty, elev, roadsmod.tile_bbox)
@@ -1326,6 +1358,14 @@ class Server:
             drives = []
             props.extend(buildingsmod.doors(items, lines, x0, y0, drives))
             props.extend(buildingsmod.toll_booth_rows(items, x0, y0))
+            props.extend(buildingsmod.beacon_rows(items, x0, y0))      # (red lights on towers)
+            if streetlifemod.ENABLED:   # mailboxes, carts, bus stops; the driveways' parking spots
+                props.extend(streetlifemod.tile_rows(
+                    anchor.frame, self.mapdata, roadsmod.cells_of_tile(anchor.frame, tx, ty, margin=0.0), drives, walks,
+                    lines, roadsmod.tile_bbox(tx, ty), tile_ground,
+                    us=bool(self.mph(anchor)) and str(self.lamp_region(anchor) or "").startswith("na"),
+                    town=bool(town), left_hand=self.left_hand(anchor), props=props, spots=park,
+                    blockers=[buildingsmod.drawn_ring(spec) + np.array([x0, y0]) for spec, *_ in items]))
             drives.extend(buildingsmod.garage_drives(items, lines, x0, y0))
             chunks += drives
             park = parkingmod.clear_of(park, props, drives)
@@ -1366,7 +1406,8 @@ class Server:
                             + industry.power_plant_sound_rows(anchor.frame, tx, ty, self.mapdata, elev))
         return roadsmod.write_tile(self.out_dir, self.vfs_dir, aid, tx, ty, chunks, walks if self.sidewalks else None,
                                    mesh, dmesh, bld, props, wires, park, tunnel_mesh=tmesh, fuel=fuel,
-                                   rail_mesh=rmesh, garage_sound=garage_sound, wells=oil_wells)
+                                   rail_mesh=rmesh, garage_sound=garage_sound, wells=oil_wells,
+                                   signs=signs[0] if signs else None)
 
     def set_gas_stations(self, on):
         """The settings page's "Gas stations" switch (the mod's gas_stations; the user, 2026-10-23: off saves their
@@ -1453,6 +1494,7 @@ class Server:
                                                   self.road_widths)
                 anchor.grader.wet = self.sea.depth if self.sea is not None else None    # (no dams: underwater tunnels)
                 anchor.grader.dem = self.dem                # (its urgent lane: _plan_missing)
+                anchor.grader.surface = decklidarmod.surface_for(self.mapdata, self.dem)  # (motorways as measured)
                 anchor.grader.shared = plancachemod.for_grader(self.cache_dir, anchor.grader, self.road_widths,
                                                               anchor.grader.wet)
             return anchor.grader
@@ -2442,7 +2484,7 @@ class Server:
             log.debug("road mask of %s: %s", tile.key, e)
 
     def write_grass_mask(self, anchor, tile, px, texture):
-        """The tile's grass mask beside its texture (self.grass_masks: mesh mode; surface.grass_mask over the photo's
+        """The tile's grass mask beside its texture (self.grass_masks, with surfaces; surface.grass_mask over the photo's
         square with its gutter, px the texture's edge), written before the tile is sent (the mod looks for it when it
         sets the texture). A re-rendered texture (_r<n>) shares it: the land cover did not change."""
         if not self.grass_masks or self.surface is None or tile.level > surfacemod.GRASS_MASK_MAX_LEVEL:
@@ -2840,7 +2882,7 @@ BOOST_MAX_S = 120.0         # ... or this long after the teleport
 BOOST_GRACE_S = 5.0         # (the car dropped into place moves a little at first)
 
 ANCHOR_TILE_FILES = ("roads", "road", "walks", "walkcol", "deck", "bld", "bldcol", "bldfar", "wire", "veg", "navgraph",
-                     "sky")
+                     "sky", "grfar")
 
 
 class _BoundedLru:
@@ -2968,6 +3010,9 @@ class Connection:
                                             buildingsmod.BRIDGE_FAR_PER_POSE, "brfar",
                                             skip_m=roadsmod.SEND_M - roadsmod.TILE)
                       if buildingsmod.BRIDGE_FAR_SEND_M > roadsmod.SEND_M else None)
+        # grass cards past the 3D grass (grasscards.py, --grass-cards on): not under it (skip_m)
+        self.grfar = vegetationmod.Tracker(grasscardsmod.SEND_M, grasscardsmod.DROP_M, grasscardsmod.PER_POSE, "grfar",
+                                           skip_m=grasscardsmod.SKIP_M)
         self.sky = skylinemod.Tracker()         # the skyline's z12 cells (--skyline on): after the far buildings
         self.mid = skylinemod.mid_tracker()     # ... and its mid ring of z14 cells (2-6 km)
         self.nav = navgraphmod.Tracker()        # the AI road graph around the player (--traffic on)
@@ -3356,7 +3401,8 @@ class Connection:
             self.s.connections.discard(self)
             self.s.slots_let_go(list(self.slot_holds))
             self.slot_holds = {}
-            for tr in (self.roads, self.veg, self.bldfar, self.bldsky, self.brfar, self.sky, self.mid, self.nav):
+            for tr in (self.roads, self.veg, self.bldfar, self.bldsky, self.brfar, self.grfar, self.sky, self.mid,
+                       self.nav):
                 if tr is not None:
                     tr.close()
             self.s.drop_claims(self)
@@ -3643,6 +3689,8 @@ class Connection:
         t0 = time.perf_counter()
         # a teleport's first block without its road plans, the graded one sent when built (make_provisional)
         provisional = teleport and PROVISIONAL_FIRST and self.s.grading
+        if provisional and revisitmod.has(self.s.cache_dir, blockcache.KIND, self.s._block_key(anchor, cx, cy)):
+            provisional = False         # (the graded block built here before: read back at once, blockcache.py)
         if self.s.surface is not None and not provisional:
             # the anchor's first block is built once and kept while the player stands still: give the
             # land cover around it a moment to arrive (blocks built while driving never wait)
@@ -3959,6 +4007,10 @@ class Connection:
             if self.brfar is not None and self.bldfar.progress()[0] >= self.bldfar.progress()[1]:
                 self.brfar.on_pose(self, aid, *self.focus, asyncio.get_running_loop(), self.s.build_far_bridge_tile,
                                    view=self.view_at)
+        if self.s.grass_cards and aid == self.active and self.roads.progress()[0] >= self.roads.progress()[1]:
+            # (after the road tiles round the car: the least urgent of the near things)
+            self.grfar.on_pose(self, aid, *self.focus, asyncio.get_running_loop(), self.s.build_grass_card_tile,
+                               view=self.view_at)
         if self.s.traffic and aid == self.active and self.nav_may_start(aid):
             self.nav.on_pose(self, aid, *self.focus, asyncio.get_running_loop(), self.s.build_navgraph)
         if aid == self.active:
@@ -4159,7 +4211,7 @@ class Connection:
             try:
                 def cell_water(key):    # a cell's water lines if its map data is at hand (else built meanwhile)
                     md = sea.md
-                    if not os.path.exists(md.path(mapdatamod._key(key), "water")):
+                    if not md.has(mapdatamod._key(key), "water"):
                         missing[0] = True
                         sea.warm([(key.x, key.y)])
                         return None
@@ -4176,7 +4228,7 @@ class Connection:
                     la1, lo1, _ = frame.enu_to_geodetic(x + r, y + r, 0.0)
                     try:
                         every = mapcells.cells_for_bbox(float(la0), float(lo0), float(la1), float(lo1), max_cells=256)
-                        keys = tuple(key for key in every if os.path.exists(md.path(mapdatamod._key(key), "roads")))
+                        keys = tuple(key for key in every if md.has(mapdatamod._key(key), "roads"))
                         if len(keys) < len(every):
                             missing[0] = True
                         memo = getattr(self, "_river_clear", None)   # (anchor, cells) -> clearance: built once
@@ -4623,6 +4675,9 @@ async def main_async(args):
         radii = {ml: args.near_radii[0], ml + 1: args.near_radii[1]}
     net = netfetch.Fetcher(stats_dir=os.path.join(args.cache_dir, "netstats"), offline=args.offline)
     disk = cachemod.Cache(args.cache_dir, args.cache_cap)
+    log.info("%s", worldvol.summary(cachemod.world_dir()))
+    if cachemod.world_dir():
+        threading.Thread(target=scan_world, args=(cachemod.world_dir(),), daemon=True, name="world-size").start()
     threading.Thread(target=prune_own_caches, args=(args.cache_dir,), daemon=True, name="cache-prune").start()
     # map data (mapdata.py): land cover for the surfaces, roads; one instance shares its cache locks
     mapdata = (mapdatamod.MapData(args.cache_dir, fetcher=net)
@@ -4705,6 +4760,7 @@ async def main_async(args):
                     traffic=args.traffic == "on" and args.roads == "on",
                     block_pools=block_pools, far_pool=far_pool, road_pool=road_pool, airports_db=airports_db,
                     far_bld_pool=far_bld_pool, skyline=args.skyline == "on",
+                    grass_cards=args.grass_cards == "on" and args.surface == "on",
                     sea=seacarvemod.SeaCarver(mapdata, args.cache_dir) if args.sea == "on" else None,
                     vegetation=(vegetationmod.Vegetation(mapdata, args.cache_dir) if args.trees == "on" else None))
     server.update_check = args.update_check == "on"
@@ -4921,10 +4977,48 @@ def saved_cache_dir():
         return None
 
 
+def default_world_dir():
+    """The world folder (apppaths: the one kept in app.json, else C:/beamng-earth/world, ~/beamng-earth/world)."""
+    try:
+        ap = _app_modules()[0]
+        return ap.saved_world_dir() or ap.default_world_dir()
+    except Exception:
+        return os.path.join(os.path.expanduser("~"), "beamng-earth", "world")
+
+
+_world_info = {}        # the world folder's size and regions, from scan_world (the settings page)
+
+
+def scan_world(world_dir):
+    """The world folder's size, files and installed regions for the settings page (app_paths), once at start (a
+    background walk: only the pre-load, migrate and import change it, with the server closed)."""
+    try:
+        regions = [{"name": r["slug"], "title": str(r["meta"].get("title") or "")[:200], "keys": len(r["tokens"]),
+                    "last": time.strftime("%Y-%m-%d", time.localtime(r["mtime"])) if r["mtime"] else "",
+                    "complete": r["meta"].get("complete") is not False} for r in worldvol.regions(world_dir)]
+        _world_info.update(dir=world_dir, regions=regions)
+        n = b = 0
+        for _, size, _ in worldvol.walk(world_dir):
+            n, b = n + 1, b + size
+        _world_info.update(files=n, bytes=b)
+        log.info("world folder: %.2f GB in %d files, %d regions", b / 1e9, n, len(regions))
+    except Exception as e:          # (the page then shows the folder only)
+        log.warning("world folder not counted: %s: %s", type(e).__name__, e)
+
+
+def world_fields(world_dir):
+    """app_paths' world folder fields: worldDir, worldBytes / worldFiles (-1 while counting), worldRegions."""
+    if not world_dir:
+        return {}
+    w = _world_info if _world_info.get("dir") == world_dir else {}
+    return {"worldDir": world_dir, "worldBytes": int(w.get("bytes", -1)), "worldFiles": int(w.get("files", -1)),
+            "worldRegions": list(w.get("regions", []))}
+
+
 def app_paths_message(cache_dir, result):
     """app_paths for the settings page: the cache folder in use and the one kept for the next start, the BeamMP
-    launcher (the player's choice, else the one found), whether a window is open (picking), and result: the answer to
-    the last choice ({what, ok, text})."""
+    launcher (the player's choice, else the one found), the world folder (its size and installed regions: never
+    cleared), whether a window is open (picking), and result: the answer to the last choice ({what, ok, text})."""
     try:
         ap, bm = _app_modules()
         dd = ap.data_dir()
@@ -4935,6 +5029,7 @@ def app_paths_message(cache_dir, result):
         saved, launcher = cache_dir, ""
     m = {"type": "app_paths", "cacheDir": os.path.abspath(cache_dir), "cacheNext": os.path.abspath(saved),
          "beammp": launcher}
+    m.update(world_fields(cachemod.world_dir()))
     if result:
         m["result"] = result
     return m
@@ -4977,6 +5072,10 @@ def main():
     ap.add_argument("--cache-dir", default=saved_cache_dir() or os.path.join(home, ".cache/beamng-earth"),
                     help="download cache root (DEM tiles go to <cache-dir>/dem/; default: the folder chosen on the "
                          "settings page or with the app's --cache-dir, else .cache/beamng-earth in the home folder)")
+    ap.add_argument("--world-dir", default=default_world_dir(),
+                    help="the world folder: what tools/preload.py fetched, read before the cache and never evicted or "
+                         "cleared (cache.py 'The world folder'; default: the one kept in app.json, else "
+                         "C:/beamng-earth/world on Windows, ~/beamng-earth/world elsewhere; off: none)")
     ap.add_argument("--peers", default=os.environ.get("BNGE_PEERS", ""),
                     help="compute sharing: helpers (HOST[:PORT] ...; peerwork.py serve on them) that build far tiles "
                          "when this server's own workers are busy (default: BNGE_PEERS)")
@@ -5101,6 +5200,9 @@ def main():
     ap.add_argument("--buildings", choices=("on", "off"), default="off",
                     help="3D buildings from the Overture footprints with the road tiles (buildings.py; needs --roads "
                          "on): heights and roofs predicted where the data has none")
+    ap.add_argument("--grass-cards", choices=("on", "off"), default="on",
+                    help="grass cards on grassy land past the 3D grass, out to ~1 km (grasscards.py; with --surface "
+                         "on): crossed cards coloured from the ground photo")
     ap.add_argument("--skyline", choices=("on", "off"), default="on",
                     help="the tall buildings out to 40 km (skyline.py; with --buildings on): towers of >= 50 m or "
                          "15 floors, all of >= 20 m or 6 floors within 6 km, as simple tinted prisms")
@@ -5151,6 +5253,9 @@ def main():
                          "never what this session used within the hour, the gravity model or netstats/")
     ap.add_argument("-v", "--verbose", action="store_true")
     args = ap.parse_args()
+    args.cache_dir = os.path.abspath(args.cache_dir)
+    # the world folder read first (before any worker process starts: they take it from the environment)
+    cachemod.set_world(None if args.world_dir.strip().lower() == "off" else args.world_dir, args.cache_dir)
     os.environ["BNE_CDOT"] = "1" if args.cdot == "on" else "0"     # (every process: mapdata.MapData.cdot)
     import laneoverrides        # the player's road lanes (laneoverrides.py): every process reads the same file, and an
     os.environ.setdefault(laneoverrides.ENV_PATH, laneoverrides.path(args.cache_dir))   # edit keys the revisit cache

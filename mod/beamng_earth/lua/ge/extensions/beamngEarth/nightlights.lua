@@ -25,8 +25,16 @@ M.MATERIALS = {
   bne_stadium_light = { '0.95 0.97 1', 3000, when = function(c) return c.night and M.evening(c.hour) end },
   -- the Castle Rock star (nightglow.lua): its season
   bne_star_bulb = { '1 0.96 0.86', 4000, when = function(c) return c.night and M.starSeason(c.year, c.month, c.day) end },
+  -- the red obstruction lights on tall buildings (buildings.py G_BEACON): aviation red, steady (L-810)
+  bne_beacon = { '1 0.06 0.03', 2500 },
   -- a city's sky glow (nightglow.lua): additive, a faint haze of light
   bne_city_glow = { '1 1 1', 6 },
+  -- highway signs (server guidesigns.py): their white legends and borders, and the delineators' reflectors, as
+  -- retroreflective sheeting looks in headlights
+  bne_gsign_text = { '1 1 1', 45 },
+  bne_gsign_white = { '1 1 1', 12 },
+  bne_gsign_reflect = { '1 1 1', 400 },
+  bne_gsign_amber = { '1 0.7 0.15', 400 },
 }
 M.STADIUM_OFF_H = 23.0      -- local hour the stadiums' lights go out (a game is over by then)
 M.STAR_LAST = { 1, 25 }     -- the star goes off after the National Western Stock Show (month, day; mid to late January)
@@ -116,7 +124,7 @@ local function apply(night)
   end
   -- the lamps' far glow (trees.lua's lampglow group, off by day)
   local okt, trees = pcall(require, 'beamngEarth/trees')
-  if okt and trees.setGroupEnabled then pcall(trees.setGroupEnabled, { 'lampglow' }, night) end
+  if okt and trees.setGroupEnabled then pcall(trees.setGroupEnabled, { 'lampglow', 'beaconglow' }, night) end
   M.night = night
 end
 
@@ -243,7 +251,7 @@ end
 -- Every frame (core.lua; cheap: the materials looked at every CHECK_S, the lights every LIGHTS_S). anchor, anchorId:
 -- the frame (nightglow.lua's objects are placed by latitude and longitude).
 function M.update(anchor, anchorId)
-  pcall(nightglow.update, anchor, anchorId)
+  pcall(nightglow.update, anchor, anchorId, M.night)
   local now = os.clockhp()
   if now - lastCheck >= M.CHECK_S then
     lastCheck = now

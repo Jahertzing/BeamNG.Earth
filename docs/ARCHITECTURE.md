@@ -964,9 +964,20 @@ three days of testing: dem 741 MB / 7.5k files, imagery 1.4 GB / 35k, deshadow 7
   `far_<a>_<key>_grass.dds`, shared by the texture's revisions), and `satmat.lua` gives the material a layer of
   the same photo with our procedural grass detail and detail normal maps on UV1 (`tools/make_grass_textures.py`:
   one 32 m repeat holding tufts, clumps and patches, so each mip level carries the scale that fits its distance),
-  shown through the mask, under the asphalt layer. Mean 0.5 grey: the photo's colour stays. A tile built before
+  shown through the mask, under the asphalt layer; mesh mode only (in detail mode, in game 2026-10-28, the far tiles'
+  materials switched to version 1.5 drew the photo washed out). Mean 0.5 grey: the photo's colour stays. A tile built before
   its land cover was cached goes without (no mask rather than a hole). The settings page's "Grass in the distant
   ground" turns it off for the tiles loaded after.
+- Grass cards to 1 km (2026-10-28, same ask; `server/grasscards.py`, `earthd --grass-cards on`, any near-visual
+  mode, with `--surface on`). The flat grass layer gives no height, so between the 3D grass and `SEND_M` (1 km) each road
+  tile square of grassy land gets a render-only mesh of crossed cards (one per 3 m cell of a jittered grid hashed
+  from world position, kept by the grass mask's weight, cropland left out, 0.6-1.1 m tall, sunk 0.15 m), each coloured (vertex
+  colour) from the ground photo under it (blurred to 20 m: no crop rows) and lit as the ground (normals up). The texture is our own grey blade clump
+  (`tools/make_grass_card.py`) with coverage-preserving opacity mips, so the alpha-tested cards don't thin out with
+  distance. A `vegetation.Tracker` (kind `grfar`, pooled shape slots) sends `grfar_tile` / `grfar_drop`; it skips
+  tiles within `SKIP_M` (128 m) when it builds, and the mod (`roads.lua` far kind 'G') hides a tile while the player
+  or the camera is within `GRASS_CARD_NEAR_M` (48 m) of its square (cards up close are flat crosses and may lean
+  over a road edge). The settings page's "Grass to 1 km" hides them at once. ~3.6 k cards (1.7 MB) for a full tile.
 - Optional preload library `tools/gcpatch` (Linux, 0.39.4 only, README there): at game start it
   changes the handler's `and esi, 0x0E` to `and esi, 0` in memory (after checking its first 54
   bytes), so block imports and moves free no grass at all. BeamNG's Lua FFI refuses C function
@@ -1069,7 +1080,48 @@ three days of testing: dem 741 MB / 7.5k files, imagery 1.4 GB / 35k, deshadow 7
   lanes (the carriageway's class-rule parking replaced) and a white line along each; turn:lanes(:forward /
   :backward) put stroke arrows (shaft, head, bent stroke per turn side) 12 and 42 m before each lane's end,
   each stroke drawn whole or not at all (clear of the other carriageways). Roads without the tags are drawn
-  as before. Not done: tapers / widening into turn pockets (a road's width is constant along its mesh).
+  as before.
+- Turn pockets and tapers (`roads.pocket_profiles`, `widen_off` / `widen_edges`; 2026-10-28): a road's
+  carriageway may vary along it. Colorado's table counts the turn lane in `lanes` of a short way (median
+  ~95 m in Denver) a lane wider than the ways around it, so the width stepped at the split; now the wider
+  segment opens from the narrower's width over 30 m (both edges; where the difference is the exclusive turn
+  lanes leaving the joint, those lanes open and the rest shift over), at side streets too, never at the end
+  where its arrows end. A width change of no known lane tapers evenly, only mid-block (driveways). An
+  exclusive turn lane the lane count leaves out is added over the last 55 m + 30 m taper (left pockets
+  toward the centre line, right bays toward the curb). The profile moves the lane lines, centre line,
+  arrows, edge lines, gutters and sidewalks (`extras` / `lane_marks` wid=), the carriageway mesh
+  (chunk "wl" / "wr", `roadmesh.ribbons`), the ground's asphalt (`surface._road_segments`, `paint_roads`),
+  the junctions' curbs and crosswalks (`junctions.find` half=) and grading's core (`grading.widen_plan`).
+  Pure per road; road tiles look the joints up in the cells within `POCKET_REACH_M`. `BNE_TURN_POCKETS=off`
+  turns it off. Probe: `tools/pocket_probe.py` (top-down PNGs before / after).
+- A segment's own OSM ways (`overture._WAYS`: `src_ways`, the way records among its sources with their
+  `between` shares; `osmtags.segment_ways`, `main_way`; roads layer 7, 2026-10-28): Overture gives some segments a
+  route relation as their first source (Colfax, CO-52, the I-25 frontage roads: 7-43 % of their arterial segments),
+  and merges consecutive ways into one segment (25-33 %). The regional and Layercake joins take a relation's segment's
+  way from its sources (the longest share), and a merged segment's turn lanes from the way at the end they lead to
+  (turn:lanes:forward the last way's, :backward and `osm_turn_lanes_start` the first's): a pocket way merged with its
+  approach gives a pocket at the end (rule (a)), not turn lanes along the whole segment.
+  The merged ways' shares and Layercake lane counts are kept per segment (`osm_parts`, `osmtags.join_parts`; roads
+  layer 8): rule (a)'s pocket covers its own way's share (POCKET_M where the segment is one way), and where OSM's
+  lanes are the ones in use (`Spec.lsrc` None / "osm"), a part of another lane count is wider or narrower by those
+  lanes, the step tapering inside the wider part as rule (b) (rule (d); a pocket's part keeps the segment's width).
+  Each part draws its own lanes (`part_lines`, `_part_spec`: the split each way its end's turn lanes ask for, else
+  the one keeping the centre line nearest the segment's); across a taper a line both parts have runs from one to
+  the other and a new lane's line starts where the lane is 2/3 wide (`POCKET_LINE_SHARE`, US lane-add striping); the
+  arrows stand in the lanes of the part at their end. Build time only (no layer bump).
+- Turn lanes without turn:lanes (rule (c), 2026-10-28): CDOT counts a stretch's left turn lanes into its
+  lanes (a painted median: `lanes_c`; else the direction's lanes), and its stretches are short, so CO-52
+  through Frederick widens near its junctions by segment; those steps now taper too (a centre turn lane
+  opening from nothing, other lane counts evenly, at side streets, never across a junction of roads of its
+  rank). At a junction a tertiary or higher road crosses (slip roads do not count), a trunk / primary /
+  secondary approach in a regional table's area without OSM turn lanes gets a left arrow in its centre turn
+  lane, or in its leftmost lane where it has a lane more than goes on beyond the junction, or, where neither
+  CDOT nor an override gives its lanes and it has 4+ through lanes (a divided carriageway 2+), an inferred
+  left pocket (as rule (a)) where the junction has a mapped traffic signal (`roads.SIGNALS_FN`: Overture's
+  infrastructure of the cells round it, cached cells only; a signal also makes a side street's junction count).
+  `BNE_TURN_POCKETS=tags` keeps rules (a) / (b) only. Turn arrows keep clear of
+  crosswalks and stop lines. Not done: CDOT's turn lane counts as their own columns (they are folded into
+  the lanes; a column would rebuild every Colorado road cell), right-turn bays without OSM tags.
 - Curb ramps: the tactile pad is the first 0.6 m of the slope (tinted yellow); brick sidewalks on 55 % of
   the streets of dense brick-region cores; parking lots (Overture infrastructure `parking`) are the
   asphalt ground layer (no grass); built-up land is the dirt layer.

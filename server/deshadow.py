@@ -758,7 +758,7 @@ class Deshadow:
         """Params from the disk cache (current VERSION only). Caller holds the lock."""
         if rk in self._params:
             return self._params[rk]
-        jp, npz = self._paths(rk)
+        jp, npz = map(cachemod.resolve, self._paths(rk))
         try:
             with open(jp) as f:
                 P = json.load(f)
@@ -859,7 +859,7 @@ class Deshadow:
             if g is not None:
                 self._grids.move_to_end(rk)
                 return Region(P, g)
-        npz = self._paths(rk)[1]
+        npz = cachemod.resolve(self._paths(rk)[1])
         try:
             with np.load(npz) as f:
                 g = f["grids"]
@@ -913,7 +913,7 @@ class Deshadow:
                 return bool(P.get("ok"))
             if rk in self._events or rk in self._failed:
                 return None
-        return True if os.path.exists(self._paths(rk)[0]) else None
+        return True if cachemod.exists(self._paths(rk)[0]) else None
 
     def _worker(self):
         pacer.enable(pacer.DUTY)     # a background analysis: paced (pacer.py)
@@ -937,12 +937,7 @@ class Deshadow:
                     self._failed[rk] = time.monotonic()
                     self._events.pop(rk).set()
                 continue
-            jp, npz = self._paths(rk)
-            if grids is not None:
-                _atomic_write(npz, lambda f: np.savez_compressed(f, grids=grids))
-                self.disk.wrote(npz)
-            _atomic_write(jp, lambda f: f.write(json.dumps(P).encode()))
-            self.disk.wrote(jp)
+            self._save(rk, P, grids)
             with self._lock:
                 self._params[rk] = P
                 if grids is not None:
@@ -964,6 +959,25 @@ class Deshadow:
                     fn(rk, bool(P.get("ok")))
                 except Exception:
                     log.exception("deshadow listener")
+
+    def _save(self, rk, P, grids):
+        """A computed region's files (its grids first: its params name them)."""
+        jp, npz = self._paths(rk)
+        if grids is not None:
+            _atomic_write(npz, lambda f: np.savez_compressed(f, grids=grids))
+            self.disk.wrote(npz)
+        _atomic_write(jp, lambda f: f.write(json.dumps(P).encode()))
+        self.disk.wrote(jp)
+
+    def build(self, rk):
+        """Compute and keep region rk now, in the calling thread, unless it is on disk (the world folder's or the
+        cache's; tools/preload.py's derive lane, its bound imagery and DEM the pre-load's). True when computed."""
+        with self._lock:
+            if self._load_params(rk) is not None:
+                return False
+        P, grids = self._compute(rk)
+        self._save(rk, P, grids)
+        return True
 
     def _compute(self, rk):
         """Fetch the region's z14 imagery and DEM, then compute_region()."""
@@ -1023,13 +1037,14 @@ class Deshadow:
             return None
         png, same = self._tile_paths(z, x, y)
         v = None
-        if os.path.exists(same):
+        rsame, rpng = cachemod.resolve(same), cachemod.resolve(png)     # (written to the cache: same, png)
+        if os.path.exists(rsame):
             v = SAME
-            self.disk.used(same)
-        elif os.path.exists(png):
+            self.disk.used(rsame)
+        elif os.path.exists(rpng):
             try:
-                v = np.asarray(Image.open(png).convert("RGB"))
-                self.disk.used(png)
+                v = np.asarray(Image.open(rpng).convert("RGB"))
+                self.disk.used(rpng)
             except (OSError, ValueError):
                 v = None
         if v is None:

@@ -51,6 +51,10 @@ class KitTest(unittest.TestCase):
         self.assertGreaterEqual(len(P), 24 * len(slots))                      # sill, head, two jambs a window
 
     def test_kit_faces_out_and_up(self):
+        # (the eaves' soffits and the gutters' bottoms face down: test_housefronts checks those)
+        was = fk.EAVES, fk.GUTTERS
+        fk.EAVES = fk.GUTTERS = False
+        self.addCleanup(lambda: setattr(fk, "EAVES", was[0]) or setattr(fk, "GUTTERS", was[1]))
         for k in range(8):
             spec = house(k)
             P, UV, T, M, C = kit_mesh(spec)

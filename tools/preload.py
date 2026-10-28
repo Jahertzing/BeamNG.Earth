@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Pre-load an area into the download cache: the elevation tiles, the imagery and the map data of a named region
+"""Pre-load an area into the world folder: the elevation tiles, the imagery and the map data of a named region
 (tools/regions.json: towns, road corridors, the fill between), a place, a route or a disc, fetched by the server's own
 code (dem.Dem, imagery.Imagery, mapdata.MapData behind a netfetch.Fetcher with the host policies and the daily
 budgets), so the world there loads from disk and at its sharpest: the lazy export sources (a county's or a town's
@@ -18,19 +18,33 @@ first within each; what is on disk already, known missing or in the region's man
            ground filter reads, z15-z13 a little round it, z12-z11 over --far-km round it, z10 over twice that
   imagery  the chain's lazy export sources at z17 (one 1024 px export per z15 parent) and, in the towns, the regional
            sources at z18; each parent goes to the first source of the chain that covers it (a coverage probe of
-           each regional source: one 64 px export per z13 tile, kept in <cache>/preload/coverage), to the next one
+           each regional source: one 64 px export per z13 tile, kept in <world>/regions/coverage), to the next one
            where that one has gaps (past its county line), and to NAIP where no regional source has it;
            USGS z16-z15 over the region, z14-z12 over --far-km
   mapdata  the z14 cells, every layer but the skyline's (CELL_LAYERS), for the pinned Overture release, with DRCOG's
-           roofprints in its area as the server builds them (--drcog, default on as the settings page)
+           roofprints in its area as the server builds them (--drcog, default on as the settings page), and 3DEP's
+           lidar surface (decklidar.Dsm) of the cells with a bridge or a motorway: the decks' and the fills' heights
+  derive   after the downloads, what the server would otherwise work out on a first visit, on the local CPU (a few
+           threads at a low priority, --derive-workers / --derive-duty): the colour match's fields and the de-shadow
+           regions per z12 tile round the parts with map data, the trees (vegetation.py) and the road widths' walls
+           (roadwidth.py) per full z14 cell; each only where the server has it on (--colormatch, --deshadow, --trees,
+           --road-widths: the launcher's defaults). Their files carry their own versions, not the server's code: a
+           server update keeps them
 Every host runs at once, each within its policy (netfetch.POLICIES: rate, requests at once); a host stops for the day
 at its soft daily budget (the game needs the rest; --over-budget: on at half rate) and the next run resumes there.
-Finished keys go to <cache>/preload/<region>.done (the manifest; --recheck ignores it).
+Finished keys go to <world>/regions/<region>.done (the manifest; --recheck ignores it), what was asked to
+<world>/regions/<region>.json.
+
+Where (the user, 2026-10-28: pre-loaded data must not be a cache anyone can lose): into the world folder (--into world,
+the default; --world-dir, default the server's: apppaths.default_world_dir()), which the server reads before its cache
+and never evicts, caps or clears (server/cache.py "The world folder"). A file the world lacks but the cache has (a
+earlier visit's) is moved over instead of fetched again (cache.set_world's promote). The dry run checks the free space
+on the world folder's drive. --into cache: the download cache as before (its cap: --cache-cap, the estimate says when
+the region does not fit; its manifests in <cache>/preload). The day's request counts stay in the cache's netstats/.
 
 Run it with the game and the world server closed: the server keeps its own index of the cache (cache.py
-index.tsv) and the last process to save it wins. It refuses to run on the server's cache while something
-listens on the server's port (--allow-running: anyway). The cache cap is the one the mod set (--cache-cap to
-change it); the estimate says when the region does not fit.
+index.tsv) and the last process to save it wins. It refuses to run on the server's folders while something
+listens on the server's port (--allow-running: anyway).
 """
 import argparse
 import io
@@ -59,6 +73,8 @@ import mapcells  # noqa: E402
 import mapdata as mapdatamod  # noqa: E402
 import netfetch  # noqa: E402
 import overture  # noqa: E402
+import pacer  # noqa: E402
+import worldvol  # noqa: E402
 import pmtiles as pmtilesmod  # noqa: E402
 import regions as regmod  # noqa: E402
 import staging  # noqa: E402
@@ -87,7 +103,17 @@ EST = {
 EST["sky"] = (150e3, 100e3, 1.0)        # a skyline cell's few layers (the tall filter runs in the fetch plan)
 EST["edges"] = (1.2e6, 240e3, 2.0)      # a cell's edges: GeoJSON pages (~5x the npz); 236 KB a cell in Jeff's cache
 # hosts slower than the export estimate (the live Front Range run, 2026-10-28: seconds a request at 2 at once x 2)
-EST_HOST_SEC = {"apps.douglas.co.us": 3.6}
+EST_HOST_SEC = {"apps.douglas.co.us": 3.6, "utility.arcgis.com": 6.0}      # (La Plata County: 3-6 s an export)
+# The derive lane (seconds of one thread and bytes on disk a key; a 1.5 km test round Frederick on Jeff's PC,
+# 2026-10-28: 22 keys in 3 min on 2 threads): a colour-match field (11-21 s for a region's seams with their tiles'
+# fetches, once each, and the field from its 3 x 3), a de-shadow region (0.5 s where the sun fit fails on the plains;
+# a few seconds where it fits: a guess), a cell's trees (vegetation.py's ~3.5 s, ~200 KB), its road-width walls and
+# their index (~440 KB)
+EST_CPU = {"cm": (20.0, 5e3), "ds": (5.0, 300e3), "veg": (3.5, 200e3), "rw": (0.5, 440e3)}
+DERIVE_NAMES = {"cm": "colour-match fields (z12)", "ds": "de-shadow regions (z12)", "veg": "trees (z14 cells)",
+                "rw": "road-width walls (z14 cells)"}
+DERIVE_WORKERS = max(1, min(4, (os.cpu_count() or 2) // 4))     # a quarter of the CPU's threads, at most 4
+DERIVE_NICE = 10                # the process below normal priority while it derives (budget.lower_priority)
 ROADS_SHARE = 0.3               # a roads-only cell's share of a full one's bytes and time
 RANGE_BPS = 12e6                # bytes/s of one range request from download.mapterhorn.com (2026-10-28: 8 MB in 0.7 s)
 # The z14 cells' layers: all but the skyline's tall ones (skyline.py builds those per z12 cell)
@@ -98,6 +124,19 @@ WORKERS = {"dem": 16, "xyz": 8, "cell": 8}     # cells: local CPU (the S3 hosts'
 MID_PAD = 0.25                  # the DEM's z15-z13 reach this share of far_km round the region
 PROBE_Z, PROBE_PX = 13, 64      # coverage: one 64 px export per z13 tile, 16 px per z15 parent
 PROBE_SHARE = 0.05              # a z15 parent with this share of texels neither white nor black has data
+PROBE_MIN_TILES = 16            # a source whose box spans fewer z13 tiles is not probed: every parent in it is asked
+                                # (a town's cached MapServer draws nothing at the probe's 76 m texels: Vail's minScale)
+COVERAGE_SUB = os.path.join("preload", "coverage")     # the probes' folder under the target (world: worldvol.COVERAGE)
+DISK_SPARE = 2e9                # bytes left free on the world folder's drive after a run
+
+
+def default_world_dir():
+    """The server's own default (earthd --world-dir): the folder kept in app.json, else C:/beamng-earth/world."""
+    try:
+        import apppaths
+        return apppaths.saved_world_dir() or apppaths.default_world_dir()
+    except Exception:
+        return os.path.join(os.path.expanduser("~"), "beamng-earth", "world")
 
 
 def default_cache_dir():
@@ -232,6 +271,102 @@ def plan_colormatch(region):
     t = region.tiles(z, region.far_m + 2 * regmod.tile_m(region.home[0], z),
                      where=region.where("mapdata", lambda v: bool(v)))
     return [((src, z, x, y), t[(x, y)]) for x, y in region.ordered(z, t) if imagerymod.in_bounds(src, z, x, y)]
+
+
+def plan_derive(region, cells, kinds):
+    """[((kind, key), priority)] of the derive lane: the z12 regions (12, x, y) of the colour match ("cm") and the
+    de-shadow ("ds") reaching into the parts with map data (where the pre-load fetched their USGS and Sentinel-2
+    tiles), then the trees ("veg") and road widths ("rw") of the full cells (plan_cells' CELL_LAYERS keys)."""
+    out = []
+    if {"cm", "ds"} & set(kinds):
+        t = region.tiles(12, where=region.where("mapdata", lambda v: bool(v)))
+        for x, y in region.ordered(12, t):
+            for k in ("cm", "ds"):
+                if k in kinds:
+                    out.append(((k, (12, x, y)), t[(x, y)]))
+    for c, prio, layers in cells:
+        if layers is not CELL_LAYERS:
+            continue
+        for k in ("veg", "rw"):
+            if k in kinds:
+                out.append(((k, c), prio))
+    return out
+
+
+def derive_makers(target, img, dem, md, kinds):
+    """{kind: build(key) -> True when computed now, False when on disk already} for the derive lane, the producers
+    rooted at the target folder (the world's) as the server's are at its cache; and {kind: on_disk(key)}."""
+    build, have = {}, {}
+    if "cm" in kinds:
+        import colormatch
+        cm = colormatch.ColorMatch(target, "s2")
+        cm.bind(img)
+        build["cm"] = lambda k: cm.build(k[1:])
+        have["cm"] = lambda k: cm._on_disk(k[1:]) is not None
+    if "ds" in kinds:
+        import deshadow
+        ds = deshadow.Deshadow(target, dem, "full")         # (its regions serve every mode)
+        ds.bind(img)
+        build["ds"] = lambda k: ds.build(k[1:])
+        have["ds"] = lambda k: cachemod.exists(ds._paths(k[1:])[0])
+    if "veg" in kinds and md is not None:
+        import vegetation
+        veg = vegetation.Vegetation(md, target)
+        veg.dem = dem
+
+        def veg_build(k):
+            if veg.ready(k):
+                return False
+            veg.cell((k.z, k.x, k.y))
+            if not veg.ready(k):        # (built without the DEM's answer: not kept, vegetation._load)
+                raise RuntimeError(f"trees of {k}: not kept (the DEM did not answer)")
+            return True
+        build["veg"] = veg_build
+        have["veg"] = veg.ready
+    if "rw" in kinds and md is not None:
+        import roadwidth
+        rw = roadwidth.RoadWidths(lambda key: md.cell(key, layers=("buildings",), kind="demand").layers.get("buildings"),
+                                  roadwidth.store_dir(target, md))
+        build["rw"] = rw.store
+        have["rw"] = lambda k: roadwidth.complete_store(os.path.join(rw.store_dir, str(k.z), str(k.x), f"{k.y}.npy"))
+    return build, have
+
+
+def derive_tok(kind, key):
+    return tok(kind, key[0], key[1], key[2]) if isinstance(key, tuple) else tok(kind, key.z, key.x, key.y)
+
+
+def derive_all(net, items, build, manifest, workers=DERIVE_WORKERS, duty=1.0, stop=None, nice=DERIVE_NICE):
+    """The derive lane: items [((kind, key), priority)] on `workers` threads, each paced to `duty` of the time
+    (pacer.py: memory bandwidth for the game), the process lowered by `nice` (below normal on Windows). Returns the
+    Run."""
+    import budget
+    try:
+        how = budget.lower_priority(nice)
+        if how:
+            print(f"  derive: {workers} thread{'s' if workers != 1 else ''}, process {how}", flush=True)
+    except OSError as e:
+        print(f"  derive: priority not lowered ({e})", flush=True)
+    run = Run(net, stop=stop)
+    paced = threading.local()
+
+    def one(item, prio):
+        kind, key = item
+        t = derive_tok(kind, key)
+        if t in manifest:
+            return False
+        if not getattr(paced, "on", False):
+            pacer.enable(duty)
+            paced.on = True
+        got = build[kind](key)
+        manifest.add(t)
+        return got
+    ln = run.lane("derive", "local CPU", workers, one)
+    for item, prio in items:
+        if derive_tok(*item) not in manifest:
+            ln.put(prio, item)
+    run.go()
+    return run
 
 
 def plan_skyline(region):
@@ -369,15 +504,24 @@ def classify_probe(rgb, cells=4):
     """[[bool]] per (row, column) block of a probe image: has data (texels neither white nor black). Pure."""
     a = np.asarray(rgb)
     data = (np.minimum(np.minimum(a[..., 0], a[..., 1]), a[..., 2]) < imagerymod.NODATA_WHITE_MIN) & \
-           (np.maximum(np.maximum(a[..., 0], a[..., 1]), a[..., 2]) > imagerymod.NODATA_MAX)
+           (np.maximum(np.maximum(a[..., 0], a[..., 1]), a[..., 2]) > imagerymod.NODATA_MAX) & \
+           ~imagerymod.fill_texels(a, "grey")         # (La Plata County's fill)
     h, w = data.shape
     bh, bw = h // cells, w // cells
     return [[bool(data[j * bh:(j + 1) * bh, i * bw:(i + 1) * bw].mean() > PROBE_SHARE) for i in range(cells)]
             for j in range(cells)]
 
 
+def box_tiles(src, z=PROBE_Z):
+    """How many zoom-z tiles a source's box spans."""
+    s, w, n, e = src.bounds
+    x0, y0 = mapcells.tile_xy(n, w, z)
+    x1, y1 = mapcells.tile_xy(s, e, z)
+    return (int(x1) - int(x0) + 1) * (int(y1) - int(y0) + 1)
+
+
 def coverage_path(cache_dir, src):
-    return os.path.join(cache_dir, "preload", "coverage", f"{src.name}.json")
+    return os.path.join(cache_dir, COVERAGE_SUB, f"{src.name}.json")
 
 
 def load_coverage(cache_dir, src):
@@ -408,7 +552,7 @@ def probe_coverage(net, cache_dir, region, chain, skip=(), stop=None, write=True
     from PIL import Image
     # (a statewide source with a resolver, the Planetary Computer's NAIP: data in the whole state, a 404 past it; its
     # probe would be one request per z13 tile of the state)
-    srcs = [s for s in export_sources(chain, skip) if s.bounds and not s.resolver]
+    srcs = [s for s in export_sources(chain, skip) if s.bounds and not s.resolver and box_tiles(s) >= PROBE_MIN_TILES]
     z13 = region.tiles(PROBE_Z, where=region.where("exports", bool))     # (a tier without photos asks none)
     out = {}
 
@@ -507,13 +651,15 @@ def export_state(img, src, key):
     z, x, y = key
     last = (1 << src.export) - 1
     path, miss = img._paths(src, z, x | last, y | last)
-    if not (os.path.exists(path) or os.path.exists(miss)):
+    if not (cachemod.exists(path) or cachemod.exists(miss)):
         return False, False
+    gaps = False
     for j in range(1 << src.export):
         for i in range(1 << src.export):
-            if os.path.exists(img._paths(src, z, x + i, y + j)[1]):
-                return True, True
-    return True, False
+            p, m = img._paths(src, z, x + i, y + j)
+            cachemod.resolve(p)         # (into the world: a child only the cache has goes over with its parent)
+            gaps = cachemod.exists(m) or gaps
+    return True, gaps
 
 
 # --- the run ---------------------------------------------------------------------------------------------------------
@@ -674,7 +820,7 @@ def run_all(net, img, dem, md, plan, manifest, only, over_budget=False, stop=Non
                 if t in manifest:
                     return False
                 path, miss = img._paths(*k)
-                if os.path.exists(path) or os.path.exists(miss):
+                if cachemod.exists(path) or cachemod.exists(miss):
                     manifest.add(t)
                     return False
                 if not run.budget_ok(run.lanes[name]):
@@ -702,6 +848,7 @@ def run_all(net, img, dem, md, plan, manifest, only, over_budget=False, stop=Non
         for key, prio, layers in plan["cells"]:
             if cell_tok(key, layers) not in manifest:
                 ln.put(prio, (key, layers))
+        deck_lidar_lane(run, md, plan["cells"], manifest)
         if plan.get("skyline"):
             def sky_one(item, prio):
                 key, layers = item
@@ -724,7 +871,7 @@ def run_all(net, img, dem, md, plan, manifest, only, over_budget=False, stop=Non
                 t = tok("edges", key.z, key.x, key.y)
                 if t in manifest:
                     return False
-                if os.path.exists(edges_path(dc, key)):
+                if cachemod.exists(edges_path(dc, key)):
                     manifest.add(t)
                     return False
                 if not run.budget_ok(run.lanes["DRCOG edges"]):
@@ -739,6 +886,50 @@ def run_all(net, img, dem, md, plan, manifest, only, over_budget=False, stop=Non
                     ln.put(prio, key)
     run.go()
     return run
+
+
+def deck_lidar_lane(run, md, cells, manifest):
+    """The lidar's surface (decklidar.Dsm) of the cells whose roads have a bridge or a motorway or trunk: the decks'
+    heights and the motorways' fills (grading.lidar_lift) are built from it, so a place loads without the tile service
+    (2026-10-28: the Mousetrap's decks and I-25's fills off the lidar; Jeff's rule, everything pre-built, nothing
+    streamed). A cell without them is skipped (a few MB each: the 16 tiles of a z14 cell)."""
+    import decklidar
+    import grading
+    import lidarheights
+    import roads as roadsmod
+    if not decklidar.ON or getattr(md, "raw_dir", None) is None:
+        return
+    dsm = decklidar.Dsm(md.raw_dir, md.fetcher)
+
+    def wants(key):
+        feats = md.cell(key, layers=("roads",), kind="demand").layers.get("roads")
+        if feats is None or not len(feats):
+            return False
+        specs = roadsmod.road_specs(feats)
+        if any(grading.lidar_ok(s) for s in specs):
+            return True
+        return any(s is not None for s in roadsmod.bridge_specs(feats))
+
+    def dsm_one(key, prio):
+        t = tok("dsm", key.z, key.x, key.y)
+        if t in manifest:
+            return False
+        path = os.path.join(dsm.dir, str(key.z), str(key.x), f"{key.y}.npz")
+        if cachemod.exists(path):
+            manifest.add(t)
+            return False
+        if not wants(key):
+            manifest.add(t)
+            return False
+        if not run.budget_ok(run.lanes["deck lidar"]):
+            return "deferred"
+        dsm.mosaic(key, kind="demand")
+        manifest.add(t)
+        return True
+    ln = run.lane("deck lidar", netfetch.host_of(lidarheights.TILES), 2, dsm_one)
+    for key, prio, _layers in cells:
+        if tok("dsm", key.z, key.x, key.y) not in manifest:
+            ln.put(prio, key)
 
 
 def edges_path(dc, key):
@@ -953,7 +1144,7 @@ def estimate(region, net, img, dem, md, plan, manifest, only, release, coverage=
     if "imagery" in only:
         for src, keys in plan["xyz"]:
             todo = [k for k, _ in keys if tok("xyz", src.name, *k[1:]) not in manifest
-                    and not any(os.path.exists(p) for p in img._paths(*k))]
+                    and not any(cachemod.exists(p) for p in img._paths(*k))]
             zs = sorted({k[1] for k, _ in keys})
             row(f"{src.name} z{zs[0]}-z{zs[-1]} (XYZ)" if zs else src.name, netfetch.host_of(src.url), len(keys),
                 len(todo), EST["xyz"],
@@ -996,7 +1187,7 @@ def estimate(region, net, img, dem, md, plan, manifest, only, release, coverage=
         import drcog
         dc = drcog.Drcog(md.raw_dir, net)
         todo = [c for c, _ in plan["edges"] if tok("edges", c.z, c.x, c.y) not in manifest
-                and not os.path.exists(edges_path(dc, c))]
+                and not cachemod.exists(edges_path(dc, c))]
         row("DRCOG edges of pavement (z14 cells)", drcog.HOST, len(plan["edges"]), len(todo), EST["edges"],
             net.policy(drcog.HOST).max_conc or 1)
     print(f"  {'':40s} {'needed':>7s} {'to fetch':>8s} {'MB down':>8s} {'MB disk':>8s} {'hours':>6s} {'req/s':>6s} "
@@ -1030,7 +1221,34 @@ def estimate(region, net, img, dem, md, plan, manifest, only, release, coverage=
         late = [r["name"] for r in rows if r["days"] > 1]
         print(f"  ! {days} days: past a host's daily budget its lane stops until the next UTC day ({', '.join(late)});"
               " run it again each day (or --over-budget: on at half rate)")
-    return dict(rows=rows, down=down, wrote=wrote, hours=longest, days=days, requests=total_req, edge=edge)
+    derive = estimate_derive(plan.get("derive") or [], manifest, plan.get("derive_have") or {},
+                             plan.get("derive_workers", DERIVE_WORKERS))
+    return dict(rows=rows, down=down, wrote=wrote + derive["wrote"], hours=longest, days=days, requests=total_req,
+                edge=edge, derive=derive)
+
+
+def estimate_derive(items, manifest, have, workers):
+    """Print the derive lane's rows (keys, to do, MB on disk, CPU hours on `workers` threads); its totals."""
+    if not items:
+        return dict(wrote=0.0, hours=0.0)
+    counts = {}
+    for (kind, key), _ in items:
+        n = counts.setdefault(kind, [0, 0])
+        n[0] += 1
+        if derive_tok(kind, key) not in manifest and not (kind in have and have[kind](key)):
+            n[1] += 1
+    print(f"  then on this PC, after the downloads ({workers} thread{'s' if workers != 1 else ''}, below normal "
+          "priority):")
+    wrote = hours = 0.0
+    for kind, (n, todo) in counts.items():
+        sec, size = EST_CPU[kind]
+        h = todo * sec / workers / 3600
+        wrote += todo * size
+        hours += h
+        print(f"  {DERIVE_NAMES[kind]:40s} {n:7d} {todo:8d} {'':8s} {todo * size / 1e6:8.0f} {h:6.1f}")
+    print(f"  {'derive total':40s} {sum(v[0] for v in counts.values()):7d} {sum(v[1] for v in counts.values()):8d} "
+          f"{'':8s} {wrote / 1e6:8.0f} {hours:6.1f}")
+    return dict(wrote=wrote, hours=hours)
 
 
 def edge_parents(exports, coverage):
@@ -1073,6 +1291,26 @@ def check_cap(cache_dir, cap_gb, wrote, dry_run):
     return True
 
 
+def check_disk(world_dir, wrote):
+    """Print whether the world folder's drive has room for what this run writes; True when it does."""
+    import shutil
+    d = world_dir
+    while d and not os.path.isdir(d):
+        d = os.path.dirname(d) if os.path.dirname(d) != d else None
+    try:
+        free = shutil.disk_usage(d or world_dir).free
+    except OSError as e:
+        print(f"  world folder: free space unknown ({e})")
+        return True
+    print(f"  world folder: {free / GB:.1f} GB free on its drive; this run writes ~{wrote / GB:.1f} GB "
+          "(never evicted)")
+    if wrote > free - DISK_SPARE:
+        print(f"  ! does not fit: {wrote / GB:.1f} GB to write, {free / GB:.1f} GB free (keep {DISK_SPARE / GB:.0f} GB "
+              "spare): free some space, --world-dir on a larger drive, or pre-load a smaller region", flush=True)
+        return False
+    return True
+
+
 # --- main ------------------------------------------------------------------------------------------------------------
 def list_regions(data):
     print("Named regions (tools/regions.json):")
@@ -1108,6 +1346,10 @@ def main(argv=None):
     ap.add_argument("--only", default="dem,imagery,mapdata", help="comma-separated: dem, imagery, mapdata")
     ap.add_argument("--skip", default="", help="imagery sources to leave out, comma-separated (e.g. naip,naipusda)")
     ap.add_argument("--release", default=overture.RELEASE, help="Overture release (default: the pinned one)")
+    ap.add_argument("--into", choices=("world", "cache"), default="world",
+                    help="where the files go: the world folder (default: kept for good, read first by the server) or "
+                         "the download cache (evicted under its cap)")
+    ap.add_argument("--world-dir", default=None, help="the world folder (default: the server's)")
     ap.add_argument("--cache-dir", default=None, help="the download cache (default: the server's)")
     ap.add_argument("--cache-cap", type=float, default=None, metavar="GB",
                     help="the cache's cap (default: the one the mod set, else cache.DEFAULT_CAP_GB; 0 = unlimited)")
@@ -1130,6 +1372,19 @@ def main(argv=None):
     ap.add_argument("--skyline", choices=("on", "off"), default="on",
                     help="the skyline's tall buildings and towers per z12 cell round the region, as the server's "
                          "--skyline (default on)")
+    ap.add_argument("--derive", choices=("on", "off"), default="on",
+                    help="after the downloads, work out on this PC what the server would on a first visit: the colour "
+                         "match's fields and the de-shadow regions, the trees and the road widths (each as its flag)")
+    ap.add_argument("--deshadow", choices=("full", "off"), default="full",
+                    help="the de-shadow regions, as the server's --deshadow (the launcher's: full)")
+    ap.add_argument("--trees", choices=("on", "off"), default="on",
+                    help="the trees per cell, as the server's --trees (the launcher's: on)")
+    ap.add_argument("--road-widths", choices=("on", "off"), default="on",
+                    help="the road widths' walls per cell, as the server's --road-widths (default on)")
+    ap.add_argument("--derive-workers", type=int, default=DERIVE_WORKERS,
+                    help=f"the derive lane's threads (default {DERIVE_WORKERS}: a quarter of this CPU's, at most 4)")
+    ap.add_argument("--derive-duty", type=float, default=1.0,
+                    help="each derive thread busy at most this share of the time (pacer.py; e.g. 0.5 while playing)")
     ap.add_argument("--lidar-heights", choices=("on", "off"), default="off",
                     help="the 3DEP lidar building heights in the map cells, as the server's --lidar-heights")
     ap.add_argument("--allow-running", action="store_true",
@@ -1141,12 +1396,31 @@ def main(argv=None):
         return 0
     only = {s.strip() for s in a.only.split(",") if s.strip()}
     skip = {s.strip() for s in a.skip.split(",") if s.strip()}
+    global COVERAGE_SUB
     cache_dir = os.path.abspath(a.cache_dir or default_cache_dir())
+    world_dir = os.path.abspath(a.world_dir or default_world_dir())
+    into_world = a.into == "world"
+    target = world_dir if into_world else cache_dir
+
+    def same(x, y):
+        return os.path.normcase(x) == os.path.normcase(os.path.abspath(y))
     if not a.dry_run and not a.allow_running and server_listening() \
-            and os.path.normcase(cache_dir) == os.path.normcase(os.path.abspath(default_cache_dir())):
-        print(f"A world server is listening on 127.0.0.1:{SERVER_PORT} and uses {cache_dir}: close the game and the "
-              "server first (or --cache-dir elsewhere, or --allow-running).", file=sys.stderr)
+            and (same(cache_dir, default_cache_dir()) or into_world and same(world_dir, default_world_dir())):
+        print(f"A world server is listening on 127.0.0.1:{SERVER_PORT} and uses {target}: close the game and the "
+              "server first (or --world-dir / --cache-dir elsewhere, or --allow-running).", file=sys.stderr)
         return 2
+    if into_world:
+        if cachemod.set_world(world_dir, cache_dir, promote="look" if a.dry_run else True, env=False) is None:
+            print(f"The world folder {world_dir} and the cache {cache_dir} overlap: pick a world folder outside the "
+                  "cache (--world-dir).", file=sys.stderr)
+            return 2
+        if not a.dry_run and worldvol.ensure(world_dir) != worldvol.VERSION:
+            print(f"{world_dir} holds another layout (its {worldvol.VERSION_FILE}): left alone.", file=sys.stderr)
+            return 2
+        mapdatamod.MIRROR_MB = 0        # (the uncompressed mirrors are the server's, in its cache)
+        COVERAGE_SUB = worldvol.COVERAGE
+    else:
+        COVERAGE_SUB = os.path.join("preload", "coverage")
 
     os.environ["BNE_DRCOG"] = "1" if a.drcog == "on" else "0"   # (mapdata names a cell's buildings by it)
     os.environ["BNE_LIDAR_HEIGHTS"] = "1" if a.lidar_heights == "on" else "0"   # (and builds their heights with it)
@@ -1166,25 +1440,27 @@ def main(argv=None):
     if a.far_km is not None:
         region.far_m = a.far_km * 1000.0
 
-    disk = None if a.dry_run else cachemod.Cache(cache_dir, a.cache_cap)
-    dem = demmod.Dem(os.path.join(cache_dir, "dem"), fetcher=net)
-    img = imagerymod.Imagery(os.path.join(cache_dir, "imagery"), imagerymod.DEFAULT_CHAIN, fetcher=net)
-    md = mapdatamod.MapData(cache_dir, fetcher=net, release=a.release) if "mapdata" in only else None
+    # (the world: no cache bookkeeping; the files the cache has are moved over as they are asked: cache.resolve)
+    disk = None if a.dry_run or into_world else cachemod.Cache(cache_dir, a.cache_cap)
+    dem = demmod.Dem(os.path.join(target, "dem"), fetcher=net)
+    img = imagerymod.Imagery(os.path.join(target, "imagery"), imagerymod.DEFAULT_CHAIN, fetcher=net)
+    md = mapdatamod.MapData(target, fetcher=net, release=a.release) if "mapdata" in only else None
     if disk is not None:
         dem.disk = img.disk = disk
-    manifest = Manifest(None if a.dry_run else os.path.join(cache_dir, "preload", f"{slug(region.name)}.done"),
-                        read=not a.recheck)
+    man_path = (worldvol.manifest_path(world_dir, slug(region.name)) if into_world else
+                os.path.join(cache_dir, "preload", f"{slug(region.name)}.done"))
+    manifest = Manifest(None if a.dry_run else man_path, read=not a.recheck)
     if a.dry_run and not a.recheck:
-        manifest.done = Manifest(os.path.join(cache_dir, "preload", f"{slug(region.name)}.done")).done
+        manifest.done = Manifest(man_path).done
 
     s, w, n, e = region.bounds
     print(f"Pre-load {region.name}{': ' + region.title if region.title else ''}\n  {len(region.parts)} parts, "
           f"~{region.area_km2():.0f} km2 (overlaps counted twice), {s:.2f}..{n:.2f} N {w:.2f}..{e:.2f} E, coarse "
-          f"rings {region.far_m / 1000:g} km round it, into {cache_dir}"
+          f"rings {region.far_m / 1000:g} km round it, into {target}"
           + (f"; manifest: {len(manifest.done)} keys done" if manifest.done else ""))
     stop = threading.Event()
     chain = [imagerymod.SOURCES[nm] for nm in imagerymod.DEFAULT_CHAIN]
-    dead = {} if a.no_host_check else check_hosts(net, region, chain, only, skip, a.dem_source, cache_dir)
+    dead = {} if a.no_host_check else check_hosts(net, region, chain, only, skip, a.dem_source, target)
     for name, (host, err) in dead.items():
         print(f"  ! left out: {name} ({host} does not answer: {err})", flush=True)
     skip |= set(dead) - {"dem"}
@@ -1192,7 +1468,7 @@ def main(argv=None):
         only.discard("dem")
     coverage = None
     if "imagery" in only:
-        coverage = probe_coverage(net, cache_dir, region, chain, skip, stop, new_probes=not a.no_probe)
+        coverage = probe_coverage(net, target, region, chain, skip, stop, new_probes=not a.no_probe)
     plan = {
         "dem": plan_dem(region) if "dem" in only else [],
         "xyz": plan_xyz(region, skip=skip) if "imagery" in only else [],
@@ -1203,6 +1479,16 @@ def main(argv=None):
     }
     if "imagery" in only and a.colormatch == "on" and "usgs" not in skip:
         plan["xyz"].append((imagerymod.SOURCES["eox2023"], plan_colormatch(region)))
+    kinds = set()
+    if a.derive == "on":
+        if "imagery" in only and "usgs" not in skip:
+            kinds |= {k for k, on in (("cm", a.colormatch == "on"), ("ds", a.deshadow != "off")) if on}
+        if md is not None:
+            kinds |= {k for k, on in (("veg", a.trees == "on"), ("rw", a.road_widths == "on")) if on}
+    if kinds:
+        plan["derive"] = plan_derive(region, plan["cells"], kinds)
+        derive_build, plan["derive_have"] = derive_makers(target, img, dem, md, kinds)
+        plan["derive_workers"] = max(1, a.derive_workers)
     if plan["dem"] and a.dem_source == "pmtiles":
         todo = [(k, p) for k, p in plan["dem"] if tok("dem", *k) not in manifest and not dem.has(*k)]
         t0 = time.monotonic()
@@ -1213,7 +1499,10 @@ def main(argv=None):
         except (netfetch.FetchError, pmtilesmod.PMTilesError) as e:
             print(f"  ! Mapterhorn's archives cannot be read ({e}): one request a tile instead", flush=True)
     est = estimate(region, net, img, dem, md, plan, manifest, only, a.release, coverage)
-    check_cap(cache_dir, a.cache_cap, est["wrote"], a.dry_run)
+    if into_world:
+        check_disk(world_dir, est["wrote"])
+    else:
+        check_cap(cache_dir, a.cache_cap, est["wrote"], a.dry_run)
     if a.dry_run:
         net.close()
         if md is not None:
@@ -1226,15 +1515,30 @@ def main(argv=None):
     signal.signal(signal.SIGINT, on_int)
     t0 = time.monotonic()
     run = None
+    started = time.strftime("%Y-%m-%d %H:%M:%S")
+    if into_world:
+        meta = worldvol.read_meta(world_dir, slug(region.name))
+        worldvol.write_meta(world_dir, slug(region.name), name=region.name, title=region.title or "",
+                            bounds=list(region.bounds), area_km2=round(region.area_km2()),
+                            only=sorted(only), first=meta.get("first") or started, started=started)
     try:
         run = run_all(net, img, dem, md, plan, manifest, only, a.over_budget, stop)
+        if plan.get("derive") and not stop.is_set():
+            print(f"derive: {len(plan['derive'])} keys on this PC", flush=True)
+            drun = derive_all(net, plan["derive"], derive_build, manifest, plan["derive_workers"], a.derive_duty,
+                              stop)
+            run.lanes.update(drun.lanes)
     finally:
         manifest.close()
         if md is not None:
             md.close()
         net.close()
-        disk.close()
+        if disk is not None:
+            disk.close()
     left = sum(ln.total - ln.done + ln.deferred + ln.failed for ln in run.lanes.values()) if run else 0
+    if into_world:
+        worldvol.write_meta(world_dir, slug(region.name), ended=time.strftime("%Y-%m-%d %H:%M:%S"),
+                            complete=not left and not stop.is_set(), keys=len(manifest.done), left=left)
     print(f"done in {(time.monotonic() - t0) / 60:.1f} min{' (stopped)' if stop.is_set() else ''}"
           + (f"; {left} keys left (failed, stopped or past a budget): run it again to resume" if left else
              "; everything there"))

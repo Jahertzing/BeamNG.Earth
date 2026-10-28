@@ -18,6 +18,7 @@ A layer of its own is not needed: mapdata joins the tags into the roads layer wh
 read the same cell file, so a road's lanes and width agree everywhere). Unreachable: the cell keeps no tags and the
 roads use their width guesses (roads.carriageway), as before.
 """
+import json
 import logging
 import math
 import os
@@ -162,18 +163,91 @@ class Regional:
         return out
 
 
+# The turn lanes of a segment Overture merged from several ways (its src_ways: the approach and the pocket way after it)
+# are the way's at the end its lanes lead to: turn:lanes:forward the last way's, :backward the first's, turn:lanes (one
+# way) both (TURN_START: the first's, for a road drawn against its traffic); every other key the segment's own way's.
+TURN_END_KEYS = ("turn:lanes", "turn:lanes:forward")
+TURN_START_KEYS = ("turn:lanes:backward",)
+TURN_START = "osm_turn_lanes_start"
+
+
 def join_regional(feats, tags):
     """The regional tags (Regional.tags) of each road feature's way as text columns (regional_column; "" where none),
-    for every key in REGIONAL_KEYS. Only a feature's own way counts (a segment from a relation has none here: the
-    same-named way of join() may be the other carriageway, its forward / backward lanes the wrong way round)."""
+    for every key in REGIONAL_KEYS, and TURN_START. Only a feature's own ways count (segment_ways: a route relation's
+    segment its way among its sources; never the same-named way of join(), which may be the other carriageway, its
+    forward / backward lanes the wrong way round)."""
     import mapgeom as mg
-    recs = feats.attrs.get("src_record")
     n = len(feats)
-    ids = [way_id(str(recs[i])) if recs is not None else None for i in range(n)]
+    sw = [segment_ways(feats, i) for i in range(n)]
+    main = [main_way(feats, i, sw[i]) for i in range(n)]
+    first = [min(w, key=lambda x: x[1])[0] if w else None for w in sw]
+    last = [max(w, key=lambda x: x[2])[0] if w else None for w in sw]
     for k in REGIONAL_KEYS:
+        src = last if k in TURN_END_KEYS else first if k in TURN_START_KEYS else main
         feats.attrs[regional_column(k)] = mg.text_column([tags.get(w, {}).get(k, "") if w is not None else ""
-                                                          for w in ids])
+                                                          for w in src])
+    feats.attrs[TURN_START] = mg.text_column([tags.get(w, {}).get("turn:lanes", "") if w is not None else ""
+                                              for w in first])
     return feats
+
+
+def segment_ways(feats, i):
+    """[(way id, from, to)]: the OSM ways of road feature i and the share of it each gives (its src_ways; a cell built
+    without them: its first source's way, the whole of it), [] none."""
+    col = feats.attrs.get("src_ways")
+    out = []
+    if col is not None and str(col[i]).startswith("["):
+        try:
+            recs = json.loads(str(col[i]))
+        except ValueError:
+            recs = []
+        for r in recs if isinstance(recs, list) else ():
+            w = way_id(str(r.get("record_id") or "")) if isinstance(r, dict) else None
+            if w is None:
+                continue
+            b = r.get("between")
+            try:
+                a0, a1 = (float(b[0]), float(b[1])) if b else (0.0, 1.0)
+            except (TypeError, ValueError, IndexError):
+                a0, a1 = 0.0, 1.0
+            out.append((w, a0, a1))
+    if not out:
+        recs = feats.attrs.get("src_record")
+        w = way_id(str(recs[i])) if recs is not None else None
+        if w is not None:
+            out.append((w, 0.0, 1.0))
+    return out
+
+
+def join_parts(feats, tags):
+    """The osm_parts column: per segment Overture merged from several ways (segment_ways), JSON [[from, to, lanes or
+    null], ...] in order along it (Layercake's lanes of each way: tags, join's), "" for the others. roads reads it (its
+    pocket over the pocket way's share, its width by part where OSM's lanes are the ones in use)."""
+    import mapgeom as mg
+    out = []
+    for i in range(len(feats)):
+        ways = sorted(segment_ways(feats, i), key=lambda x: x[1])
+        if len(ways) < 2:
+            out.append("")
+            continue
+        parts = []
+        for w, a, b in ways:
+            n = tags.get(w, {}).get("lanes")
+            parts.append([round(a, 6), round(b, 6), int(n) if n is not None else None])
+        out.append(json.dumps(parts, separators=(",", ":")))
+    feats.attrs["osm_parts"] = mg.text_column(out)
+    return feats
+
+
+def main_way(feats, i, ways=None):
+    """The way of road feature i: its first source's (as before), else (a route relation first) the one of its ways
+    that gives most of it; None."""
+    recs = feats.attrs.get("src_record")
+    w = way_id(str(recs[i])) if recs is not None else None
+    if w is not None:
+        return w
+    ways = segment_ways(feats, i) if ways is None else ways
+    return max(ways, key=lambda x: (x[2] - x[1], -x[1]))[0] if ways else None
 
 
 def way_id(record):
@@ -459,9 +533,8 @@ def join(feats, tags):
     known way (from a relation) takes the tags of the same-named way around it (_named_way), but its oneway: that way may
     be one carriageway of the road the segment draws."""
     import mapgeom as mg
-    recs = feats.attrs.get("src_record")
     n = len(feats)
-    ids = [way_id(str(recs[i])) if recs is not None else None for i in range(n)]
+    ids = [main_way(feats, i) for i in range(n)]      # (a route relation's segment: its way among its sources)
     by_name = {}
     for w, t in tags.items():
         if t.get("name") and all(k in t for k in ("bx0", "by0", "bx1", "by1")):

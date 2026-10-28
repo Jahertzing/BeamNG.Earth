@@ -88,6 +88,8 @@ nightlights.providers.tunnel = function() return ambience.tunnelLights() end
 gasstations.onCollide = roads.markCollisionDirty
 local navgraph = require('beamngEarth/navgraph')
 local postfx = require('beamngEarth/postfx')       -- no far depth-of-field blur in our level
+-- haze.lua (the sky's aerosol: distance haze, hazeStrength) and grade.lua (our colour grade post effect,
+-- colorGrade) are required where they are used: the main chunk is at Lua's 200-local limit.
 local gps = require('beamngEarth/gps')               -- the game's GPS route to a place picked on the world map
 local collisionfoci = require('beamngEarth/collisionfoci') -- other vehicles' collision islands
 local terrainpatch = require('beamngEarth/terrainpatch')   -- ground under the islands off the terrain block
@@ -1020,6 +1022,11 @@ local function onMessage(msg)
     roads.onFarTile(msg, st.anchorId, 'B')
   elseif t == 'brfar_drop' then
     roads.onFarDrop(msg, 'B')
+  elseif t == 'grfar_tile' then
+    -- grass cards past the 3D grass (server grasscards.py, --grass-cards on): render-only, roads.lua
+    roads.onFarTile(msg, st.anchorId, 'G')
+  elseif t == 'grfar_drop' then
+    roads.onFarDrop(msg, 'G')
   elseif t == 'where_result' then
     statusbar.onResult(msg)
   elseif t == 'place_previews_ready' then      -- the level select's place pictures are there (levelinfo.lua)
@@ -1067,8 +1074,18 @@ local function onMessage(msg)
     -- the settings page's "Cache folder" and "BeamMP launcher": the paths now, and the answer to the last choice
     local r = type(msg.result) == 'table' and msg.result or nil
     if r then appPathAnswers = appPathAnswers + 1 end
+    -- the world folder (what the pre-load installed, never cleared): its size (-1 while counted) and regions
+    local regions = {}
+    for _, g in ipairs(type(msg.worldRegions) == 'table' and msg.worldRegions or {}) do
+      if type(g) == 'table' then
+        regions[#regions + 1] = { name = tostring(g.name or ''), title = tostring(g.title or ''),
+          keys = tonumber(g.keys) or 0, last = tostring(g.last or ''), complete = g.complete ~= false }
+      end
+    end
     appPaths = { cacheDir = tostring(msg.cacheDir or ''), cacheNext = tostring(msg.cacheNext or ''),
       beammp = tostring(msg.beammp or ''), answers = appPathAnswers,
+      worldDir = msg.worldDir and tostring(msg.worldDir) or nil, worldBytes = tonumber(msg.worldBytes),
+      worldFiles = tonumber(msg.worldFiles), worldRegions = regions,
       result = r and { what = tostring(r.what or ''), ok = r.ok == true, text = tostring(r.text or '') }
         or (appPaths and appPaths.result) }
   elseif t == 'cache' then
@@ -1862,6 +1879,13 @@ local function onUpdate(dtReal, dtSim)
   for k in pairs(marks) do marks[k] = nil end
   local t = hitchClock()
   postfx.update(st.inOurLevel)
+  do
+    local look = { haze = require('beamngEarth/haze'), grade = require('beamngEarth/grade') }
+    local okH, errH = pcall(look.haze.update, st.inOurLevel, st.player and st.player.z)
+    if not okH and not st.hazeWarned then st.hazeWarned = true; log('W', 'beamngEarth', 'haze: ' .. tostring(errH)) end
+    local okG, errG = pcall(look.grade.update, st.inOurLevel)
+    if not okG then look.grade.setMode('off'); log('W', 'beamngEarth', 'grade: ' .. tostring(errG) .. '; off this session') end
+  end
   local stg = rawget(_G, 'beamngEarth_settings')
   if stg and stg.redirectBigMap then stg.redirectBigMap(st.inOurLevel) end
   if st.inOurLevel then gps.update(st.anchor, st.player) end
@@ -2114,6 +2138,8 @@ local function onClientEndMission()
   hudapps.unhookCityZone()
   hudapps.unhookMinimapNorth()
   postfx.restore()
+  require('beamngEarth/haze').restore()
+  require('beamngEarth/grade').restore()
   pcall(terrainpatch.clear)
   pcall(gasstations.reset)
   pcall(farcars.reset)
@@ -2178,6 +2204,8 @@ local function onExtensionUnloaded()
   terrain.delete()
   -- M1h: the level stays loaded; give it back its sky and view distance
   horizon.restoreSky()
+  require('beamngEarth/haze').restore()
+  require('beamngEarth/grade').restore()
   if st.visibleDistance and horizon.setVisibleDistance(VISIBLE_DISTANCE) then st.visibleDistance = nil end
 end
 

@@ -60,6 +60,7 @@ from dataclasses import dataclass, field
 
 import numpy as np
 
+import cache
 import geodesy
 import gradesep
 import mapcells
@@ -91,7 +92,12 @@ VERSION = 2                     # pipeline version: bump when what a cell's laye
 # roads 6: rail segments' rail_flags (is_bridge / is_tunnel) in the "flags" rule (railways.py, mpsteppe's PR #287)
 # (osmtags osm_highway, construction/proposed roads left out, GitHub #184: only cells fetched after it; the cached
 # ones get it with the next Overture release bump, not a roads 7 here: every player's roads fetched again)
-LAYER_VERSIONS = {"roads": 6}
+# roads 7: src_ways, a segment's OSM ways and their shares of it (overture._WAYS): a segment from a route relation
+# joined to its own way, the turn lanes of a merged segment from the way at each end (osmtags.join_regional; Colfax and
+# CO-52 had no regional tags, 2026-10-28)
+# roads 8: osm_parts, a merged segment's ways' shares and lane counts (osmtags.join_parts: its pocket over its own way's
+# share, its lanes by part, roads.pocket_profiles)
+LAYER_VERSIONS = {"roads": 8}
                                 # (2: clipped polygon pieces `own`ed by their cell, exact cell edges,
                                 # the exact no-area test of clipped rings)
 VECTOR_LAYERS = ("roads", "connectors", "buildings", "water", "land_use", "infrastructure", "building_parts", "places",
@@ -369,7 +375,7 @@ class MapData:
     # --- one layer -------------------------------------------------------------------------------
     def has(self, key, layer):
         """True when the layer's file exists (not read: cheap enough for the event loop)."""
-        return os.path.exists(self.path(key, layer))
+        return cache.exists(self.path(key, layer))
 
     def layer_provenance(self, key, layer):
         """The provenance dict of a cached layer file, None when it is not cached (or has none): only that entry of
@@ -381,7 +387,7 @@ class MapData:
             return memo[path]
         p = None
         try:
-            with np.load(path, allow_pickle=False) as z:
+            with np.load(cache.resolve(path), allow_pickle=False) as z:
                 if "provenance" in z.files:
                     p = json.loads(str(z["provenance"]))
         except FileNotFoundError:
@@ -397,7 +403,7 @@ class MapData:
         """A layer file's arrays, or None when it is missing or unreadable (truncated, a damaged
         deflate stream, another layout): a miss, rebuilt and written again."""
         def read():
-            with np.load(path, allow_pickle=False) as z:
+            with np.load(cache.resolve(path), allow_pickle=False) as z:
                 return {k: z[k] for k in z.files}
         try:
             arrays = staging.read_held(read)
@@ -452,8 +458,7 @@ class MapData:
                 tag = self.regional().covering(key.bounds())
                 if tag is not None:
                     import osmtags
-                    recs = feats.attrs.get("src_record")
-                    ways = [osmtags.way_id(str(r)) for r in recs] if recs is not None else []
+                    ways = [w for i in range(len(feats)) for w, _a, _b in osmtags.segment_ways(feats, i)]
                     osmtags.join_regional(feats, self.regional().tags(tag, ways))
                 import cdot
                 if self.cdot() is not None and cdot.covers(key.bounds()) and len(feats):
@@ -530,6 +535,7 @@ class MapData:
         if ways:
             feats = mapgeom.concat(feats, osmtags.raceway_features(ways))
         osmtags.join(feats, tags)
+        osmtags.join_parts(feats, tags)
         return feats
 
     def layer_arrays(self, key, layer, kind="demand"):
@@ -598,7 +604,7 @@ class MapData:
 
     @staticmethod
     def _stamp(path):
-        st = os.stat(path)
+        st = os.stat(cache.resolve(path))
         return f"{st.st_size} {st.st_mtime_ns}"
 
     def _mirror_load(self, path):

@@ -1,0 +1,27 @@
+{
+ "version": 1,
+ "about": "Street life views (server/streetlife.py, parked cars): driveways, mailboxes, cluster boxes, carts, bus stops and downtown extras along the Front Range drive, from the street and from a low oblique",
+ "defaults": {
+  "date": "2026-10-20",
+  "hour": 15.0,
+  "weather": "clear",
+  "views": [
+   {"name": "street", "agl": 1.7, "pitch": -4, "fov": 70},
+   {"name": "oblique", "agl": 28, "pitch": -40, "fov": 70}
+  ]
+ },
+ "places": [
+  {"id": "sl_frederick_old_town", "name": "Frederick, Old Town grid (houses, mailboxes, carts, cluster boxes)",
+   "lat": 40.0995, "lon": -104.9370, "heading": 0, "group": "streetlife", "tags": ["colorado"]},
+  {"id": "sl_frederick_subdivision", "name": "Frederick, rural lanes west of Old Town (curbside mailboxes)",
+   "lat": 40.1086, "lon": -104.9625, "heading": 90, "group": "streetlife", "tags": ["colorado"]},
+  {"id": "sl_thornton_128th", "name": "Thornton by 128th Ave (subdivision cluster boxes, driveways)",
+   "lat": 39.92848, "lon": -104.96248, "heading": 0, "group": "streetlife", "tags": ["colorado"]},
+  {"id": "sl_capitol_hill", "name": "Denver, Capitol Hill (bus stops, bike racks, USPS boxes, parked cars)",
+   "lat": 39.7330, "lon": -104.9790, "heading": 0, "group": "streetlife", "tags": ["colorado"]},
+  {"id": "sl_downtown_16th", "name": "Denver, downtown by 16th St (bus stops and shelters, planters, bike racks)",
+   "lat": 39.7475, "lon": -104.9945, "heading": 315, "group": "streetlife", "tags": ["colorado"]},
+  {"id": "sl_castle_rock", "name": "Castle Rock, downtown and the streets round it",
+   "lat": 39.3722, "lon": -104.8561, "heading": 0, "group": "streetlife", "tags": ["colorado"]}
+ ]
+}

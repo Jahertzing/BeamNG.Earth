@@ -297,7 +297,9 @@ const settingsSchema = [
       { id: "viewDistanceMode", type: "select", default: "horizon", name: "View distance", desc: "Real horizon (the default): the far field reaches the true line-of-sight horizon and the view distance follows it (the server's --horizon, on by default in mesh mode). Fixed: the renderer's view distance below.",
         options: [ { label: "Fixed distance", value: "fixed" }, { label: "Real horizon (v1.4 M1h)", value: "horizon" } ] },
       { id: "viewDistanceKm", type: "float", min: 20, max: 1000, step: 10, default: 100, name: "Fixed view distance (km)", desc: "The renderer's view distance in km (LevelInfo visibleDistance) in fixed mode. The far field itself extends 80 km today." },
-      { id: "hazeStrength", type: "float", min: 0, max: 1, step: 0.05, default: 0, name: "Distance haze (placeholder)", desc: "Strength of the distance haze. Placeholder: the haze comes with the real-horizon far field (v1.4 M1h); this value is saved but has no effect yet.", disabled: true },
+      { id: "hazeStrength", type: "float", min: 0, max: 1, step: 0.05, default: 0.5, name: "Distance haze", desc: "How hazy the air is: far mountains and the city fade blue-grey into the sky with distance, as on a real day. 0 is the game's own very clean air (distant ranges look cut out), 0.5 a typical clear Front Range day, 1 a hazy summer afternoon. Real fog and low visibility still come from the weather." },
+      { id: "colorGrade", type: "select", default: "colorado", name: "Colour grade", desc: "A colour grade on the final image, in this map only (BeamNG 0.40 no longer applies one). Colorado: a touch warm, firmer contrast, greens and browns lifted, cool shadows. Natural: only the aerial photos' flatness taken out. Vivid: stronger. Off: the game's image as it is.",
+        options: [ { label: "Off", value: "off" }, { label: "Natural", value: "natural" }, { label: "Colorado", value: "colorado" }, { label: "Vivid", value: "vivid" } ] },
       { id: "skyMode", type: "select", default: "real", name: "Sky", desc: "Real time: the sun, moon and stars follow the real clock and date at the player's position. Manual: hands off, use the game's own Time & Weather controls. Changing the time in the pause menu (or another mod changing it) switches this to Manual by itself; choose Real time to go back.",
         note: "Changing the time in the pause menu switches this to Manual.",
         options: [ { label: "Real time", value: "real" }, { label: "Manual", value: "manual" } ] },
@@ -313,9 +315,13 @@ const settingsSchema = [
       { id: "groundCoverDistance", type: "select", default: "normal", name: "Grass distance", desc: "How far from the car the grass and shrubs reach. Near: short grass to 50 m, long grass to 70 m (the old setting). Normal: about what the game's own maps use (long grass to 120 m, shrubs to 150 m). Far: long grass to 200 m, shrubs to 250 m. Max: long grass and shrubs to 300 m, about as far as the ground under the car is loaded. Farther grass has more blades: more work for the graphics card, and without the grass patch a slower regrow frame each time the ground under the car moves.",
         options: [ { label: "Near", value: "near" }, { label: "Normal", value: "normal" }, { label: "Far", value: "far" }, { label: "Max", value: "max" } ] },
       { id: "groundGrass", type: "bool", default: true, name: "Grass in the distant ground", desc: "Past the 3D grass, grassland in the ground itself gets a grass texture and bumps over the aerial photo, so fields read as grass toward the horizon and the end of the 3D grass doesn't show as a line. Applies to the ground as it loads (after a teleport, or as you drive)." },
+      { id: "grassCards", type: "bool", default: true, name: "Grass to 1 km", desc: "Between the 3D grass and about 1 km, grassland gets low grass cards coloured from the aerial photo, so fields keep some height instead of turning flat where the 3D grass ends. Turning it off hides them at once." },
       { id: "roads", type: "bool", default: true, name: "Roads", desc: "Real roads from OpenStreetMap / Overture within about 600 m of the car: paved roads as asphalt, gravel and dirt roads and tracks as worn dirt tracks, and the same surfaces under the tyres. Bridges, tunnels, markings and junction shapes come later." },
       { id: "aiTraffic", type: "select", default: "normal", name: "AI traffic", desc: "The game's own AI traffic on the real roads, when the level-start options leave traffic to the settings (their default; picking traffic there still wins). Normal: the amount the game picks for this PC. Light: about half. Busy: about one and a half times, at most 24. Every traffic car is a full physics car, so busier traffic takes more CPU. Takes effect at the next level start.",
         options: [ { label: "Off", value: "off" }, { label: "Light", value: "light" }, { label: "Normal", value: "normal" }, { label: "Busy", value: "busy" } ] },
+      { id: "parkedCars", type: "select", default: "normal", name: "Parked cars", desc: "The game's own parked cars along the curbs and in the parking lots near you, when the level-start options leave parked cars to the settings (their default; picking them there still wins). Normal: your Options > Gameplay parked-vehicle amount (automatic: 4 to 16 by your PC). Few: about half. Many: about twice, at most 32. They are the game's light traffic cars, engines off, moved to free spots ahead of you as you drive; more of them takes a little more CPU. Takes effect at the next level start.",
+        options: [ { label: "Off", value: "off" }, { label: "Few", value: "few" }, { label: "Normal", value: "normal" }, { label: "Many", value: "many" } ] },
+      { id: "streetLife", type: "bool", default: true, name: "Street life", desc: "The small things that make streets look lived in, near the car: cars standing in house driveways, mailboxes, trash and recycling carts out at the curb, mapped bus stops with their shelters and benches, and newspaper boxes, planters and bike racks downtown. Off removes them (and their collision)." },
       { id: "drcog", type: "bool", default: true, name: "Denver-region buildings and road widths (DRCOG)", desc: "In the Denver region (the DRCOG area, Frederick included), buildings come from DRCOG's 2024 aerial survey: their measured outlines and heights, in place of the map's footprints they match; street widths come from its edges of pavement. No effect elsewhere. Data: DRCOG Regional Data Catalog (Denver Regional Council of Governments), CC BY 3.0, https://data.drcog.org. Takes effect at the next start of the app." },
       { id: "lidarHeights", type: "bool", default: true, name: "Building heights from USGS lidar", desc: "In the US, buildings whose map height is missing or only machine-learned get their height measured from the USGS 3D Elevation Program's lidar (the height above ground inside the footprint). Mapped and surveyed heights (OpenStreetMap, DRCOG) stay. Buildings newer than the area's lidar flight keep their map height. No effect outside the US. Data: USGS 3D Elevation Program (3DEP) lidar, public domain, via the Microsoft Planetary Computer. Takes effect at the next start of the app." },
       { id: "cityGlow", type: "bool", default: true, name: "City glow at night", desc: "At night, a soft glow of light in the sky over the cities near you (Denver from Frederick), and the Castle Rock star in its season. Lit windows, street lamps and the distant skyline's lights are always on at night." },
@@ -347,6 +353,8 @@ const settingsSchema = [
       { id: "cacheDir", type: "path", what: "cache", name: "Cache folder", placeholder: "Folder for the download cache, or default", desc: "Where the download cache is kept, e.g. on another drive. Change... opens your system's folder window (it may open behind the game: Alt+Tab to it); or type or paste a folder below and press Use (default: back to .cache/beamng-earth in your home folder). Used from the next start of the app; move the old folder's contents there first to keep what is already downloaded." },
       { id: "cacheCapGb", type: "select", default: "20", name: "Download cache size", desc: "The most the download cache may use. Over the limit, the server removes the files used longest ago (every few minutes, down to 90 % of the limit); never what this session used in the last hour or the gravity model. Kept by the server for its next start.",
         options: [ { label: "5 GB", value: "5" }, { label: "10 GB", value: "10" }, { label: "20 GB", value: "20" }, { label: "50 GB", value: "50" }, { label: "100 GB", value: "100" }, { label: "200 GB", value: "200" }, { label: "Unlimited", value: "unlimited" } ] },
+      { id: "worldUsage", type: "info", name: "World folder", desc: "What the pre-load (tools/preload.py) installed: kept for good in its own folder, read before the download cache, and never removed by the size limit or Clear cache. tools/world.py shows, backs up or moves it." },
+      { id: "worldRegions", type: "info", name: "Installed regions", desc: "The regions pre-loaded into the world folder, with the date of their last pre-load run." },
       { id: "cacheClear", type: "action", name: "Clear cache", desc: "Deletes the downloaded elevation and imagery (and the server's de-shadowing and colour-seam data). What this session used and the gravity model stay. Places are downloaded again when you visit them." },
     ],
   },
@@ -440,8 +448,24 @@ function infoValue(item) {
   if (item.id === "deshadow") return s.deshadow || "off"
   if (item.id === "colormatch") return s.colormatch || "off"
   if (item.id === "cacheUsage") return (s.cache && s.cache.line) || "-"
+  if (item.id === "worldUsage") return worldLine(s.paths)
+  if (item.id === "worldRegions") return regionsLine(s.paths)
   if (item.id === "theDriveTimes") return driveTimes(s.theDrive)
   return ""
+}
+
+// The world folder (the server's app_paths): its path and size, and the regions installed in it
+function worldLine(p) {
+  if (!p || !p.worldDir) return "None (the server has no world folder)"
+  const b = p.worldBytes
+  const size = b == null || b < 0 ? "counting..." : b >= 1e9 ? `${(b / 1e9).toFixed(1)} GB` : `${Math.round(b / 1e6)} MB`
+  const files = p.worldFiles != null && p.worldFiles >= 0 ? `, ${p.worldFiles.toLocaleString()} files` : ""
+  return `${size}${files} in ${p.worldDir}`
+}
+function regionsLine(p) {
+  const rs = (p && p.worldRegions) || []
+  if (!rs.length) return "None yet"
+  return rs.map(r => `${r.name}${r.last ? ` (${r.last}${r.complete ? "" : ", unfinished"})` : ""}`).join("; ")
 }
 
 function formatDefault(item) {

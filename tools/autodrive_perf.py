@@ -96,9 +96,28 @@ CLK = os.sysconf("SC_CLK_TCK") if hasattr(os, "sysconf") else 100
 PAGE = os.sysconf("SC_PAGE_SIZE") if hasattr(os, "sysconf") else 4096
 
 
+def _psutil():
+    """psutil when it is installed (Windows has no /proc), else None."""
+    try:
+        import psutil
+        return psutil
+    except ImportError:
+        return None
+
+
 def _procs():
-    """{pid: (ppid, cmdline)} of every process."""
+    """{pid: (ppid, cmdline)} of every process (psutil without /proc; neither: none, the CPU columns stay empty)."""
     out = {}
+    if not os.path.isdir("/proc"):
+        ps = _psutil()
+        if ps is None:
+            return out
+        for p in ps.process_iter(["pid", "ppid", "cmdline"]):
+            try:
+                out[p.info["pid"]] = (p.info["ppid"], " ".join(p.info["cmdline"] or ()))
+            except Exception:
+                continue
+        return out
     for d in os.listdir("/proc"):
         if not d.isdigit():
             continue
@@ -117,6 +136,17 @@ def _procs():
 def _cpu_rss(pids):
     """(cpu seconds, rss MB) summed over pids."""
     cpu = rss = 0.0
+    if not os.path.isdir("/proc"):
+        ps = _psutil()
+        for pid in pids if ps is not None else ():
+            try:
+                p = ps.Process(pid)
+                t = p.cpu_times()
+                cpu += t.user + t.system
+                rss += p.memory_info().rss / 1e6
+            except Exception:
+                continue
+        return cpu, rss
     for pid in pids:
         try:
             with open(f"/proc/{pid}/stat") as f:
@@ -157,7 +187,8 @@ class ProcSampler:
         exe = os.path.expanduser("~/.local/share/Steam/steamapps/common/BeamNG.drive/BinLinux/BeamNG.drive.x64")
         exe = os.path.realpath(exe)     # (Steam's runtime starts it as ~/.steam/steam/..., a link to the same)
         game = [p for p, (_, c) in ps.items()
-                if c and "--type=" not in c and os.path.realpath(c.split(" ", 1)[0]) == exe]
+                if c and "--type=" not in c and (os.path.realpath(c.split(" ", 1)[0]) == exe
+                                                 or "beamng.drive.x64.exe" in c.lower())]     # (Windows)
         return {"server": sorted(kids), "game": game}
 
     def sample(self):

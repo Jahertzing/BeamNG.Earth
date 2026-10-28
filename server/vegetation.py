@@ -27,6 +27,7 @@ import numpy as np
 
 import fast
 
+import cache as cachemod
 import mapcells
 import pacer
 import staging
@@ -237,7 +238,7 @@ class Vegetation:
             if k in self._mem:
                 return True
         p = self._path(*k)
-        return bool(p and os.path.exists(p))
+        return bool(p and cachemod.exists(p))
 
     def _path(self, x, y):
         rel = getattr(self.md, "release", "x")
@@ -246,8 +247,9 @@ class Vegetation:
     def _load(self, x, y):
         p = self._path(x, y)
         fields = ("lon", "lat", "height", "radius", "kind", "group", "rank", "yaw", "scale")
-        if p and os.path.exists(p):
-            with np.load(p, allow_pickle=False) as f:
+        rp = cachemod.resolve(p) if p else None             # (the world folder's first: the pre-load's)
+        if rp and os.path.exists(rp):
+            with np.load(rp, allow_pickle=False) as f:
                 return Items(*(f[n] for n in fields))
         self._tl.dem_failed = False
         items = self._build(x, y)
@@ -873,7 +875,7 @@ class Tracker:
         if data is not None:                # (the game need not open the file: staging.inline_json)
             m["data"] = data
         pool = getattr(getattr(conn, "s", None), "pool_shapes", None)
-        if self.kind in ("bldfar", "bldsky", "brfar") and pool is not None:     # its mesh at a pooled shape path (matslots.py)
+        if self.kind in ("bldfar", "bldsky", "brfar", "grfar") and pool is not None:     # its mesh at a pooled shape path (matslots.py)
             slots = pool(conn, {"shape": f"{self.kind}_{aid}_{key[0]}_{key[1]}.cdae"})
             if slots:
                 m["slots"] = slots

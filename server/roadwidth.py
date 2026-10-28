@@ -24,6 +24,7 @@ from collections import OrderedDict
 
 import numpy as np
 
+import cache as cachemod
 import geodesy
 import mapcells
 import staging
@@ -195,7 +196,9 @@ def polygon_walls(feats, frame):
 
 
 def _read_segs(path):
-    """A cell's walls from the store, memory-mapped read-only (shared by the server's processes), or None."""
+    """A cell's walls from the store (the world folder's first: the pre-load's), memory-mapped read-only (shared by
+    the server's processes), or None."""
+    path = cachemod.resolve(path)
     try:
         a = np.asarray(np.load(path, mmap_mode="r", allow_pickle=False))     # (a plain view of the mapping)
     except FileNotFoundError:
@@ -203,8 +206,8 @@ def _read_segs(path):
     except (OSError, ValueError, EOFError) as e:        # damaged: built again
         log.debug("road widths: %s: %s", path, e)
         return None
-    import cache as cachemod
-    cachemod.touch_once(path)           # (recent for the start-up prune: cache.prune_dir, STORE_MB)
+    if not cachemod.in_world(path):
+        cachemod.touch_once(path)       # (recent for the start-up prune: cache.prune_dir, STORE_MB)
     return a if a.dtype == np.float32 and a.ndim == 2 and a.shape[1] == 4 else None
 
 
@@ -214,12 +217,12 @@ def _index_paths(path):
 
 def complete_store(path):
     """The walls' own file is in the store (their index may be kept beside it)."""
-    return os.path.exists(path)
+    return cachemod.exists(path)
 
 
 def _read_index(path, nsegs):
     """The bucket index stored beside a cell's walls (memory-mapped), or None (none, or not of these walls)."""
-    pb, ps = _index_paths(path)
+    pb, ps = (cachemod.resolve(p) for p in _index_paths(path))
     try:
         bk = np.asarray(np.load(pb, mmap_mode="r", allow_pickle=False))
         so = np.asarray(np.load(ps, mmap_mode="r", allow_pickle=False))
@@ -276,6 +279,17 @@ class RoadWidths:
         self.combos = OrderedDict()             # cell keys -> (frame, Walls) of a road near cells' edges
         self.lock = threading.Lock()
         self.key_locks = {}                     # cell key -> Lock: one thread builds a cell's walls
+
+    def store(self, key):
+        """Build and keep cell key's walls and their index in the store now, unless they are there (tools/preload.py's
+        derive lane: the world folder's store). True when built."""
+        path = os.path.join(self.store_dir, str(key.z), str(key.x), f"{key.y}.npy")
+        if complete_store(path) and all(cachemod.exists(p) for p in _index_paths(path)):
+            return False
+        self._build_walls(key)
+        if not complete_store(path):        # (its buildings could not be read: not kept)
+            raise RuntimeError(f"road-width walls of {key}: not kept (its buildings could not be read)")
+        return True
 
     def _walls(self, key):
         """The walls of the buildings in cell key, in a frame at the cell's centre."""

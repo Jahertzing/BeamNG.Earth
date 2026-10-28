@@ -88,6 +88,19 @@ NODATA_WHITE_MIN, NODATA_WHITE_SHARE = 250, 0.25   # ... or (nodata "white") > 2
                                                    # iMAP's white comes back as 253 in its JPEGs)
 NODATA_WHITE_BLOCK = 24            # px: a white source's square this size all white, reaching the tile's edge, is
                                    # past its county line (Front Range county MapServers, 2026-10-28: 253 grey-white)
+NODATA_GREY, NODATA_GREY_TOL = 204, 4   # nodata "grey": a MapServer whose background is ArcGIS's light grey (La Plata
+                                        # County's, 2026-10-28: 204, 204, 204 in its JPEGs), treated as "white" is
+
+
+def fill_texels(rgb, fill):
+    """The texels of rgb in a source's fill colour past its data: "white" (NODATA_WHITE_MIN and up) or "grey"
+    (NODATA_GREY within NODATA_GREY_TOL); None for any other (black is NODATA_MAX's). Pure."""
+    if fill == "white":
+        return np.minimum(np.minimum(rgb[..., 0], rgb[..., 1]), rgb[..., 2]) >= NODATA_WHITE_MIN
+    if fill == "grey":
+        d = np.abs(rgb.astype(np.int16) - NODATA_GREY)
+        return np.maximum(np.maximum(d[..., 0], d[..., 1]), d[..., 2]) <= NODATA_GREY_TOL
+    return None
 
 
 @dataclass(frozen=True)
@@ -116,7 +129,7 @@ class Source:
     probe_source: str = ""
     # (south, west, north, east) degrees: tiles wholly outside are never asked (a state's own service)
     bounds: tuple = ()
-    # The colour an export source fills outside its data with ("black" or "white"), see NODATA_*
+    # The colour an export source fills outside its data with ("black", "white" or "grey"), see NODATA_*
     nodata: str = "black"
     # Flown leaf-off (bare trees, dormant grass): render() gives its vegetation the summer reference's colour
     # (season.leaf_on) when the Imagery's leaf_on is set
@@ -392,18 +405,19 @@ def _blocks(sel, block):
     return m if m.any() else None
 
 
-def nodata_mask(rgb, white=False):
+def nodata_mask(rgb, white=False, fill=None):
     """The texels of a source tile outside its data: in a NODATA_BLOCK square all black (NODATA_MAX), and NODATA_EDGE
     round it; None when there are none. A regional photo stops mid-tile with black past its edge (New Jersey's over
     Manhattan drew black streets and blocks: GitHub #251); a whole tile mostly black was caught (NODATA_SHARE, export
     sources), a black part of one was not. A deep shadow is rarely a whole square of pure black.
     white: the source fills with white (a county's MapServer export past its line: 253, 253, 253), so a
     NODATA_WHITE_BLOCK square all white (NODATA_WHITE_MIN) that reaches the tile's edge is outside too (a white roof is
-    smaller and rarely on the edge; past a county line the white runs off the tile). Pure."""
+    smaller and rarely on the edge; past a county line the white runs off the tile). fill: the same for a source's
+    other fill colour (fill_texels: "grey"); white=True is fill="white". Pure."""
     dark = np.maximum(np.maximum(rgb[..., 0], rgb[..., 1]), rgb[..., 2]) <= NODATA_MAX    # (max(axis=2): 20x slower)
     m = _blocks(dark, NODATA_BLOCK)
-    if white:
-        lit = np.minimum(np.minimum(rgb[..., 0], rgb[..., 1]), rgb[..., 2]) >= NODATA_WHITE_MIN
+    lit = fill_texels(rgb, "white" if white else fill)
+    if lit is not None:
         mw = _blocks(lit, NODATA_WHITE_BLOCK)
         if mw is not None:
             edge = np.zeros_like(mw)
@@ -635,8 +649,9 @@ class Imagery:
                     cx, cy = ((x >> k) << k) + i, ((y >> k) << k) + j
                     cpath, cmiss = self._paths(src, z, cx, cy)
                     child = a[j * TILE:(j + 1) * TILE, i * TILE:(i + 1) * TILE]
+                    lit = fill_texels(child, src.nodata)
                     if (child.max(axis=2) <= NODATA_MAX).mean() > NODATA_SHARE or (
-                            src.nodata == "white" and (child.min(axis=2) >= NODATA_WHITE_MIN).mean() > NODATA_WHITE_SHARE):
+                            lit is not None and lit.mean() > NODATA_WHITE_SHARE):
                         # outside the flights (the image is black there): missing, the next source fills it
                         os.makedirs(os.path.dirname(cmiss), exist_ok=True)
                         open(cmiss, "wb").close()
@@ -668,7 +683,7 @@ class Imagery:
 
     def _on_disk(self, key):
         src, z, x, y = key
-        return os.path.exists(self._paths(src, z, x, y)[0])
+        return cachemod.exists(self._paths(src, z, x, y)[0])
 
     def _load_kind(self, key, kind):
         """_load(key) in a pool thread, its requests made as `kind` (subclasses override _load(key))."""
@@ -1012,10 +1027,10 @@ class Imagery:
         for s in self.chain:
             if s is src:
                 break
-            if s.lazy and s.export == src.export and os.path.exists(self._paths(s, z, x | last, y | last)[0]):
+            if s.lazy and s.export == src.export and cachemod.exists(self._paths(s, z, x | last, y | last)[0]):
                 return True
         path, miss = self._paths(src, z, x | last, y | last)
-        if os.path.exists(path) or os.path.exists(miss):
+        if cachemod.exists(path) or cachemod.exists(miss):
             return True
         with self._lock:
             return self._probe_status(key) == "outside"
@@ -1044,9 +1059,9 @@ class Imagery:
                     if not in_bounds(src, z, tx, ty):
                         continue
                     path, miss = self._paths(src, z, tx, ty)
-                    if os.path.exists(path):
+                    if cachemod.exists(path):
                         break
-                    if os.path.exists(miss) or self._warm_passed(src, z, tx, ty):
+                    if cachemod.exists(miss) or self._warm_passed(src, z, tx, ty):
                         continue
                     with self._lock:
                         if self._probe_status((src, z, tx, ty)) == "outside":
@@ -1114,7 +1129,7 @@ class Imagery:
             if key in self._holes:
                 self._holes.move_to_end(key)
                 return self._holes[key]
-        m = nodata_mask(tile.rgb, white=key[0].nodata == "white")
+        m = nodata_mask(tile.rgb, fill=key[0].nodata)
         with self._lock:
             self._holes[key] = m
             while len(self._holes) > self.mem_tiles:

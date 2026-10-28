@@ -29,7 +29,9 @@ M.MATERIAL_FILES = { '/levels/west_coast_usa/art/road/main.materials.json',
   '/levels/italy/art/shapes/buildings/main.materials.json',        -- italy_cobblestone (paving stones)
   '/levels/driver_training/art/road/main.materials.json',          -- m_metal_grid_drain (storm drains)
   '/levels/gridmap_v2/art/shapes/grid/main.materials.json',        -- m_gm_concrete_plain (concrete streets)
-  '/levels/beamng_earth/art/shapes/beamngEarth/buildings.materials.json' }  -- buildings (server/buildings.py)
+  '/levels/beamng_earth/art/shapes/beamngEarth/buildings.materials.json',   -- buildings (server/buildings.py)
+  '/levels/beamng_earth/art/shapes/beamngEarth/guidesigns.materials.json',  -- highway signs (server/guidesigns.py)
+  '/levels/beamng_earth/art/shapes/beamngEarth/grasscards.materials.json' }  -- grass cards (server/grasscards.py)
 M.FADE = '450 150'          -- distanceFade: start, range (m)
 M.enabled = true
 -- be:reloadCollision() at most this often: every rebuild is a ~20 ms physics frame (2026-10-13, the
@@ -249,7 +251,7 @@ local function dropTile(key)
   if t.walk then deleteQ[#deleteQ + 1] = t.walk end
   if t.road then deleteQ[#deleteQ + 1] = t.road end
   if t.deck then deleteQ[#deleteQ + 1] = t.deck end
-  for _, w in ipairs({ 'bld', 'bld2', 'bld3', 'bld4', 'bldcol', 'walkcol', 'tunnel', 'rail' }) do if t[w] then deleteQ[#deleteQ + 1] = t[w] end end
+  for _, w in ipairs({ 'bld', 'bld2', 'bld3', 'bld4', 'bldcol', 'walkcol', 'tunnel', 'rail', 'sign', 'signcol' }) do if t[w] then deleteQ[#deleteQ + 1] = t[w] end end
   if t.wire then deleteQ[#deleteQ + 1] = t.wire end
   -- and its meshes not made yet (from KyzoFox's 1.5.4, PR #64): a tile sent again under the same key left its old
   -- walkQ / held / createQ entries, which were then made for the new tile from pooled shape paths that had just been
@@ -274,7 +276,8 @@ end
 -- the road tiles; the user, 2026-10-27: "extend the street and window lights as far as the buildings render"): glow
 -- rows of trees.lua's lampglow group (drawn at night only) while the tile shows, one trees tile per 256 m square
 -- (its distance rings and caps; ranks hashed under the farthest ring's 0.2: every one shown, a cap thinning evenly).
-M.FAR_LAMP_GROUPS = { 'lampglow' }
+-- Its tall buildings' red obstruction lights (buildings.beacon_points, f.beacons) the same way, group beaconglow.
+M.FAR_LAMP_GROUPS = { 'lampglow', 'beaconglow' }
 local function farLamps(key, f, on)
   if on == (f.lampKeys ~= nil) then return end
   local ok, trees = pcall(require, 'beamngEarth/trees')
@@ -285,11 +288,13 @@ local function farLamps(key, f, on)
     return
   end
   local by, tag = {}, 'FL' .. tostring(key):gsub('[^%w]', '') .. '|'
-  for i, p in ipairs(f.lamps) do
-    if type(p) == 'table' and p[1] and p[2] and p[3] then
-      local k = tag .. math.floor(p[1] / 256) .. '_' .. math.floor(p[2] / 256)
-      by[k] = by[k] or {}
-      by[k][#by[k] + 1] = { 0, p[1], p[2], p[3], 0, 1, 1, ((i * 7919) % 997) / 997 * 0.19 }
+  for g, list in ipairs({ f.lamps or {}, f.beacons or {} }) do
+    for i, p in ipairs(list) do
+      if type(p) == 'table' and p[1] and p[2] and p[3] then
+        local k = tag .. math.floor(p[1] / 256) .. '_' .. math.floor(p[2] / 256)
+        by[k] = by[k] or {}
+        by[k][#by[k] + 1] = { g - 1, p[1], p[2], p[3], 0, 1, 1, ((i * 7919) % 997) / 997 * 0.19 }
+      end
     end
   end
   f.lampKeys = {}
@@ -453,7 +458,8 @@ function M.onTile(msg, currentAnchor)
   end
   -- pooled shape files: the server's slot paths instead of the tile's own files
   local slots = {}
-  for _, what in ipairs({ 'road', 'deck', 'walk', 'walkcol', 'bld', 'bld2', 'bld3', 'bld4', 'bldcol', 'wire', 'tunnel', 'rail' }) do
+  for _, what in ipairs({ 'road', 'deck', 'walk', 'walkcol', 'bld', 'bld2', 'bld3', 'bld4', 'bldcol', 'wire', 'tunnel', 'rail',
+                          'sign', 'signcol' }) do
     local sl = msgSlot(msg, what)
     if sl then
       if type(data[what]) == 'table' and type(data[what].pos) == 'table' then
@@ -497,6 +503,11 @@ function M.onTile(msg, currentAnchor)
   if type(data.wire) == 'table' and data.wire.shape and type(data.wire.pos) == 'table' then    -- pole wires
     walkQ[#walkQ + 1] = { key = key, walk = data.wire, what = 'wire', tile = tiles[key] }
   end
+  -- highway signs (server guidesigns.py): the drawn panels, gantries and delineators render-only, their posts' and
+  -- legs' lean collision mesh ("signcol") with the colliders below
+  if type(data.sign) == 'table' and data.sign.shape and type(data.sign.pos) == 'table' then
+    walkQ[#walkQ + 1] = { key = key, walk = data.sign, what = 'sign', tile = tiles[key], renderOnly = true }
+  end
   -- sidewalks, bridge decks, buildings (split in parts under the engine's 16-bit index limit), the buildings'
   -- lean collision mesh: colliders only near the car (M.COLLIDE_M); with a bldcol the drawn buildings only render
   local tx, ty = tostring(msg.key):match('^(%-?%d+)_(%-?%d+)$')
@@ -506,7 +517,7 @@ function M.onTile(msg, currentAnchor)
   local lean = type(data.bldcol) == 'table' and data.bldcol.shape ~= nil
   local leanWalk = type(data.walkcol) == 'table' and data.walkcol.shape ~= nil
   -- tunnels (server roadmesh.tunnel: tubes and portals) and railway tracks (server railways.py) collide like the decks
-  for _, what in ipairs({ 'walk', 'deck', 'bld', 'bld2', 'bld3', 'bld4', 'bldcol', 'walkcol', 'tunnel', 'rail' }) do
+  for _, what in ipairs({ 'walk', 'deck', 'bld', 'bld2', 'bld3', 'bld4', 'bldcol', 'walkcol', 'tunnel', 'rail', 'signcol' }) do
     local w = data[what]
     if type(w) == 'table' and w.shape and type(w.pos) == 'table' then
       local q = { key = key, walk = w, what = what, tile = tiles[key],
@@ -525,6 +536,12 @@ end
 M.SKY_UNIT = 4
 -- `brfar_tile` (kind 'B'): a far bridge tile's decks (server buildings.far_bridge_tile), shown only while the road
 -- tile of the same square has no deck or road mesh of its own.
+-- `grfar_tile` (kind 'G'): a tile's grass cards past the 3D grass (server grasscards.py), shown while M.grassCards
+-- (the setting grassCards) is on: never under the 3D grass (the server skips the squares near the player).
+-- A tile is hidden too while the player or the camera comes within GRASS_CARD_NEAR_M of its square: a card up close is
+-- a flat cross, and may lean over a road's edge (the grass mask has 2 m texels); there the 3D grass is.
+M.grassCards = true
+M.GRASS_CARD_NEAR_M = 48
 function M.onFarTile(msg, currentAnchor, kind)
   if kind == true then kind = 'S' end
   local sky = kind == 'S'
@@ -547,8 +564,9 @@ function M.onFarTile(msg, currentAnchor, kind)
     if sky then ux, uy = string.match(tostring(msg.key), '^(-?%d+)_(-?%d+)$') end
     far[key] = { anchor = msg.anchorId, shape = sl and sl.path or data.shape, pos = data.pos, slot = sl,
                  sky = sky and { tonumber(ux), tonumber(uy) } or nil,
-                 deckOf = kind == 'B' and tileKey(msg.anchorId, msg.key) or nil,
-                 lamps = type(data.lamps) == 'table' and #data.lamps > 0 and data.lamps or nil }
+                 deckOf = kind == 'B' and tileKey(msg.anchorId, msg.key) or nil, grass = kind == 'G' or nil,
+                 lamps = type(data.lamps) == 'table' and #data.lamps > 0 and data.lamps or nil,
+                 beacons = type(data.beacons) == 'table' and #data.beacons > 0 and data.beacons or nil }
     farQ[#farQ + 1] = key
   else
     slotDrop(sl)
@@ -581,11 +599,26 @@ function M.skyCovered(seen, aid, ux, uy)
   return true
 end
 
-local function updateFar(gov)
+-- Pure: is a grass card tile at pos (its square's south-west corner) hidden, with the player and camera at player and
+-- view (positions or nil)?
+function M.grassCardHidden(on, pos, player, view)
+  if not on then return true end
+  for _, p in ipairs({ player or false, view or false }) do
+    if p and p.x and type(pos) == 'table' and pos[1] then
+      local d = math.max(pos[1] - p.x, p.x - (pos[1] + M.TILE_M), pos[2] - p.y, p.y - (pos[2] + M.TILE_M))
+      if d < M.GRASS_CARD_NEAR_M then return true end
+    end
+  end
+  return false
+end
+
+local function updateFar(gov, player, view)
   for key, f in pairs(far) do
     if f.id then
       local hide
-      if f.sky then
+      if f.grass then
+        hide = M.grassCardHidden(M.grassCards, f.pos, player, view)
+      elseif f.sky then
         hide = M.skyCovered(farSeen, f.anchor, f.sky[1], f.sky[2])
       elseif f.deckOf then
         local t = tiles[f.deckOf]
@@ -599,7 +632,7 @@ local function updateFar(gov)
         f.hidden = hide
       end
     end
-    if f.lamps then farLamps(key, f, f.id ~= nil and not f.hidden) end
+    if f.lamps or f.beacons then farLamps(key, f, f.id ~= nil and not f.hidden) end
   end
   while #farQ > 0 and #walkQ == 0 and gov:try('roadWalk') do
     local key = table.remove(farQ, 1)
@@ -825,7 +858,8 @@ M.GHOST_FAR_M = 960         -- ... and once farther from the player than this (t
 M.GHOST_FAR_WAIT_S = 2      -- ... from this long after the rebase on
 local ghostSince = nil      -- stopwatch since the last rebase that left ghosts
 
-local WHATS = { 'walk', 'road', 'deck', 'bld', 'bld2', 'bld3', 'bld4', 'bldcol', 'walkcol', 'wire', 'tunnel', 'rail' }
+local WHATS = { 'walk', 'road', 'deck', 'bld', 'bld2', 'bld3', 'bld4', 'bldcol', 'walkcol', 'wire', 'tunnel', 'rail', 'sign',
+  'signcol' }
 
 function M.transform(xf, geodesy)
   local bx, by, bz, bw = xf:beamngQuat()
@@ -1024,7 +1058,7 @@ function M.update(gov, currentAnchor, player, view)
       loadMaterials()
       local isRoad = q.what == 'road' or q.what == 'wire' or q.renderOnly   -- render-only meshes
       -- the buildings' and sidewalks' lean meshes are a collision detail (server cdae collision_only): never drawn
-      local ok, id = pcall(createWalk, q.walk, (q.what == 'bldcol' or q.what == 'walkcol') and 'Collision Mesh' or not isRoad)
+      local ok, id = pcall(createWalk, q.walk, (q.what == 'bldcol' or q.what == 'walkcol' or q.what == 'signcol') and 'Collision Mesh' or not isRoad)
       if ok then slotMade(id, q.walk.shape) end
       if ok then
         if not isRoad then t.cq = t.cq or {}; t.cq[q.what] = q end
@@ -1039,7 +1073,7 @@ function M.update(gov, currentAnchor, player, view)
       sinceChange = stopwatch.new()
     end
   end
-  updateFar(gov)                -- far buildings: only with the near meshes all made (they share the budget)
+  updateFar(gov, player, view)  -- far buildings: only with the near meshes all made (they share the budget)
   updateSky(gov, player, view)  -- the skyline: after both
   if swapQuiet then
     swapQuiet.frames = swapQuiet.frames - 1

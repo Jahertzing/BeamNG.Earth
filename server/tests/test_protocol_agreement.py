@@ -258,7 +258,11 @@ SERVER_TO_MOD = {
     # ... its answer: the patch's shape and centre, or an error (the mod asks again later)
     "terrain_patch": {"anchorId": F(int), "key": F(str), "parts": F(list, OPT),     # [{path, x, y}]: small meshes
                       "tris": F(int, OPT), "error": F(str, OPT)},
-    "app_paths": {"cacheDir": F(str), "cacheNext": F(str), "beammp": F(str), "result": F(dict, OPT)},
+    "app_paths": {"cacheDir": F(str), "cacheNext": F(str), "beammp": F(str), "result": F(dict, OPT),
+                  # the world folder (cache.py "The world folder"; with one set): its path, size and files (-1 while
+                  # the server counts them), the installed regions [{name, title, keys, last, complete}]
+                  "worldDir": F(str, OPT), "worldBytes": F(int, OPT), "worldFiles": F(int, OPT),
+                  "worldRegions": F(list, OPT)},
     "cache": {"v": F(int), "usedBytes": F(int), "capBytes": F(int), "files": F(int), "ready": F(bool),
               "managed": F(bool), "clearedBytes": F(int, OPT)},
 }

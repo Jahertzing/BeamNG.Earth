@@ -128,13 +128,13 @@ T.check(pr.mod and pr.anchorId == 4 and pr.far.live == 900 and pr.far.exactMiss 
 -- time: manual, the fields, the clock stopped
 local r = B.setTime({ time = 0.916667, year = 2026, month = 9, day = 22, utcOffset = -7.8862 })
 T.check(r.ok and sky.getMode() == 'manual', 'setTime: sky manual')
-T.check(tod.time == 0.916667 and tod.month == 9 and tod.day == 22 and tod.utcOffset == -7.8862 and tod.play == false
-  and tod.dayLength == 86400, 'setTime: TimeOfDay fields, play off, dayLength kept')
+T.check(tod.time == 0.916667 and tod.month == 9 and tod.day == 22 and tod.utcOffset == -7.8862 and tod.play == true
+  and tod.dayLength == B.FROZEN_DAY_S, 'setTime: TimeOfDay fields, the clock at a crawl (the sun follows it)')
 
--- weather: manual, clear, fog for 60 km at the player's ground
+-- weather: manual, clear, the height fog the weather gives 60 km at the player's ground (clear air: weather.fogSigmaFor)
 r = B.setWeather({ coverage = 0, cirrus = 0, visM = 60000 })
 T.check(weather.getMode() == 'manual' and cloud.coverage == 0 and cloud.cirrusCoverage == 0, 'setWeather: clear')
-T.near(level.fogDensity, weather.fogDensityFor(weather.fogSigma(60000), 1500, 1000), 1e-15, 'setWeather: fog')
+T.near(level.fogDensity, weather.fogDensityFor(weather.fogSigmaFor(60000, false), 1500, 1000), 1e-15, 'setWeather: fog')
 T.check(level.fogAtmosphereHeight == 1000 and level.applied == 1 and cloud.applied == 1, 'setWeather: applied once')
 
 -- views

@@ -17,13 +17,16 @@ A baked route's items (tools/route_bake.py) are pinned: an item built in one of 
 anchors.json, the anchors the mod pins its teleports and rebases to: routepins.lua) goes to PIN_SUBDIR, which is
 never cut back, so a whole route (several GB) stays on disk. Its anchor is the key's first two parts (lat, lon), as
 every anchor's kind has them. load() looks there first. A code change makes them unreachable as any other; the bake
-tool builds the route again and removes what that run did not use."""
+tool builds the route again and removes what that run did not use. PIN_SUBDIR lives in the world folder (cache.py "The
+world folder": <world>/bake, never cut back or cleared) when there is one, else in the cache folder (pin_dir)."""
 import hashlib
 import json
 import os
 import re
 import threading
 import zipfile
+
+import cache
 
 ON = os.environ.get("BNE_REVISIT", "on") != "off"
 SKIP = {k for k in os.environ.get("BNE_REVISIT_SKIP", "").split(",") if k}     # kinds left out (tests: "roads,far")
@@ -32,6 +35,7 @@ SUBDIR = "revisit"
 PIN_SUBDIR = "bake"         # a baked route's items: never cut back (route_bake.py removes the stale ones)
 ANCHORS = "anchors.json"    # in PIN_SUBDIR: {"anchors": [[lat, lon], ...]} the baked route's anchors
 CACHE_DIR = None            # the server's cache folder (blockworker._State, earthd.Server): stores without one at hand
+PIN_DIR = None              # the baked route's folder; None: pin_dir's (the world folder's PIN_SUBDIR, else the cache's)
 
 _faults = [0]
 _code = []
@@ -83,9 +87,18 @@ def key(kind, *parts):
     return k
 
 
+def pin_dir(cache_dir, world_dir=None):
+    """The baked route's folder: PIN_DIR, else PIN_SUBDIR in the world folder (world_dir, else cache.world_dir(): the
+    server's and its workers' --world-dir), else in cache_dir."""
+    if PIN_DIR:
+        return PIN_DIR
+    w = world_dir or cache.world_dir()
+    return os.path.join(w if w else cache_dir, PIN_SUBDIR)
+
+
 def pinned_anchors(cache_dir):
-    """The baked route's anchors {(lat, lon) rounded to 7 places} (PIN_SUBDIR/ANCHORS; read again when it changes)."""
-    path = os.path.join(cache_dir, PIN_SUBDIR, ANCHORS)
+    """The baked route's anchors {(lat, lon) rounded to 7 places} (pin_dir/ANCHORS; read again when it changes)."""
+    path = os.path.join(pin_dir(cache_dir), ANCHORS)
     try:
         st = os.stat(path)
         stamp = (path, st.st_mtime_ns, st.st_size)
@@ -111,7 +124,8 @@ def _pinned(cache_dir, k):
 
 
 def _path(cache_dir, kind, k, sub=SUBDIR):
-    return os.path.join(cache_dir, sub, kind, k[:2], k + ".zip")
+    return os.path.join(pin_dir(cache_dir) if sub == PIN_SUBDIR else os.path.join(cache_dir, sub), kind, k[:2],
+                        k + ".zip")
 
 
 def store(cache_dir, kind, k, blobs, extra=None):
@@ -137,6 +151,13 @@ def store(cache_dir, kind, k, blobs, extra=None):
         return False
 
 
+def has(cache_dir, kind, k):
+    """Whether an item is kept under key k (never reads it)."""
+    if not ON or kind in SKIP:
+        return False
+    return os.path.exists(_path(cache_dir, kind, k, PIN_SUBDIR)) or os.path.exists(_path(cache_dir, kind, k))
+
+
 def load(cache_dir, kind, k):
     """({name: bytes}, extra) of the item under key k, or None when there is none (or it cannot be read)."""
     if not ON or kind in SKIP:
@@ -149,8 +170,7 @@ def load(cache_dir, kind, k):
         if _pinned(cache_dir, k):           # (kept before its route was baked: pinned now)
             pin = _path(cache_dir, kind, k, PIN_SUBDIR)
             try:
-                os.makedirs(os.path.dirname(pin), exist_ok=True)
-                os.replace(path, pin)
+                cache.move_file(path, pin)      # (the world folder may be on another drive)
                 path = pin
             except OSError:
                 pass

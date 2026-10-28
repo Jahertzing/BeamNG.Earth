@@ -278,7 +278,8 @@ class Spec:
     """What is built for one footprint (decided by plan())."""
     __slots__ = ("ring", "floors", "floor_h", "height", "roof", "roof_mat", "facade", "band", "shop", "plain", "min_h", "wall", "door", "windows", "front", "steeple", "stoop",
                  "sign", "porch", "cls", "seed", "deck", "pitch", "portal", "gring", "skel", "drive",
-                 "rise", "lantern", "stands", "club", "canopy")      # (the last: landmarks.py's curved roofs, bowls)
+                 "rise", "lantern", "stands", "club", "canopy",      # (landmarks.py's curved roofs, bowls)
+                 "region")                                          # (its region's Style name: the facade kit)
 
     def __init__(self, **kw):
         for k in self.__slots__:
@@ -731,7 +732,8 @@ def plan(ring, attrs, neighbours=0, lat=None, lon=None, look=None, town=False, d
     if porch:   # pitched roofs draw the walls on the oriented box: an L-shaped house's door wall can be inside it
         _, _, hl, hw = oriented_box(ring)
         porch = area >= 0.9 * 4 * hl * hw
-    return Spec(ring=ring, floors=nf, floor_h=floor_h, height=h, roof=roof, roof_mat=roof_mat, facade=facade,
+    return Spec(region=style.name, ring=ring, floors=nf, floor_h=floor_h, height=h, roof=roof, roof_mat=roof_mat,
+                facade=facade,
                 band=band, shop=shop and not shed and nf >= 1, plain=plain, seed=seed, min_h=0.0, wall=wall,
                 windows=windows, steeple=church and area < 2500 and not curved, porch=porch, cls=cls,
                 deck=garage and roof == "flat", pitch=style.pitch, skel=skel if roof != "flat" else None, rise=rise,
@@ -874,12 +876,13 @@ def house_window_slots(spec, a, d, out, L, z_eave, edge=None):
     return out_
 
 
-def _walls(m, spec, ring, z0, z_eave, mat_idx, lite=False):
+def _walls(m, spec, ring, z0, z_eave, mat_idx, lite=False, kit=False):
     """Each wall of the ring, floor by floor: one band of the window sheet, a whole number of bays; a plain wall with
     sash windows laid over it for a plain tileable material (spec.wall; a big box's storefront band); a plain plinth
     under the floors on a slope; a shopfront ground floor; the good bays only where a band has some; the front door's
     bay as the band's plain strip, at the sheet's scale. The Rust loop (earthfast.building_walls: the quads the Python
-    made, in its order and arithmetic)."""
+    made, in its order and arithmetic). kit (build's, never lite): the walls' depth (facadekit.depth: windows
+    set in, shopfronts set back, curtain walls' fins)."""
     global _WALL_CONSTS
     if _WALL_CONSTS is None:
         _WALL_CONSTS = [float(v) for v in (SIDING_UV_M, TILE_PX_M, FOUNDATION_M, BANDS, BAND_SHOP[0], BAND_SHOP[1],
@@ -899,6 +902,10 @@ def _walls(m, spec, ring, z0, z_eave, mat_idx, lite=False):
         P, UV, mid = _garage_windows_out(spec, ring, z_eave, P, UV, mid)
     if mid:
         UV = _night_shift(spec, P, UV, mid, z_eave)
+    if mid and kit and not lite:            # (after the shift: the openings are found from the final UVs)
+        import facadekit
+        P, UV, mid = facadekit.depth(spec, ring, z_eave, P, UV, mid)
+    if mid:
         m.quads(P, UV, mid, [mat_idx[spec.facade], mat_idx[SHOP] if (spec.shop or spec.wall) else None,
                              mat_idx["bne_bld_fac_white"] if spec.wall else None])
 
@@ -1719,7 +1726,7 @@ def build(specs_and_ground, lite=False, kit=True):
             continue
         z0 = gmin - (SKIRT_LITE_M if lite else SKIRT_M) if mh <= 0.5 else base_z(spec, gmin, gmax) + mh
         z_eave = base_z(spec, gmin, gmax) + mh + spec.height
-        _walls(m, spec, ring, z0, z_eave, mat_idx, lite)
+        _walls(m, spec, ring, z0, z_eave, mat_idx, lite, kit)
         if mh > 0.5:                                  # a part standing on another / over a street: its underside
             m.poly([(p[0], p[1], z0) for p in ring[::-1]], [(0.002, 0.995)] * len(ring), mat_idx[spec.facade])
         _roof(m, spec, ring, z_eave, mat_idx)
@@ -2789,6 +2796,36 @@ def toll_booth_rows(items, x0, y0):
     return rows
 
 
+# Aviation obstruction lights (FAA AC 70/7460-1L: a structure over 200 ft carries red lights on its top; the user,
+# 2026-10-28: "drive into denver at night and see the lights"): a red glow over every building this tall, night only
+# (trees.lua's beaconglow group, tools/build_lamp_glow.py's beacon balls: a point on screen at any distance), and one
+# at each end of a long roof (the standard's corner lights) instead of the middle.
+G_BEACON = "beaconglow"
+BEACON_MIN_H = 61.0         # m: 200 ft over the ground
+BEACON_UP_M = 1.5           # m over the roof
+BEACON_LONG_M = 50.0        # m: a roof longer than this gets one at each end
+
+
+def beacon_points(items, x0, y0):
+    """[x, y, z] (anchor frame) of the red obstruction lights over the buildings among items (rings relative to
+    (x0, y0)) BEACON_MIN_H or more tall (not bridges)."""
+    out = []
+    for spec, gmin, gmax in items:
+        top = float(spec.min_h or 0.0) + float(spec.height or 0.0)
+        if top < BEACON_MIN_H or spec.cls in BRIDGE_CLASSES or len(spec.ring) < 3:
+            continue
+        z = base_z(spec, gmin, gmax) + top + BEACON_UP_M
+        c, u, hl, _hw = oriented_box(np.asarray(spec.ring, np.float64)[:, :2])
+        pts = [c] if 2 * hl <= BEACON_LONG_M else [c - u * (hl - 2.0), c + u * (hl - 2.0)]
+        out += [[round(float(p[0] + x0), 2), round(float(p[1] + y0), 2), round(z, 2)] for p in pts]
+    return out
+
+
+def beacon_rows(items, x0, y0):
+    """beacon_points as prop rows (trees.lua rows, group G_BEACON; rank 0: shown at every distance)."""
+    return [[G_BEACON, x, y, z, 0.0, 1.0, 1.0, 0.0] for x, y, z in beacon_points(items, x0, y0)]
+
+
 def collider_boxes(items, x0, y0):
     """Boxes [x0, y0, z0, x1, y1, z1] (anchor frame) around each building: the mod does not make the tile's
     mesh solid while the player's car is inside one (roads.lua playerIn)."""
@@ -3197,6 +3234,9 @@ def far_tile(frame, tx, ty, md, ground, out_dir, vfs_dir, aid, lamp_region=None)
                       built_squares(items, 0.0, 0.0, x1 - x0), ground, lamp_region)
     if lamps:
         data["lamps"] = lamps
+    beacons = beacon_points(items, x0, y0)
+    if beacons:
+        data["beacons"] = beacons
     if mesh is not None:
         shape = f"bldfar_{aid}_{tx}_{ty}.cdae"
         write(os.path.join(out_dir, shape), mesh)
@@ -3442,6 +3482,9 @@ def skyline_tile(frame, ux, uy, md, ground, out_dir, vfs_dir, aid, lamp_region=N
         shape = f"bldsky_{aid}_{ux}_{uy}.cdae"
         if lamps:
             data["lamps"] = lamps
+        beacons = beacon_points(picked, x0, y0)
+        if beacons:
+            data["beacons"] = beacons
         write(os.path.join(out_dir, shape), mesh)
         data["shape"] = f"{vfs_dir}/{shape}"
         data["pos"] = [x0, y0, 0.0]

@@ -20,6 +20,7 @@ import time
 
 import numpy as np
 
+import decklidar
 import dem as demmod
 import farfield
 import furniture
@@ -53,6 +54,9 @@ class _State:
         # runways graded in (--airports on): the copy the server loaded, never refreshed here
         self.airports = load_airports(cache_dir, self.dem) if airports else None
         md = mapdatamod.MapData(cache_dir, fetcher=net) if (roads or surface or sea) else None
+        if md is not None:      # (the junctions' mapped traffic signals: roads.pocket_profiles' rule (c))
+            import roads as roadsmod
+            roadsmod.SIGNALS_FN = roadsmod.signals_provider(md)
         if md is not None:
             md.dem = self.dem       # (gradesep's ground)
         # the sea's and the lakes' floors carved in (--sea on)
@@ -93,6 +97,7 @@ class _State:
                 if self.graders[aid] is not None:
                     self.graders[aid].wet = self.sea.depth if getattr(self, "sea", None) is not None else None
                     self.graders[aid].dem = self.dem          # (its urgent lane: _plan_missing)
+                    self.graders[aid].surface = decklidar.surface_for(self.md, self.dem)  # (motorways as measured)
                     self.graders[aid].shared = plancache.for_grader(self.cache_dir, self.graders[aid], self.widths,
                                                                    self.graders[aid].wet)
                 for old in sorted(self.chunks)[:-ANCHORS_KEPT]:
@@ -317,6 +322,7 @@ def _bridges(aid, frame, elev):
             bridges.wet = sea.depth if sea is not None else None        # (decks clear the water: roads.water_clear)
             bridges.infra_fn = lambda key: _s.md.cell(key, layers=("infrastructure",), kind="demand").layers.get(
                 "infrastructure")                                       # (bridge:structure tags: bridgetypes)
+            bridges.surface = decklidar.surface_for(_s.md, _s.dem)    # (decks at the lidar's heights)
             for old in sorted(_s.bridges)[:-ANCHORS_KEPT]:
                 del _s.bridges[old]
     return bridges
@@ -340,6 +346,7 @@ def _nav_bridges(aid, frame, elev):
             bridges.wet = sea.depth if sea is not None else None
             bridges.infra_fn = lambda key: _s.md.cell(key, layers=("infrastructure",), kind="demand").layers.get(
                 "infrastructure")
+            bridges.surface = decklidar.surface_for(_s.md, _s.dem)
             for old in sorted(nav)[:-ANCHORS_KEPT]:
                 del nav[old]
     return bridges
@@ -464,6 +471,7 @@ def _write_bytes(path, data):
 def _roads_tile(aid, lat, lon, zoom, tx, ty, out_dir, vfs_dir, sidewalks, lift, buildings, left_hand, mph, q,
                 gas_stations, buried=0.0, lamp_region=None):
     import parking as parkingmod
+    import streetlife as streetlifemod
     import rails as railsmod
     import roadmesh as roadmeshmod
     import roads as roadsmod
@@ -474,8 +482,12 @@ def _roads_tile(aid, lat, lon, zoom, tx, ty, out_dir, vfs_dir, sidewalks, lift, 
     if getattr(_s, "fra", None) is not None:       # (the US's level crossings' devices, alongside)
         _s.fra.prefetch(roadsmod.cells_of_tile(frame, tx, ty))
     g, _ = _s.anchor(aid, lat, lon)
-    cells = [_s.md.cell(k, layers=("roads",), kind="demand").layers.get("roads")
-             for k in roadsmod.cells_of_tile(frame, tx, ty)]
+    keys = roadsmod.cells_of_tile(frame, tx, ty)
+    cells = [_s.md.cell(k, layers=("roads",), kind="demand").layers.get("roads") for k in keys]
+    # the segments continuing the tile's roads, for their tapers (roads.pocket_profiles; the ring is warmed above)
+    pkeys = roadsmod.cells_of_tile(frame, tx, ty, roadsmod.POCKET_REACH_M)
+    pocket_cells = cells if list(pkeys) == list(keys) else \
+        [_s.md.cell(k, layers=("roads",), kind="demand").layers.get("roads") for k in pkeys]
 
     def elev(la, lo):           # the physics ground (lifted under roads: grading.ROAD_LIFT)
         z = ground(frame, la, lo, _s.dem.sample(la, lo, zoom))
@@ -511,21 +523,25 @@ def _roads_tile(aid, lat, lon, zoom, tx, ty, out_dir, vfs_dir, sidewalks, lift, 
         return roadsmod.block_arch_raise(tunnels, cell_fn, frame, la, lo, elev(la, lo),
                                          (box[0] - 8, box[1] - 8, box[2] + 8, box[3] + 8))
     cover = []                          # the ground carriageways for the decks' parapets (roadmesh.deck ground=)
+    signs = []                          # highway signs (guidesigns.py)
+    tile_ground = lambda x, y: roadmeshmod.drawn_ground(frame, drawn, np.c_[x, y], q)   # noqa: E731
     chunks = roadsmod.build_tile(frame, tx, ty, cells, elev, urban, walks=walks, deck_context=ctx, bridges=bridges, widths=_s.widths,
                                  walk_cuts=fuel_cuts,    # (the stations' made-up driveways: no sidewalk across them)
                                  props=props, lines=lines, wires=wires, town=town, park=park,
                                  left_hand=left_hand, mph=mph, buried=buried, lamp_region=lamp_region,
                                  structures=buildingsmod.centres(items, tx, ty) if items else (),
                                  tunnels=tunnels, walls=rwalls,
-                                 ground=lambda x, y: roadmeshmod.drawn_ground(frame, drawn, np.c_[x, y], q),
+                                 ground=tile_ground,
                                  terrain_paint=getattr(_s, "surface", None) is not None, cover_out=cover,
+                                 pocket_cells=pocket_cells,
                                  signals=furniture.signals_for(_s.md, frame,
                                                                roadsmod.cells_of_tile(frame, tx, ty, SIGNALS_MARGIN_M)),
                                  barriers=rbars,
                                  barrier_lines=barriersmod.mapped_for(
                                      _s.md, frame, roadsmod.cells_of_tile(frame, tx, ty, SIGNALS_MARGIN_M)),
                                  barrier_homes=barriersmod.residential_for(
-                                     _s.md, frame, roadsmod.cells_of_tile(frame, tx, ty, BARRIER_HOMES_MARGIN_M)))
+                                     _s.md, frame, roadsmod.cells_of_tile(frame, tx, ty, BARRIER_HOMES_MARGIN_M)),
+                                 signs=signs)
     chunks += railsmod.tile_chunks(frame, tx, ty, cells)     # railway and tram tracks on the ground
     if _s.airports is not None:         # runway markings, drawn by the road mesh like the lane lines
         chunks += _s.airports.tile_chunks(frame, tx, ty, elev, roadsmod.tile_bbox)
@@ -534,6 +550,13 @@ def _roads_tile(aid, lat, lon, zoom, tx, ty, out_dir, vfs_dir, sidewalks, lift, 
         drives = []
         props.extend(buildingsmod.doors(items, lines, x0, y0, drives))
         props.extend(buildingsmod.toll_booth_rows(items, x0, y0))
+        props.extend(buildingsmod.beacon_rows(items, x0, y0))      # (red lights on towers)
+        if streetlifemod.ENABLED:       # mailboxes, carts, bus stops; the driveways' parking spots
+            props.extend(streetlifemod.tile_rows(
+                frame, _s.md, roadsmod.cells_of_tile(frame, tx, ty, margin=0.0), drives, walks, lines, box, tile_ground,
+                us=bool(mph) and str(lamp_region or "").startswith("na"), town=bool(town), left_hand=left_hand,
+                props=props, spots=park,
+                blockers=[buildingsmod.drawn_ring(spec) + np.array([x0, y0]) for spec, *_ in items]))
         drives.extend(buildingsmod.garage_drives(items, lines, x0, y0))
         chunks += drives
         park = parkingmod.clear_of(park, props, drives)
@@ -585,7 +608,8 @@ def _roads_tile(aid, lat, lon, zoom, tx, ty, out_dir, vfs_dir, sidewalks, lift, 
                         + industry.power_plant_sound_rows(frame, tx, ty, _s.md, elev))
     return roadsmod.write_tile(out_dir, vfs_dir, aid, tx, ty, chunks, walks if sidewalks else None, mesh, dmesh,
                                bld, props, wires, park, tunnel_mesh=tmesh, fuel=fuel, rail_mesh=rmesh,
-                               garage_sound=garage_sound, wells=oil_wells) + (fuel_pads,)
+                               garage_sound=garage_sound, wells=oil_wells,
+                               signs=signs[0] if signs else None) + (fuel_pads,)
 
 
 def _with_plazas(mesh, frame, tx, ty, elev, origin, surface):
@@ -695,6 +719,38 @@ def far_buildings_tile(aid, lat, lon, zoom, tx, ty, out_dir, vfs_dir, lamp_regio
                          lambda path, extra: (path, int(extra.get("n", 0))))
 
 
+def grass_cards_tile(aid, lat, lon, zoom, tx, ty, out_dir, vfs_dir, tex=None):
+    """earthd.Server.build_grass_card_tile here (the far buildings' pool): grasscards.build over road tile square
+    (tx, ty), coloured from the photo on disk (tex: the imagery chain settings, as far_tile's; None or a photo tile not
+    on disk: the fallback colour). (vfs path of its JSON, card count), or None when its land cover is not cached yet
+    (asked again on a later pose)."""
+    import grasscards
+    import imagery as imagerymod
+    import roads as roadsmod
+    if getattr(_s, "surface", None) is None:
+        return None
+    frame = geodesy.EnuFrame(lat, lon)
+    x0, y0, x1, _ = roadsmod.tile_bbox(tx, ty)
+    size = x1 - x0
+    mask, complete = surfacemod.grass_mask_ex(frame, x0, y0, size, grasscards.MASK_PX, _s.surface,
+                                              lut=surfacemod.grass_lut(grasscards.CARD_WEIGHT))
+    if not complete:
+        return None
+    if mask is None:
+        return grasscards.empty_tile(out_dir, vfs_dir, aid, tx, ty)
+    photo = None
+    if tex is not None:
+        try:
+            photo, _ = _imagery(tex).render(frame, x0, y0, size, grasscards.PHOTO_PX)
+        except imagerymod.ImageryError:
+            photo = None
+    mesh = grasscards.build(frame, x0, y0, size, mask,
+                            lambda la, lo: ground(frame, la, lo, _s.dem.sample(la, lo, zoom)), photo)
+    if mesh is None:
+        return grasscards.empty_tile(out_dir, vfs_dir, aid, tx, ty)
+    return grasscards.write_tile(mesh, out_dir, vfs_dir, aid, tx, ty, x0, y0)
+
+
 def skyline_tile(aid, lat, lon, zoom, ux, uy, out_dir, vfs_dir, lamp_region=None):
     """earthd.Server.build_sky_tile here (the far buildings' pool): buildings.skyline_tile (from the revisit cache when
     built in this anchor's place before)."""
@@ -728,6 +784,7 @@ def far_bridge_tile(aid, lat, lon, zoom, tx, ty, out_dir, vfs_dir):
                 lambda la, lo: ground(frame, la, lo, _s.dem.sample(la, lo, zoom)))
             sea = getattr(_s, "sea", None)
             bridges.wet = sea.depth if sea is not None else None
+            bridges.surface = decklidar.surface_for(_s.md, _s.dem)
             for old in sorted(far)[:-ANCHORS_KEPT]:
                 del far[old]
     k = revisit.key("brfar", round(float(lat), 7), round(float(lon), 7), zoom, tx, ty,

@@ -23,7 +23,7 @@ M.TILE_CAP = { { 300, 6000 }, { 700, 2400 }, { 1500, 900 }, { 1e9, 400 } }
 -- rocks only over the fine ground (farfield.NEAR_RADII: L0 within 400 m): beyond it the coarser tiles round off the
 -- ridges and a rock placed on the real ground floated over the drawn one (Stelvio pass, the user's report 2026-10-17)
 M.GROUP_MAX_M = { shrub = 250, desert_shrub = 250, rock = 400, desert_rock = 400, cliff = 1500, pylon = 1500, gantry = 800, sub_breaker = 400, sub_mast = 1000, sub_support = 300,
-  sub_transformer = 500, sub_fence = 200, lamplens = 800, lampglow = 6000, rrcross = 300, rrcross_eu = 300, rrflash = 400,
+  sub_transformer = 500, sub_fence = 200, lamplens = 800, lampglow = 6000, beaconglow = 60000, rrcross = 300, rrcross_eu = 300, rrflash = 400,
   rrflash_eu = 400, rrgate = 400, rrgate_l = 400, rrgate_eu = 400, rrgate_eu_l = 400, door = 120, hydrant = 200, bin = 200, bench = 200, polelamp = 400,
   stop = 300, giveway = 300, signal = 500, fence = 150, wallsign_logistics = 800, wallsign_rentabox = 800, wallsign_lemon = 800, wallsign_turboburger = 500,
   speed30 = 300, speed40 = 300, speed50 = 300, speed60 = 300, speed70 = 300 }
@@ -41,7 +41,7 @@ M.FOREST_NAME = 'bngEarthForest'      -- a prefix: small Forests from a pool ('b
 M.SOLID_M = 200       -- (was 300 + 100: up to ~20k solid trees in a forest, and every terrain block move rebuilt all their
                       -- collision, a ~30 ms physics frame; 200 + 50 is still 5 s ahead at 100 mph, 2026-10-15)
 M.SOLID_HYST_M = 50
-M.NO_COLLIDE = { shrub = true, desert_shrub = true, door = true, lamplens = true, lampglow = true, wallsign_logistics = true, wallsign_rentabox = true,
+M.NO_COLLIDE = { shrub = true, desert_shrub = true, door = true, lamplens = true, lampglow = true, beaconglow = true, wallsign_logistics = true, wallsign_rentabox = true,
   wallsign_lemon = true, wallsign_turboburger = true }
 -- The 100 mph stutter (2026-10-15 probes): a frame that adds or removes Forest items costs the engine's tick ~0.5 us
 -- for every item in the level of each SHAPE touched (whatever its item type or Forest), so a frame making 300 items of
@@ -181,6 +181,8 @@ M.CATALOG = {
   -- the street lamps' lenses (furniture.py G_LENS; lit at night: nightlights.lua)
   lamplens = { { '/levels/beamng_earth/art/shapes/beamngEarth/bne_lamp_lens', 1.0 } },
   lampglow = { { '/levels/beamng_earth/art/shapes/beamngEarth/bne_lamp_glow', 1.0 } },
+  -- tall buildings' red obstruction lights (buildings.py G_BEACON; night only, as lampglow)
+  beaconglow = { { '/levels/beamng_earth/art/shapes/beamngEarth/bne_beacon_glow', 1.0 } },
   -- level crossings' equipment (server railways.crossing_props; tools/build_rail_crossing_props.py): a crossbuck or a
   -- St Andrew's cross on its post, a mast with lamps, a gate (its arm raised; _l mirrored for left-hand traffic)
   rrcross = { { '/levels/beamng_earth/art/shapes/beamngEarth/bne_rr_crossbuck', 3.263 } }, rrcross_eu = { { '/levels/beamng_earth/art/shapes/beamngEarth/bne_rr_cross_eu', 3.263 } },
@@ -195,6 +197,35 @@ M.CATALOG = {
 }
 -- the Vienna Convention's round km/h signs: their shapes and how far out they show (CATALOG, GROUP_MAX_M)
 vienna.install(M)
+-- street life (server streetlife.py; the streetLife setting turns them all on or off): our own curbside mailbox, cluster
+-- mailbox and trash / recycling carts (tools/build_street_props.py: models' fronts at their local +x), and stock shapes
+-- whose materials are global (art_shapes.zip; East and West Coast USA's own bus stop materials share a name): the bus
+-- stop sign and shelter, the blue collection box, a bike stand and a planter. Heights as the shapes are (the rows'
+-- heights are these: scale 1).
+local BNE = '/levels/beamng_earth/art/shapes/beamngEarth/'
+M.CATALOG.mailbox = { { BNE .. 'bne_mailbox', 1.25 }, { BNE .. 'bne_mailbox_b', 1.25 } }
+M.CATALOG.mailcbu = { { BNE .. 'bne_mailbox_cbu', 1.75 } }
+M.CATALOG.cart_trash = { { BNE .. 'bne_cart_trash', 1.07 } }
+M.CATALOG.cart_recycle = { { BNE .. 'bne_cart_recycle', 1.07 } }
+M.CATALOG.bussign = { { '/art/shapes/objects/s_sign_busstop', 3.6 } }
+M.CATALOG.busshelter = { { '/art/shapes/objects/s_busstop_wcu', 2.85 } }
+M.CATALOG.uspsbox = { { WCA .. 'objects/postbox_blue', 1.53 } }
+M.CATALOG.bikerack = { { ECA .. 'clutter/clutter_city_bike_stand', 1.16 } }
+M.CATALOG.planter = { { WCA .. 'objects/planterbox', 0.8 } }
+M.STREET_LIFE = { 'mailbox', 'mailcbu', 'cart_trash', 'cart_recycle', 'bussign', 'busshelter', 'uspsbox', 'bikerack',
+  'planter' }
+for _, g in ipairs(M.STREET_LIFE) do M.GROUP_MAX_M[g] = 250 end
+M.GROUP_MAX_M.bussign, M.GROUP_MAX_M.busshelter = 400, 400
+-- billboards along the motorways (server guidesigns.billboards): West Coast USA's drag-strip billboard, 8 x 4 m on its
+-- pole, and one of its 23 ads on the same spot (bbad01 .. bbad23); seen from far, the ad never collides
+M.CATALOG.billboard = { { WCA .. 'objects/dragbillboard', 11.95 } }
+M.GROUP_MAX_M.billboard = 1500
+for i = 1, 23 do
+  local g = string.format('bbad%02d', i)
+  M.CATALOG[g] = { { WCA .. string.format('objects/dragbillboard_sign%02d', i), 11.95 } }
+  M.GROUP_MAX_M[g] = 1500
+  M.NO_COLLIDE[g] = true
+end
 local MATERIALS = {
   ECA .. 'trees/trees_oak', ECA .. 'trees/trees_beech', ECA .. 'trees/trees_aspen', ECA .. 'trees/trees_douglasfir',
   ECA .. 'trees/ECA_coast_bush', ECA .. 'trees/common', ECA .. 'trees', ECA .. 'rocks',
@@ -230,8 +261,9 @@ M.forests = 0
 
 -- Groups the player turned off (settings: Rocks off, GitHub #5): not shown, removed where made. (After
 -- MihneaTeodorStoica's PR #321.)
--- (lampglow: the lamps' far glow, night only: nightlights.lua turns it on after dusk)
-M.groupOff = { lampglow = true }
+-- (lampglow, beaconglow: the lamps' far glow, the towers' red lights, night only: nightlights.lua turns them on after
+-- dusk)
+M.groupOff = { lampglow = true, beaconglow = true }
 function M.setGroupEnabled(groups, on)
   local changed = false
   for _, g in ipairs(groups) do
