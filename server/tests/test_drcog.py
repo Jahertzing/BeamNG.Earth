@@ -107,6 +107,15 @@ class WidthTest(unittest.TestCase):
         road = np.array([ll(20, 0.4), ll(180, 0.4)])
         self.assertAlmostEqual(drcog.measure_width(road, coords, off), 11.0, places=3)
 
+    def test_a_short_road_is_not_measured(self):
+        # a piece shorter than WIDTH_MIN_LEN_M is measured across its junction's mouth (5th Street before its split at
+        # Colorado Blvd, Frederick: 16.6 m long, 19.2 m wide): not taken
+        coords, off = self.edges(5.5)
+        self.assertIsNone(drcog.measure_width(np.array([ll(20, 0.4), ll(20 + drcog.WIDTH_MIN_LEN_M - 1, 0.4)]),
+                                              coords, off))
+        self.assertAlmostEqual(drcog.measure_width(np.array([ll(20, 0.4), ll(20 + drcog.WIDTH_MIN_LEN_M + 1, 0.4)]),
+                                                   coords, off), 11.0, places=3)
+
     def test_no_edges_or_one_side(self):
         coords, off = self.edges(5.0)
         road = np.array([ll(20, 30), ll(180, 30)])          # far from both: out of reach on one side

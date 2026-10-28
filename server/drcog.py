@@ -64,6 +64,11 @@ WIDTH_SAMPLES = (0.25, 0.5, 0.75)
 WIDTH_REACH_M = 25.0
 WIDTH_RANGE_M = (3.0, 40.0)
 WIDTH_MIN_SAMPLES = 2
+# A road shorter than this is not measured: its samples sit in a junction's mouth (the curb returns, a split into one-way
+# carriageways), so it came out as wide as the mouth. 5th Street at Colorado Blvd in Frederick, a 16.6 m piece before the
+# split, was 19.2 m and four lanes against its 8.5 m deck: the AI's lane was off the deck and the car hit the kerb at
+# the split (The Drive's start, 2026-10-28); Welton Street 25.6 m, Park Avenue 30.8 m. ~2-5 % of the measured roads.
+WIDTH_MIN_LEN_M = 20.0
 EDGES_RETRY_S = 60.0        # a cell whose edges could not be fetched: asked again after this (not by every road in it)
 
 
@@ -406,7 +411,8 @@ def edge_index(edges):
 def measure_width(ll, coords, off, index=None):
     """The carriageway width (m) of a road (centreline ll (k, 2) lon/lat) between the nearest edge of pavement lines
     either side of it: at WIDTH_SAMPLES of its length, the nearest crossing each side within WIDTH_REACH_M of a line
-    square to it; the median of the samples where both sides have one (WIDTH_MIN_SAMPLES at least), else None.
+    square to it; the median of the samples where both sides have one (WIDTH_MIN_SAMPLES at least), else None (and for a
+    road shorter than WIDTH_MIN_LEN_M).
     index (the lines' EdgeIndex): only the segments near the road are looked at (the same result). Pure."""
     if len(coords) == 0 or len(ll) < 2:
         return None
@@ -425,7 +431,7 @@ def measure_width(ll, coords, off, index=None):
     seg = np.diff(P, axis=0)
     L = np.hypot(seg[:, 0], seg[:, 1])
     cum = np.r_[0.0, np.cumsum(L)]
-    if cum[-1] < 4.0:
+    if cum[-1] < WIDTH_MIN_LEN_M:
         return None
     got = []
     for f in WIDTH_SAMPLES:

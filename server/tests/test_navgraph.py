@@ -142,6 +142,30 @@ class GraphTest(unittest.TestCase):
             self.assertAlmostEqual(n[2], 10.0 + 4.0 * (n[0] - 50.0) / 100.0, delta=0.05)
         self.assertTrue(all(n[2] == 10.0 for n in off), "the ground (flat 10 m) off the bridge")
 
+    def test_lanes_on_a_deck_are_the_drawn_decks(self):
+        # 5th Street at Colorado Blvd, Frederick (2026-10-28): the ground measured 19.2 m (four lanes), its culvert deck
+        # drawn at the bridge spec's width (no measured widths): the AI's lanes on the deck are the deck's
+        f = features([[(0, 0), (200, 0)]], ["tertiary"], levels=[(0, 1.0, 0.4, 0.6)])
+        f.rules["connectors"] = rules([(0, "A", 0.0, 0.0), (0, "B", 1.0, 1.0)])
+        urban = lambda la, lo: np.ones(np.shape(la), bool)
+        g = navgraph.build(FRAME, [f], flat, (0.0, 0.0), urban_fn=urban, widths=lambda fid, ll: (19.2, 2.0, "pavement"))
+        deck = navgraph.driving_width(roads.bridge_specs(f)[0]) / 2
+        ground = navgraph.driving_width(roads.road_specs(f, urban, lambda fid, ll: (19.2, 2.0, "pavement"))[0]) / 2
+        self.assertGreater(ground, deck + 2.0)
+        seen = set()
+        for e in g["edges"]:
+            mid = (g["nodes"][e[0]][0] + g["nodes"][e[1]][0]) / 2
+            on = 80 < mid < 120
+            self.assertAlmostEqual(e[7], round(deck if on else ground, 2), msg=mid)
+            self.assertEqual(e[3:5], list(navgraph._lanes(deck * 2, False)) if on else
+                             list(navgraph._lanes(ground * 2, False, roads.road_specs(f, urban, lambda fid, ll: (
+                                 19.2, 2.0, "pavement"))[0].lanes)), mid)
+            seen.add(on)
+        self.assertEqual(seen, {True, False})
+        # a deck as wide as the road: as before
+        g2 = navgraph.build(FRAME, [f], flat, (0.0, 0.0))
+        self.assertEqual({e[7] for e in g2["edges"]}, {round(deck, 2)})
+
 
 
 class SignalsTest(unittest.TestCase):
