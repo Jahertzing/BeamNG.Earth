@@ -15,6 +15,7 @@ import route_bake as rb  # noqa: E402
 I25 = [(40.0992, -104.9372), (40.0990, -104.9870), (39.9150, -104.9870), (39.8000, -104.9880), (39.7500, -105.0150),
        (39.7000, -104.9900), (39.6200, -104.8950), (39.5200, -104.8700), (39.3722, -104.8561)]
 DOWNTOWN = I25[:4] + [(39.7650, -105.0000), (39.7530, -105.0002), (39.7400, -104.9900), (39.7000, -104.9900)] + I25[6:]
+DEG_N = 1 / 111195.0        # degrees of latitude per metre
 
 
 class AnchorTest(unittest.TestCase):
@@ -36,11 +37,97 @@ class AnchorTest(unittest.TestCase):
     def test_routes_and_directions_share_anchors(self):
         anchors, order = rb.plan_anchors({"i25": I25, "downtown": DOWNTOWN}, 15000.0)
         self.assertEqual(order["downtown"], order["i25"], "downtown is never far from I-25: the same anchors")
-        self.assertEqual(set(order["i25<"]) - set(order["i25"]), {len(anchors) - 1}, "back: one more, at the end")
+        # the pinned-anchor rule: the frame is the nearest planned anchor's, so both directions use the same anchors
+        # in opposite order (the distance rule alone gave the back drive one more, at its end)
+        self.assertEqual(order["i25<"], order["i25"][::-1], "back: the same anchors, reversed")
+        self.assertEqual(set(order["i25"]), set(range(len(anchors))), "every planned anchor is driven")
+        self.assertNotIn(-1, order["i25"])
         # a drive that starts elsewhere on the route (Thornton) lands on the planned anchors too
         mid = rb.densify(I25)[300:]
-        seq = rb.walk(mid, anchors, 15000.0, rb.PREFETCH_MARGIN, 15000.0 * rb.PIN_SHARE, add=False)
+        pin_m = 15000.0 * rb.PIN_SHARE
+        seq = rb.walk(mid, anchors, 15000.0, rb.PREFETCH_MARGIN, pin_m, add=False)
         self.assertNotIn(-1, seq)
+        seq = rb.walk_pinned(mid, anchors, pin_m, add=False)
+        self.assertNotIn(-1, seq)
+        self.assertEqual(seq, [i for i in order["i25"] if i in seq], "the same anchors from there on")
+
+    def test_the_pinned_walk_switches_once_the_next_anchor_is_within_the_pin(self):
+        # A and B 14.7 km apart on a meridian; the frame moves to B where B is within the pin distance (6.75 km) and
+        # 300 m nearer than A: 7.95 km from A, not at the 15 km distance; the same place driving back
+        A, B = (40.0, -105.0), (40.0 + 14700 * DEG_N, -105.0)
+        anchors = [A, B]
+        dense = rb.densify([A, B], 10.0)
+        seq = rb.walk_pinned(dense, anchors, 6750.0, 300.0, 15000.0, 300.0)
+        self.assertEqual(seq, [0, 1])
+        at = next(i for i, p in enumerate(dense) if rb.horizontal(B, p) <= 6750.0)
+        self.assertEqual(rb.walk_pinned(dense[:at], anchors, 6750.0, 300.0, 15000.0, 300.0), [0], "not before")
+        self.assertEqual(rb.walk_pinned(dense[::-1], anchors, 6750.0, 300.0, 15000.0, 300.0), [1, 0])
+        # anchors 2 km apart: the switch is 150 m past the midpoint (the hysteresis), in either direction
+        C = (40.0 + 2000 * DEG_N, -105.0)
+        dense = rb.densify([A, C], 10.0)
+        seq, i = [0], None
+        for k in range(2, len(dense)):
+            if rb.walk_pinned(dense[:k], [A, C], 6750.0, 300.0) == [0, 1]:
+                i = k - 1
+                break
+        self.assertIsNotNone(i)
+        self.assertAlmostEqual(rb.horizontal(A, dense[i]), 1150.0, delta=15.0)
+        # no planned anchor near: the distance rule, the grid point added as before
+        far = rb.densify([A, (40.0 + 16000 * DEG_N, -105.0)], 50.0)
+        anchors = [A]
+        seq = rb.walk_pinned(far, anchors, 6750.0, 300.0, 15000.0, 300.0)
+        self.assertEqual(seq, [0, 1])
+        self.assertEqual(anchors[1], rb.snap_anchor(*far[int(14700 / 50)]), "the grid point at 14.7 km")
+        self.assertEqual(rb.walk_pinned(far, [A], 6750.0, 300.0, 15000.0, 300.0, add=False), [0, -1])
+
+    def test_a_lattice_covers_the_box_and_scan_lines_cross_it(self):
+        box = (39.9, -105.1, 40.0, -105.0)      # ~11 km by 8.5 km
+        pin_m = 6750.0
+        grid = rb.lattice(box, pin_m)
+        self.assertGreater(len(grid), 1)
+        for i in range(11):
+            for j in range(11):
+                p = (box[0] + (box[2] - box[0]) * i / 10, box[1] + (box[3] - box[1]) * j / 10)
+                self.assertLessEqual(min(rb.horizontal(a, p) for a in grid), pin_m, p)
+        self.assertLess(len(rb.lattice(box, 20000.0)), len(grid), "a longer pin: fewer anchors")
+        lines = rb.scan_lines(box, 1000.0)
+        self.assertEqual(len(lines), 11, "11.1 km north to south, a line every km")
+        self.assertEqual(list(lines)[:3], ["scan_00", "scan_01", "scan_02"])
+        self.assertEqual((lines["scan_00"][0][1], lines["scan_00"][1][1]), (-105.1, -105.0), "eastward first")
+        self.assertEqual((lines["scan_01"][0][1], lines["scan_01"][1][1]), (-105.0, -105.1), "then back west")
+        self.assertTrue(all(box[0] < ln[0][0] < box[2] for ln in lines.values()))
+        self.assertEqual(rb.parse_box("39.9,-105.1,40.0,-105.0"), box)
+        with self.assertRaises(ValueError):
+            rb.parse_box("1,2,3")
+
+    def test_plan_area_writes_the_lattice_and_scan_routes(self):
+        with tempfile.TemporaryDirectory() as d:
+            pts = os.path.join(d, "pts.json")
+            with open(pts, "w") as f:
+                json.dump({"i25": I25}, f)
+            args = ["--cache-dir", os.path.join(d, "cache"), "--world-dir", os.path.join(d, "world"),
+                    "--user-dir", os.path.join(d, "user"), "--rebase-m", "15000"]
+            rc = rb.main(["plan", "--routes", "i25", "--points", pts, "--area", "40.05,-105.0,40.1,-104.9",
+                          "--area-name", "frederick", "--line-m", "2000"] + args)
+            self.assertEqual(rc, 0)
+            data = rb.read_json(os.path.join(d, "world", "bake", "anchors.json"))
+            routes = rb.read_json(os.path.join(d, "world", "bake", "routes.json"))
+            area = data["areas"]["frederick"]
+            self.assertEqual(area["box"], [40.05, -105.0, 40.1, -104.9])
+            self.assertTrue(area["anchors"], "lattice anchors added after the route's")
+            self.assertTrue(all(i >= 1 for i in area["anchors"]))
+            self.assertEqual(area["lines"], [n for n in routes if n.startswith("scan_")])
+            self.assertEqual(len(area["lines"]), 3, "5.6 km north to south, lines 1, 3 and 5 km up")
+            for n in area["lines"]:
+                self.assertTrue(data["routes"][n]["scan"])
+                self.assertNotIn(-1, data["routes"][n]["anchors"], "every scan line in planned frames")
+                self.assertEqual(len(routes[n]), 2)
+            self.assertEqual(data["routes"]["i25"]["anchors"][0], 0)
+            mod = rb.read_json(os.path.join(d, "user", *rb.MOD_FILE))
+            self.assertEqual(mod["anchors"], data["anchors"], "the mod pins to the lattice too")
+            rc = rb.main(["plan", "--routes", "", "--area", "40.05,-105.0,40.1,-104.9"] + args)
+            self.assertEqual(rc, 0, "an area alone")
+            self.assertEqual(rb.main(["plan", "--routes", ""] + args), 2, "nothing to plan")
 
     def test_plan_writes_both_copies(self):
         with tempfile.TemporaryDirectory() as d:

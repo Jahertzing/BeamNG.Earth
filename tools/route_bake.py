@@ -56,6 +56,9 @@ MAX_PIN_M = 9000.0          # routepins.lua MAX_PIN_M
 SNAP_DEG = 0.01             # geodesy.lua SNAP_DEG / SNAP_MAX_LAT
 SNAP_MAX_LAT = 85.0
 STEP_M = 50.0               # the route walked in steps of this
+PIN_HYST_M = 300.0          # rebase.lua PIN_HYST_M: a planned anchor this much nearer than the current one moves the frame
+LATTICE_SHARE = 0.98        # plan --area: the lattice spacing, a share of pin_m * sqrt(3) (every point within pin_m)
+SCAN_LINE_M = 1000.0        # plan --area: the scan lines' spacing (<= 2 * roads.SEND_M - roads.TILE: every tile reached)
 MANIFEST = "manifest.json"
 ARRIVED_M = 60.0            # autodrive_perf.py ARRIVED_M: a leg ended this near its goal arrived
 
@@ -127,6 +130,44 @@ def walk(dense, anchors, distance, margin, pin_m, add=True):
     return seq
 
 
+def walk_pinned(dense, anchors, pin_m, hyst=PIN_HYST_M, distance=DEFAULT_DISTANCE, margin=PREFETCH_MARGIN,
+                add=True):
+    """The anchors (indices into anchors) a drive along dense re-centres on under the pinned-anchor rule (routepins.want,
+    rebase.decide's want): the frame moves to a planned anchor as soon as it is hyst nearer than the current one; where
+    none is within pin_m the distance rule holds (a new anchor at distance - margin: the planned one within pin_m,
+    else the grid point, added to anchors when add, else -1)."""
+    def nearest(p):
+        best = None
+        for i, a in enumerate(anchors):
+            if abs(a[0] - p[0]) < 0.2:
+                d = horizontal(a, p)
+                if d <= pin_m and (best is None or d < best[0]):
+                    best = (d, i)
+        return best
+    def land(p):            # the distance rule's anchor: the planned one within pin_m, else the grid point (as walk)
+        n = nearest(p)
+        if n is not None:
+            return n[1]
+        a = snap_anchor(*p)
+        if a not in anchors:
+            if not add:
+                return -1
+            anchors.append(a)
+        return anchors.index(a)
+    cur = land(dense[0])
+    seq = [cur]
+    for p in dense[1:]:
+        n = nearest(p)
+        d_cur = horizontal(anchors[cur], p) if cur >= 0 else float("inf")
+        if n is not None and n[1] != cur and d_cur - n[0] >= hyst:
+            cur = n[1]
+            seq.append(cur)
+        elif cur >= 0 and d_cur >= distance - margin:     # (the distance rule: no planned anchor near enough)
+            cur = land(p)
+            seq.append(cur)
+    return seq
+
+
 def plan_anchors(routes, distance=DEFAULT_DISTANCE, margin=PREFETCH_MARGIN, pin_m=None, both_ways=True):
     """(anchors [(lat, lon)], {route: [anchor indices in drive order]}) for routes {name: [(lat, lon), ...]}: the mod's
     rebase rule walked along each, in order, the later routes landing on the earlier ones' anchors where they meet;
@@ -143,7 +184,59 @@ def plan_anchors(routes, distance=DEFAULT_DISTANCE, margin=PREFETCH_MARGIN, pin_
     for name, d in dense.items():
         if walk(d, anchors, distance, margin, pin_m, add=False) != order[name]:
             raise ValueError(f"{name}: the anchors planned for the other drives change where it re-centres")
+    # the drives' re-centres under the pinned-anchor rule (the mod's since 2026-10-28: the frame is the nearest planned
+    # anchor's; what the anchors above only placed)
+    for name, d in dense.items():
+        order[name] = walk_pinned(d, anchors, pin_m, PIN_HYST_M, distance, margin)
     return anchors, order
+
+
+# --- an area: a lattice of anchors and the scan lines over it (plan --area) -------------------------------------------
+def lattice(box, pin_m, share=LATTICE_SHARE):
+    """The planned anchors [(lat, lon)] of box (lat0, lon0, lat1, lon1): a hexagonal lattice with every point of the
+    box within pin_m of an anchor (the pinned-anchor rule then holds everywhere in it): spacing share * pin_m * sqrt(3)
+    (a hexagon's circumradius is spacing / sqrt(3)), rows sqrt(3) / 2 apart, every other row offset by half."""
+    lat0, lon0, lat1, lon1 = min(box[0], box[2]), min(box[1], box[3]), max(box[0], box[2]), max(box[1], box[3])
+    s = share * pin_m * math.sqrt(3)
+    row_m = s * math.sqrt(3) / 2
+    m_lat = 111195.0
+    out = []
+    lat = lat0 - 0.5 * row_m / m_lat
+    r = 0
+    while lat <= lat1 + row_m / m_lat:
+        m_lon = m_lat * math.cos(math.radians(lat))
+        lon = lon0 - (0.5 * s if r % 2 else 0.0) / m_lon
+        while lon <= lon1 + s / m_lon:
+            out.append((round(lat, 6), round(lon, 6)))
+            lon += s / m_lon
+        lat += row_m / m_lat
+        r += 1
+    return out
+
+
+def scan_lines(box, line_m=SCAN_LINE_M):
+    """The scan legs {name: [(lat, lon), (lat, lon)]} over box: east-west lines line_m apart from south to north,
+    alternately eastward and westward (a serpentine when driven in order), named scan_00, scan_01, ... Every road tile
+    (roads.SEND_M 640 m round the car) is within reach of a line when line_m <= 2 * 640 - 256."""
+    lat0, lon0, lat1, lon1 = min(box[0], box[2]), min(box[1], box[3]), max(box[0], box[2]), max(box[1], box[3])
+    m_lat = 111195.0
+    out = {}
+    lat = lat0 + 0.5 * line_m / m_lat
+    i = 0
+    while lat < lat1:
+        a, b = (round(lat, 6), lon0), (round(lat, 6), lon1)
+        out[f"scan_{i:02d}"] = [a, b] if i % 2 == 0 else [b, a]
+        lat += line_m / m_lat
+        i += 1
+    return out
+
+
+def parse_box(text):
+    """(lat0, lon0, lat1, lon1) of "lat0,lon0,lat1,lon1"."""
+    parts = [float(x) for x in text.split(",")]
+    if len(parts) != 4:
+        raise ValueError("--area: lat0,lon0,lat1,lon1")
+    return tuple(parts)
 
 
 # --- the folders ----------------------------------------------------------------------------------------------------
@@ -226,25 +319,53 @@ def route_points(names, offline=None):
 
 
 def cmd_plan(a):
-    names = a.routes.split(",")
+    names = a.routes.split(",") if a.routes else []
     dist = a.rebase_m or rebase_distance(a.user_dir)
-    pts = route_points(names, a.points)
-    anchors, order = plan_anchors(pts, dist)
     pin_m = min(dist * PIN_SHARE, MAX_PIN_M)
+    pts = route_points(names, a.points) if names else {}
+    anchors, order = plan_anchors(pts, dist) if pts else ([], {})
+    areas, lines = {}, {}
+    if a.area:
+        box = parse_box(a.area)
+        grid = lattice(box, pin_m)
+        first = len(anchors)
+        for g in grid:
+            if not any(horizontal(g, x) < 1.0 for x in anchors):
+                anchors.append(g)
+        lines = scan_lines(box, a.line_m)
+        for n, line in lines.items():
+            order[n] = walk_pinned(densify(line), anchors, pin_m, PIN_HYST_M, dist)
+        areas[a.area_name] = {"box": list(box), "lineM": a.line_m, "anchors": list(range(first, len(anchors))),
+                              "lines": list(lines)}
+    if not anchors:
+        print("nothing to plan: --routes and/or --area", file=sys.stderr)
+        return 2
     data = {"version": 1, "pinM": pin_m, "rebaseDistance": dist, "anchors": [list(x) for x in anchors],
             "routes": {n: {"name": ROUTES[n]["name"], "anchors": order[n], "back": order[n + "<"],
                            "km": round(sum(horizontal(p, q) for p, q in zip(pts[n], pts[n][1:])) / 1000, 1)}
                        for n in names},
             "planned": time.strftime("%Y-%m-%d %H:%M:%S")}
+    for n, line in lines.items():
+        data["routes"][n] = {"name": f"{a.area_name} scan line {n[5:]}", "anchors": order[n], "scan": True,
+                             "km": round(horizontal(line[0], line[1]) / 1000, 1)}
+    if areas:
+        data["areas"] = areas
     write_json(os.path.join(a.user_dir, *MOD_FILE), data)
     write_json(os.path.join(bake_dir(a), "anchors.json"), data)
-    write_json(os.path.join(bake_dir(a), "routes.json"), {n: [list(p) for p in pts[n]] for n in names})
-    print(f"{len(anchors)} anchors (rebase {dist / 1000:g} km, pinned within {pin_m / 1000:.2f} km):")
+    routes_out = {n: [list(p) for p in pts[n]] for n in names}
+    routes_out.update({n: [list(p) for p in line] for n, line in lines.items()})
+    write_json(os.path.join(bake_dir(a), "routes.json"), routes_out)
+    print(f"{len(anchors)} anchors (rebase {dist / 1000:g} km, pinned within {pin_m / 1000:.2f} km; the frame is the "
+          f"nearest planned anchor's, {PIN_HYST_M:g} m hysteresis):")
     for i, x in enumerate(anchors):
-        used = [n for n in order if i in order[n]]
-        print(f"  {i:2d}  {x[0]:.6f}, {x[1]:.6f}  {' '.join(used)}")
+        used = [n for n in order if i in order[n] and not n.startswith("scan_")]
+        if not areas or i < len(anchors) - len(next(iter(areas.values()))["anchors"]):
+            print(f"  {i:2d}  {x[0]:.6f}, {x[1]:.6f}  {' '.join(used)}")
     for n in names:
         print(f"  {n} ({data['routes'][n]['km']} km): anchors {order[n]}, back {order[n + '<']}")
+    for name, ar in areas.items():
+        print(f"  area {name}: box {ar['box']}, {len(ar['anchors'])} lattice anchors, {len(ar['lines'])} scan lines "
+              f"{a.line_m / 1000:g} km apart (headless_bake.py --routes 'scan_*' --jobs N)")
     print(f"written: {os.path.join(a.user_dir, *MOD_FILE)}")
     print(f"         {os.path.join(bake_dir(a), 'anchors.json')}")
     return 0
@@ -465,6 +586,11 @@ def main(argv=None):
     ap.add_argument("--user-dir", default=None, help="the game's user folder (default: the one the game uses)")
     ap.add_argument("--rebase-m", type=float, default=None, help="plan: the rebase distance (default: the mod's)")
     ap.add_argument("--points", default=None, help="plan: the routes' points from this JSON instead of OSRM")
+    ap.add_argument("--area", default=None,
+                    help="plan: an area lat0,lon0,lat1,lon1 too: a lattice of anchors over it and scan lines "
+                         "(scan_NN routes) for headless_bake.py; --routes '' for the area alone")
+    ap.add_argument("--area-name", default="area", help="plan --area: its name in anchors.json (default area)")
+    ap.add_argument("--line-m", type=float, default=SCAN_LINE_M, help="plan --area: the scan lines' spacing (m)")
     ap.add_argument("--out", default=os.path.join(ROOT, "build", "route_bake"), help="drive: the runs' folder")
     ap.add_argument("--driver", choices=("ghost", "ai"), default="ghost",
                     help="drive: ghost (default) sets the car along the route and waits for each place to load "

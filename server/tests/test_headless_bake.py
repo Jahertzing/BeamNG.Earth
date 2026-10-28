@@ -96,23 +96,48 @@ class ServerCommandTest(unittest.TestCase):
 class LegsTest(unittest.TestCase):
     def test_legs_shared_out(self):
         legs = hb.legs_of(["i25", "downtown"], True)
-        self.assertEqual(legs, [("i25", False), ("i25", True), ("downtown", False), ("downtown", True)])
-        self.assertEqual(hb.legs_of(["i25"], False), [("i25", False)])
+        self.assertEqual(legs, [("i25", False, None), ("i25", True, None), ("downtown", False, None),
+                                ("downtown", True, None)])
+        self.assertEqual(hb.legs_of(["i25"], False), [("i25", False, None)])
         self.assertEqual([hb.leg_label(*lg) for lg in legs], ["i25", "i25_back", "downtown", "downtown_back"])
-        self.assertEqual(hb.parse_legs("i25,downtown_back, i25_back"), [("i25", False), ("downtown", True),
-                                                                        ("i25", True)])
-        self.assertEqual(hb.share_out(legs, 2), [[("i25", False), ("downtown", False)],
-                                                 [("i25", True), ("downtown", True)]])
+        self.assertEqual(hb.parse_legs("i25,downtown_back, i25_back"), [("i25", False, None), ("downtown", True, None),
+                                                                        ("i25", True, None)])
+        self.assertEqual(hb.share_out(legs, 2), [[("i25", False, None), ("downtown", False, None)],
+                                                 [("i25", True, None), ("downtown", True, None)]])
         self.assertEqual(hb.share_out(legs, 1), [legs])
         self.assertEqual(len(hb.share_out(legs[:1], 3)), 1, "no empty jobs")
+
+    def test_split_legs_round_trip(self):
+        legs = hb.legs_of(["i25"], True, split=2)
+        self.assertEqual(legs, [("i25", False, (0, 2)), ("i25", False, (1, 2)), ("i25", True, (0, 2)),
+                                ("i25", True, (1, 2))])
+        labels = [hb.leg_label(*lg) for lg in legs]
+        self.assertEqual(labels, ["i25_1of2", "i25_2of2", "i25_back_1of2", "i25_back_2of2"])
+        self.assertEqual(hb.parse_legs(",".join(labels)), legs)
+        self.assertEqual(hb.parse_legs("scan_03_2of4"), [("scan_03", False, (1, 4))])
+        route = gd_route([(40.0, -105.0), (40.0 + 10000 * DEG_N, -105.0)])
+        a, b, c = (hb.stretch(route, i, 3) for i in range(3))
+        self.assertAlmostEqual(a.length, 10000 / 3 + 1000, delta=20, msg="the first reaches 1 km into the second")
+        self.assertAlmostEqual(b.length, 10000 / 3 + 2000, delta=20, msg="the middle one into both")
+        self.assertAlmostEqual(c.length, 10000 / 3 + 1000, delta=20)
+        self.assertEqual(a.point(0.0), route.point(0.0))
+        self.assertAlmostEqual(c.point(c.length)[0], route.point(route.length)[0], places=6)
+        self.assertAlmostEqual(b.point(0.0)[0], route.point(10000 / 3 - 1000)[0], places=6)
+        self.assertIs(hb.stretch(route, 0, 1), route)
+        self.assertEqual(hb.jobs_for(8, 4, ram_gb=64.0), (4, None), "at most one per leg")
+        self.assertEqual(hb.jobs_for(8, 16, ram_gb=64.0), (8, None))
+        jobs, note = hb.jobs_for(12, 16, ram_gb=42.0)      # (the PC with the game closed: 63.6 GB, ~21 GB in use)
+        self.assertEqual(jobs, 5)
+        self.assertIn("5 jobs", note)
+        self.assertEqual(hb.jobs_for(1, 0, ram_gb=1.0), (1, None))
 
     def test_a_childs_command_carries_the_options(self):
         a = argparse.Namespace(speed=80.0, roads_q=1, backlog_q=4, edge_m=160.0, max_wait=180.0, ground_wait=20.0,
                                cache_dir="/c", world_dir=None, user_dir="/u", rebase_m=None)
-        cmd = hb.child_command(a, [("i25", False), ("downtown", True)], "/out/x", "alone", 3, 2)
+        cmd = hb.child_command(a, [("i25", False, None), ("downtown", True, (0, 2))], "/out/x", "alone", 3, 2)
         self.assertEqual(cmd[:2], [sys.executable, os.path.abspath(hb.__file__)])
         self.assertIn("--child", cmd)
-        self.assertEqual(cmd[cmd.index("--legs") + 1], "i25,downtown_back")
+        self.assertEqual(cmd[cmd.index("--legs") + 1], "i25,downtown_back_1of2")
         self.assertEqual(cmd[cmd.index("--out") + 1], "/out/x")
         self.assertEqual(cmd[cmd.index("--mode") + 1], "alone")
         self.assertEqual(cmd[cmd.index("--workers") + 1:cmd.index("--workers") + 4], ["3", "--road-processes", "2"])
@@ -147,6 +172,22 @@ class RulesTest(unittest.TestCase):
         self.assertEqual(hb.anchor_for(40.0, -105.0, anchors, 0.0), rb.snap_anchor(40.0, -105.0))
         self.assertEqual(hb.pin_metres({"pinM": 6750.0}, 15000.0), 6750.0)
         self.assertEqual(hb.pin_metres({"pinM": 6750.0}, 10000.0), 4500.0, "core.lua PIN_SHARE of the setting")
+
+    def test_the_pinned_anchor_rule(self):
+        A, B = (40.0, -105.0), (40.0 + 1200 * DEG_N, -105.0)
+        anchors, pin_m = [A, B], 6750.0
+        at = lambda m: (40.0 + m * DEG_N, -105.0)     # noqa: E731
+        self.assertEqual(hb.pin_want(*at(100), anchors, pin_m, A, 100.0), (False, A), "A is the nearest: stay")
+        self.assertEqual(hb.pin_want(*at(700), anchors, pin_m, A, 700.0), (False, B), "B nearer, not by 300 m")
+        self.assertEqual(hb.pin_want(*at(760), anchors, pin_m, A, 760.0), (True, B), "B 320 m nearer: move")
+        self.assertEqual(hb.pin_want(*at(760), anchors, pin_m, B, 440.0), (False, B), "in B already")
+        self.assertEqual(hb.pin_want(*at(760), anchors, pin_m, None, 1e9), (True, B), "no anchor yet: move")
+        self.assertEqual(hb.pin_want(*at(20000), anchors, pin_m, A, 20000.0), (None, None), "none near")
+        self.assertEqual(hb.pin_want(*at(760), anchors, 0.0, A, 760.0), (None, None), "no pin distance")
+        self.assertEqual(hb.rebase_hint(27.0, 0.0, 700.0, 15000.0, 10.0, -20.0, 1024, 1.0, pinned=True),
+                         modsim.follow_centre_near(10.0 + 54.0, -20.0, 10.0 + 27.0, -20.0,
+                                                   modsim.follow_mode(27.0, 0.0, 1024)[1], 1024),
+                         "pinned: the block where the player will be at the answer, within reach")
 
     def test_rebase_hint_at_the_origin_is_modsims(self):
         for vx, vy, dist in ((27.0, 0.0, 14700.0), (10.0, -20.0, 14800.0), (27.0, 3.0, 15200.0)):
@@ -299,6 +340,27 @@ class DriveTest(unittest.TestCase):
         commits = [m for m in srv.got if m["type"] == "commit_anchor"]
         self.assertEqual([m["anchorId"] for m in commits], list(range(1, len(asked) + 1)))
 
+    def test_a_drive_moves_to_the_nearer_planned_anchor(self):
+        # two planned anchors 1200 m apart, the rebase distance 15 km: the distance rule never fires on a 2.4 km
+        # drive; the pinned-anchor rule moves the frame to B 150 m past the midpoint (B 300 m nearer)
+        A, B = (40.0, -105.0), (40.0 + 1200 * DEG_N, -105.0)
+        line = [A, (40.0 + 2400 * DEG_N, -105.0)]
+        srv = StandIn()
+        self.addCleanup(srv.close)
+        c = hb.Client(srv.port)
+        self.addCleanup(c.close)
+        hb.hello(c, 10)
+        d = hb.Drive(c, gd_route(line), [A, B], 6750.0, 15000.0, 1024, "/nonexistent",
+                     opts(speed=100.0, max_wait=20.0), say=lambda *x, **k: None)
+        s = d.run()
+        self.assertTrue(s["complete"], s)
+        asked = [(m["lat"], m["lon"], m["purpose"]) for m in srv.got if m["type"] == "prepare_anchor"]
+        self.assertEqual(asked, [(A[0], A[1], "teleport"), (B[0], B[1], "rebase")])
+        self.assertEqual((s["rebases"], s["pinned"], s["discards"]), (1, 1, 0))
+        rebase = next(m for m in srv.got if m["type"] == "prepare_anchor" and m["purpose"] == "rebase")
+        self.assertLess(abs(rebase["cx"]), 3000, "the hint: a block near the player, not 15 km ahead")
+        self.assertEqual(s["anchors"], [[A[0], A[1]], [round(B[0], 6), B[1]]])
+
     def test_on_past_a_spot_that_never_loads(self):
         line = [(40.0, -105.0), (40.0 + 600 * DEG_N, -105.0)]
         srv = StandIn()
@@ -385,6 +447,22 @@ class CommandTest(unittest.TestCase):
             self.assertTrue(os.path.exists(os.path.join(d, "out", out[0], "t", "summary.json")))
             self.assertTrue(os.path.exists(os.path.join(d, "out", out[0], "t", "samples.jsonl")))
 
+    def test_split_stretches_against_a_server(self):
+        line = [(40.0, -105.0), (40.0 + 2400 * DEG_N, -105.0)]
+        with tempfile.TemporaryDirectory() as d:
+            bd = self.plan(d, line, 900.0)
+            srv = StandIn()
+            self.addCleanup(srv.close)
+            rc = hb.main(["--connect", str(srv.port), "--rebase-m", "900", "--speed", "250", "--max-wait", "20",
+                          "--mode", "game", "--split", "2"] + self.args(d))
+            self.assertEqual(rc, 0)
+            run = rb.read_json(os.path.join(bd, rb.MANIFEST))["runs"][-1]
+            self.assertEqual([(lg["route"], lg["part"]) for lg in run["legs"]], [("t", [0, 2]), ("t", [1, 2])])
+            self.assertTrue(all(lg["summary"]["complete"] for lg in run["legs"]))
+            self.assertAlmostEqual(run["legs"][0]["summary"]["route_km"], 2.2, delta=0.05, msg="1.2 km + 1 km overlap")
+            out = os.listdir(os.path.join(d, "out"))[0]
+            self.assertEqual(sorted(os.listdir(os.path.join(d, "out", out))), ["t_1of2", "t_2of2"])
+
     def test_jobs_children_read_back(self):
         line = [(40.0, -105.0), (40.0 + 2400 * DEG_N, -105.0)]
         with tempfile.TemporaryDirectory() as d:
@@ -404,7 +482,7 @@ class CommandTest(unittest.TestCase):
             with unittest.mock.patch.object(hb, "child_command", fake_child):
                 rc = hb.main(["--rebase-m", "900", "--mode", "alone", "--jobs", "2", "--both-ways"] + self.args(d))
             self.assertEqual(rc, 1, "a leg that did not finish (t_back) fails the run")
-            self.assertEqual([lg for lg, _, _, _ in cmds], [[("t", False)], [("t", True)]], "a job per leg")
+            self.assertEqual([lg for lg, _, _, _ in cmds], [[("t", False, None)], [("t", True, None)]], "a job per leg")
             far, road = hb.alone_workers(jobs=2)
             self.assertEqual({(m, w, r) for _, m, w, r in cmds}, {("alone", far, road)}, "the workers divided")
             run = rb.read_json(os.path.join(bd, rb.MANIFEST))["runs"][-1]
@@ -429,9 +507,9 @@ class ProfileTest(unittest.TestCase):
             self.assertEqual(hb.server_command(user, 0, "/c", win=True, profile=True)[-1], "-v")
         a = argparse.Namespace(speed=80.0, roads_q=1, backlog_q=4, edge_m=160.0, max_wait=180.0, ground_wait=20.0,
                                cache_dir=None, world_dir=None, user_dir=None, rebase_m=None, profile=True)
-        self.assertEqual(hb.child_command(a, [("i25", False)], "/o", "alone", 1, 1)[-1], "--profile")
+        self.assertEqual(hb.child_command(a, [("i25", False, None)], "/o", "alone", 1, 1)[-1], "--profile")
         a.profile = False
-        self.assertNotIn("--profile", hb.child_command(a, [("i25", False)], "/o", "alone", 1, 1))
+        self.assertNotIn("--profile", hb.child_command(a, [("i25", False, None)], "/o", "alone", 1, 1))
 
     def test_cpu_by_kind_takes_each_workers_last_line(self):
         with tempfile.TemporaryDirectory() as d:

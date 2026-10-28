@@ -31,6 +31,10 @@ M.KEEP_EDGE_512 = 150
 M.LATENCY_S = 1          -- anchor latency assumed until one is measured (s)
 M.LEAD_EXTRA_S = 1       -- a re-requested terrain leads the player by the latency plus this
 M.RETRY_S = 5            -- wait after an anchor_error before asking again
+-- Pinned anchors (routepins.lua: a baked route's or area's planned anchors): the frame is the nearest planned anchor's,
+-- whatever path the car took to get there, so a bake made in those frames (tools/headless_bake.py) fits every drive. The
+-- nearest one must be this much nearer than the current anchor before the frame moves (no flapping along the border).
+M.PIN_HYST_M = 300
 
 -- The session's block size (1024 or 512): the staleness distance and the stale-anchor rule.
 function M.configure(size)
@@ -53,18 +57,24 @@ end
 --   both in the new anchor's frame.
 -- edgeDist: only when pending.ready: the player's distance to the nearest edge of that terrain's
 --   valid (collidable) area, new frame (negative outside); used by the stale-anchor rule (KEEP_EDGE).
+-- want: the pinned-anchor rule (core.lua pinWant, routepins.want): nil when no planned anchor is within the pin
+--   distance (the distance rule alone), true when a planned anchor other than the current one is PIN_HYST_M nearer
+--   (prefetch now; a pending.pinned request commits as soon as it is ready), false when the current anchor is the
+--   nearest planned one or the pending pinned request's anchor is no longer the nearest (a pending.pinned request is
+--   discarded; the distance rule still applies).
 -- Returns 'prefetch', 'commit', 'discard' or nil. Teleport/resync requests commit as soon as they
 -- are ready, which the caller handles; this rule only covers the distance-driven rebase.
 -- Staleness is judged only at the commit: the terrain was centred for where the player will be
 -- at the rebase distance (core.lua rebaseHint), up to PREFETCH_MARGIN + 424 m ahead of the player
 -- at the prefetch, so judging it earlier discards a good answer and re-requests in a loop.
-function M.decide(dist, pending, staleDist, now, retryAt, edgeDist)
+function M.decide(dist, pending, staleDist, now, retryAt, edgeDist, want)
   if not pending then
-    if dist >= M.distance - M.PREFETCH_MARGIN and now >= (retryAt or 0) then return 'prefetch' end
+    if (want or dist >= M.distance - M.PREFETCH_MARGIN) and now >= (retryAt or 0) then return 'prefetch' end
     return nil
   end
   if pending.purpose ~= 'rebase' or not pending.ready then return nil end
-  if dist < M.distance then return nil end
+  if pending.pinned and want == false then return 'discard' end
+  if not pending.pinned and dist < M.distance then return nil end
   if staleDist and staleDist > M.STALE_DIST then
     if M.KEEP_EDGE > 0 and edgeDist and edgeDist >= M.KEEP_EDGE then return 'commit' end
     return 'discard'

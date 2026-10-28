@@ -28,6 +28,14 @@ What changed in each release of BeamNG.Earth, newest first.
   workers and road processes at below-normal priority instead of one of each at idle; `--jobs 2` bakes the routes
   at once on a server each. Each leg's summary says where its seconds went (moving, ground, road tiles, far
   tiles), and `--profile` says where the server's CPU went (its own process against its workers, by job kind).
+  `--split M` cuts every leg into M overlapping stretches so more servers run at once: a server's own process is the
+  limit (about 1.7 cores a server), not the machine.
+- **Pinned anchors are deterministic**: with a baked route or area planned (`tools/route_bake.py plan`), the world's
+  origin is the nearest planned anchor's, whichever way the car came (it moves as soon as another planned anchor is
+  300 m nearer), instead of whichever anchor happened to be near when the 15 km line was crossed. A bake made in
+  those frames fits every drive, so an area can be baked, not only a path. `plan --area lat0,lon0,lat1,lon1` lays a
+  lattice of anchors over a box and scan lines across it (`headless_bake.py --routes 'scan_*' --jobs N` bakes it with
+  no game and no driving).
 
 ## 1.7.0 beta (2026-10-27)
 
