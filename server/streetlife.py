@@ -203,6 +203,19 @@ class _Segs:
         return ok
 
 
+def _face_road(segs, q, u):
+    """The yaw (_yaw) square to the road a driveway's mouth q meets, toward it: a mailbox's door, a cluster box's
+    doors and the carts' fronts face the street, not along a driveway drawn at an angle to it (u: toward the house)."""
+    if not len(segs):
+        return _yaw(-u[0], -u[1])
+    k = segs.nearest(q)[0]
+    d = segs.D[k] / math.sqrt(segs.L2[k])
+    n = np.array([d[1], -d[0]])
+    if float(n @ u) < 0.0:
+        n = -n                                      # (the road's normal on the house's side)
+    return _yaw(-n[0], -n[1])
+
+
 ROAD_CLEAR_M = 0.35         # m every street-life prop keeps off any carriageway (a dead end's, a crossing street's)
 
 
@@ -306,17 +319,17 @@ def driveway_rows(drives, walks, box, z_at, to_ll, us=True, town=True, spots=Non
         if cls in NO_MAIL_CLASSES and segs.street_dist(p0) > ALLEY_STREET_M:
             cls = "residential"                     # a lane, the house's only road (not an alley behind a street)
         cell = (math.floor(lat / CBU_CELL_DEG), math.floor(lon / CBU_CELL_DEG))
-        drive_info.append((k, cell, p1, u, s, half_w, outer, cls, urban))
+        drive_info.append((k, cell, p1, u, s, half_w, outer, cls, urban, _face_road(segs, p1, u)))
     # a subdivision's density: the town-street drives within CBU_NEAR_M of each
     town_drive = np.array([bool(town) and urban is not False and cls not in NO_MAIL_CLASSES
-                           for _, _, _, _, _, _, _, cls, urban in drive_info], bool)
+                           for _, _, _, _, _, _, _, cls, urban, _ in drive_info], bool)
     M = np.array([d[2] for d in drive_info], np.float64).reshape(-1, 2)
     dense = np.zeros(len(drive_info), bool)
     if town_drive.any():
         T = M[town_drive]
         near = (np.hypot(M[:, None, 0] - T[None, :, 0], M[:, None, 1] - T[None, :, 1]) < CBU_NEAR_M).sum(1)
         dense = town_drive & (near >= CBU_MIN_HOUSES)
-    for (k, cell, p1, u, s, half_w, outer, cls, urban), dn in zip(drive_info, dense):
+    for (k, cell, p1, u, s, half_w, outer, cls, urban, face), dn in zip(drive_info, dense):
         side = 1.0 if _h01(k, "mside") < 0.5 else -1.0
         out = (outer + 0.6) if outer is not None else 1.0
         if cls in NO_MAIL_CLASSES:
@@ -325,17 +338,17 @@ def driveway_rows(drives, walks, box, z_at, to_ll, us=True, town=True, spots=Non
             # a subdivision: a cluster box for the cell, at one of its drives' ends behind the curb (or sidewalk)
             q = p1 + u * out + s * side * (half_w + 1.6)
             qm = p1 + u * (MAILBOX_IN_M if outer is None else out) + s * side * (half_w + MAILBOX_SIDE_M)
-            cbu_cand.setdefault(cell, []).append((_h01(k, "cbu"), q, _yaw(-u[0], -u[1]),
-                                                  (qm, G_MAILBOX, _yaw(-u[0], -u[1]), MAILBOX_H, _h01(k, "mb"), 0.0)))
+            cbu_cand.setdefault(cell, []).append((_h01(k, "cbu"), q, face,
+                                                  (qm, G_MAILBOX, face, MAILBOX_H, _h01(k, "mb"), 0.0)))
         elif outer is None or urban is False:
             # a curbside mailbox beside the drive, its door to the road
             q = p1 + u * MAILBOX_IN_M + s * side * (half_w + MAILBOX_SIDE_M)
-            places.append((q, G_MAILBOX, _yaw(-u[0], -u[1]), MAILBOX_H, _h01(k, "mb"), 0.0))
+            places.append((q, G_MAILBOX, face, MAILBOX_H, _h01(k, "mb"), 0.0))
         if _h01(k, "cart") < CART_SHARE:
             # the trash and recycling carts at the end of the drive, on its side away from the mailbox
             for j, g in enumerate((G_CART_TRASH, G_CART_RECYCLE)):
                 q = p1 + u * 0.7 - s * side * (half_w - 0.45 - 0.75 * j)
-                places.append((q, g, _yaw(-u[0], -u[1]) + 8.0 * (_h01(k, j, "cy") - 0.5), CART_H, 0.0, 0.0))
+                places.append((q, g, face + 8.0 * (_h01(k, j, "cy") - 0.5), CART_H, 0.0, 0.0))
     boxed = {cell for cell, cand in cbu_cand.items() if len(cand) >= CBU_CELL_MIN}
     for cell, cand in cbu_cand.items():
         if cell not in boxed:

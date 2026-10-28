@@ -57,6 +57,14 @@ class DrivewayTest(unittest.TestCase):
             self.assertAlmostEqual(dx, 1.6 + sl.MAILBOX_SIDE_M, places=2)
         self.assertFalse([r for r in rows if r[0] == sl.G_CBU])
 
+    def test_square_to_the_street_on_an_angled_drive(self):
+        drives = [{"w": 3.2, "n": [[30.0 + k * 18.0 + 6.0, 116.0, 0.0], [30.0 + k * 18.0, 104.0, 0.0]]} for k in range(4)]
+        rows = sl.driveway_rows(drives, [], BOX, flat, ll(), us=True, town=True, lines=street_line(urban=False))
+        mb = [r for r in rows if r[0] == sl.G_MAILBOX]
+        self.assertEqual(len(mb), 4)
+        for r in mb:
+            self.assertAlmostEqual(r[4], 270.0, places=1)
+
     def test_sparse_town_street_mailboxes_dense_one_a_cluster_box(self):
         sparse = sl.driveway_rows(drives_along(4, gap=40.0), [], BOX, flat, ll(), lines=street_line())
         self.assertEqual(len([r for r in sparse if r[0] == sl.G_MAILBOX]), 4)
