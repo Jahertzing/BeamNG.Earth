@@ -1,4 +1,5 @@
 """Regional OSM tag tables (tools/osm_tag_table.py, osmtags.Regional, mapdata's roads cells inside a table)."""
+import json
 import os
 import shutil
 import sys
@@ -81,6 +82,39 @@ class TableTest(unittest.TestCase):
         self.assertEqual(list(f.attrs["osm_centre_turn_lane"]), ["", "", "", "yes"])
         self.assertEqual(osmtags.regional_column("turn:lanes:both_ways"), "osm_turn_lanes_both_ways")
 
+    def test_relation_segments_and_merged_segments(self):
+        """A segment whose first source is a route relation takes its way among its sources (the longest share); a
+        segment merged from several ways takes its forward turn lanes from its last way, its backward ones (and
+        TURN_START) from its first, everything else from its own (first) way."""
+        tag = self.write(ways={1: {"lanes:forward": "1", "turn:lanes:backward": "left|through"},
+                               5: {"lanes:forward": "2", "turn:lanes:forward": "left|through",
+                                   "turn:lanes": "left|through"},
+                               9: {"lanes:forward": "3"}})
+        r = osmtags.Regional(self.raw)
+
+        def way(w, a=None, b=None):
+            return {"dataset": "OpenStreetMap", "record_id": f"w{w}@2", "between": None if a is None else [a, b]}
+
+        class F:
+            attrs = {"src_record": np.array(["r7@1", "r7@1", "w1@3", "w9@1"]),
+                     "src_ways": np.array([json.dumps([way(9, 0.0, 0.3), way(5, 0.3, 1.0)]),      # (rel first)
+                                           json.dumps([way(9)]),
+                                           json.dumps([way(1, 0.0, 0.8), way(5, 0.8, 1.0)]),     # (merged)
+                                           ""])}                                                # (older cell)
+
+            def __len__(self):
+                return 4
+        f = F()
+        self.assertEqual([osmtags.main_way(f, i) for i in range(4)], [5, 9, 1, 9])
+        self.assertEqual(osmtags.segment_ways(f, 3), [(9, 0.0, 1.0)])
+        self.assertEqual(json.loads(f.attrs["src_ways"][0])[0]["record_id"], "w9@2")
+        osmtags.join_regional(f, r.tags(tag, [1, 5, 9]))
+        self.assertEqual(list(f.attrs["osm_lanes_forward"]), ["2", "3", "1", "3"])
+        self.assertEqual(list(f.attrs["osm_turn_lanes_forward"]), ["left|through", "", "left|through", ""])
+        self.assertEqual(list(f.attrs["osm_turn_lanes_backward"]), ["", "", "left|through", ""])
+        self.assertEqual(list(f.attrs[osmtags.TURN_START]), ["", "", "", ""])
+        self.assertEqual(list(f.attrs["osm_turn_lanes"]), ["left|through", "", "left|through", ""])
+
     def test_first_table_by_tag_wins(self):
         a = self.write("b-newer", stamp="2026-10-28")
         b = self.write("a-older", stamp="2026-01-01")
@@ -111,8 +145,9 @@ class MapDataTest(Sources, SmallBlocks, unittest.TestCase):
         tag = osm_tag_table.write_table(os.path.join(cache, "mapdata", "raw", osmtags.REGIONAL_DIR, "fx.npz"), "fx",
                                         (lon0 - 1, lat0 - 1, lon1 + 1, lat1 + 1), "s1", WAYS)
         md2, _ = self.mapdata(cache=cache)
+        lv = mapdata.LAYER_VERSIONS["roads"]
         self.assertEqual(md2.path(mf.CELL, "roads"), plain[:-len(".npz")].replace(
-            os.sep.join(["roads.6", ""]), os.sep.join([f"roads.6.{tag}", ""])) + ".npz")
+            os.sep.join([f"roads.{lv}", ""]), os.sep.join([f"roads.{lv}.{tag}", ""])) + ".npz")
         self.assertEqual(md2.path(mf.CELL, "buildings"), md.path(mf.CELL, "buildings"))     # (roads only)
         far = mapcells.cell_of(10.0, 10.0)
         self.assertEqual(md2.path(far, "roads"), md.path(far, "roads"))                     # outside: as before

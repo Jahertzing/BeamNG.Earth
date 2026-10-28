@@ -89,11 +89,15 @@ THEME_LICENCES = {
 
 _SRC = "sources[1].dataset AS src_dataset, sources[1].record_id AS src_record"
 _NAME = "names.\"primary\" AS name"
+# a road segment's OpenStreetMap ways with the share of it each gives (JSON: [{dataset, record_id, between, ...}]): its
+# first source may be a route relation (Colfax, CO-52: "r1628565@801", property "/routes"), the way after it; and
+# Overture merges consecutive ways into one segment ("between" ranges: a quarter of Colorado's arterial segments)
+_WAYS = "CAST(to_json(list_filter(sources, s -> s.record_id LIKE 'w%')) AS VARCHAR) AS src_ways"
 _TAGS = "CAST(to_json(source_tags) AS VARCHAR) AS tags"
 LAYERS = {
     "roads": dict(theme="transportation", type="segment", clip=False,
-                  cols=f"subtype, class, subclass, {_NAME}, {_SRC}",
-                  text=("subtype", "class", "subclass", "name", "src_dataset", "src_record"),
+                  cols=f"subtype, class, subclass, {_NAME}, {_SRC}, {_WAYS}",
+                  text=("subtype", "class", "subclass", "name", "src_dataset", "src_record", "src_ways"),
                   extra="road_flags, rail_flags, speed_limits, connectors, road_surface, width_rules, level_rules, "
                         "subclass_rules, access_restrictions",
                   rules={"surface": ("road_surface", "value", "text"),

@@ -1083,6 +1083,13 @@ three days of testing: dem 741 MB / 7.5k files, imagery 1.4 GB / 35k, deshadow 7
   the junctions' curbs and crosswalks (`junctions.find` half=) and grading's core (`grading.widen_plan`).
   Pure per road; road tiles look the joints up in the cells within `POCKET_REACH_M`. `BNE_TURN_POCKETS=off`
   turns it off. Probe: `tools/pocket_probe.py` (top-down PNGs before / after).
+- A segment's own OSM ways (`overture._WAYS`: `src_ways`, the way records among its sources with their
+  `between` shares; `osmtags.segment_ways`, `main_way`; roads layer 7, 2026-10-28): Overture gives some segments a
+  route relation as their first source (Colfax, CO-52, the I-25 frontage roads: 7-43 % of their arterial segments),
+  and merges consecutive ways into one segment (25-33 %). The regional and Layercake joins take a relation's segment's
+  way from its sources (the longest share), and a merged segment's turn lanes from the way at the end they lead to
+  (turn:lanes:forward the last way's, :backward and `osm_turn_lanes_start` the first's): a pocket way merged with its
+  approach gives a pocket at the end (rule (a)), not turn lanes along the whole segment.
 - Turn lanes without turn:lanes (rule (c), 2026-10-28): CDOT counts a stretch's left turn lanes into its
   lanes (a painted median: `lanes_c`; else the direction's lanes), and its stretches are short, so CO-52
   through Frederick widens near its junctions by segment; those steps now taper too (a centre turn lane
