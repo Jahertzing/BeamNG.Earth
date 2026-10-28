@@ -53,8 +53,18 @@ SEND_M = 40000.0            # cells whose square (anchor frame) comes this close
 DROP_M = 44000.0            # ... and dropped beyond this
 TALL_M = 6000.0             # cells this near get the "tall" tier (>= 20 m), the rest the "towers" tier (>= 50 m) ...
 TALL_HYST_M = 1500.0        # ... and keep it until this much farther (no rebuild back and forth at the edge)
-LAYERS = {"tall": ("tall_buildings", "tall_building_parts"), "towers": ("towers", "tower_parts")}
-TIER_CODE = {"tall": "t", "towers": "w"}    # (in the file names: a tier change loads new files)
+LAYERS = {"tall": ("tall_buildings", "tall_building_parts"), "towers": ("towers", "tower_parts"),
+          "mid": ("buildings", None)}
+TIER_CODE = {"tall": "t", "towers": "w", "mid": "m"}    # (in the file names: a tier change loads new files)
+# The mid ring (2026-10-28, the work plan's item 3): between the far building tiles (1.9 km) and MID_SEND_M, the
+# buildings the "tall" tier leaves out that still stand out (MID_FLOORS floors, MID_H, or a MID_AREA_M2 footprint:
+# a town's 3-storey blocks, a mall, a warehouse), per z14 map cell from its cached buildings layer (the near tiers'
+# own: no new query; a cell not cached yet is fetched as a prefetch). Exactly the complement of the tall filter (no
+# building drawn by both): a cell within MID_SEND_M lies in a z12 cell within it too, which is "tall" (TALL_M).
+MID_ZOOM = 14
+MID_SEND_M = 6000.0
+MID_DROP_M = 7500.0
+MID_FLOORS, MID_H, MID_AREA_M2 = 3, 12.0, 1500.0
 PER_POSE = 1                # skyline tiles building at once (low priority: see the module docstring)
 HEADING_BIAS = 0.4          # a cell straight ahead counts (1 - this) times as far; moving faster than HEADING_MIN_MS
 HEADING_MIN_MS = 5.0
@@ -85,15 +95,20 @@ def box_distance(box, x, y):
     return math.hypot(dx, dy)
 
 
-def cells_near(frame, x, y, radius):
-    """The z12 cells whose square may come within radius of (x, y) (anchor frame): the cells under the lat/lon box
-    radius around the point's position, in key order."""
+def cells_near(frame, x, y, radius, z=ZOOM):
+    """The cells (zoom z) whose square may come within radius of (x, y) (anchor frame): the cells under the lat/lon
+    box radius around the point's position, in key order."""
     lat, lon, _ = frame.enu_to_geodetic(x, y, 0.0)
     lat, lon = float(lat), float(lon)
     dlat = radius / 111000.0
     dlon = radius / (111000.0 * max(0.05, math.cos(math.radians(lat))))
     lat0, lat1 = max(-mapcells.MAX_LAT, lat - dlat), min(mapcells.MAX_LAT, lat + dlat)
-    return sorted(mapcells.cells_for_bbox(lat0, lon - dlon, lat1, lon + dlon, z=ZOOM))
+    return sorted(mapcells.cells_for_bbox(lat0, lon - dlon, lat1, lon + dlon, z=z))
+
+
+def key_name(key):
+    """A cell's key in the messages and the mod: "x_y" for the skyline's z12 cells, "z_x_y" for the others."""
+    return f"{key.x}_{key.y}" if key.z == ZOOM else f"{key.z}_{key.x}_{key.y}"
 
 
 def tier_for(d, had=None):
@@ -134,6 +149,32 @@ def _owned_rows(f):
     return np.ones(len(f.kind), bool) if own is None else np.asarray(own, bool)
 
 
+def mid_left_out(frame, f):
+    """Ids of a buildings layer's rows the mid ring leaves out: not owned, the "tall" tier's (>= 20 m or >= 6 floors:
+    overture.LAYERS "tall_buildings", NaN counting as no), or under all of MID_FLOORS, MID_H and MID_AREA_M2."""
+    if f is None or len(f.kind) == 0:
+        return frozenset()
+    n = len(f.kind)
+    nan = np.full(n, np.nan)
+    h = np.asarray(f.attrs.get("height", nan), np.float64)
+    nf = np.asarray(f.attrs.get("num_floors", nan), np.float64)
+    with np.errstate(invalid="ignore"):
+        tall = (h >= 20.0) | (nf >= 6.0)
+        big = (h >= MID_H) | (nf >= MID_FLOORS)
+    xy = f.xy_in(frame)
+    area = np.zeros(n)
+    for i in np.flatnonzero(~big & ~tall).tolist():     # (the footprint only where the attributes do not decide)
+        p0 = int(f.part_off[i])
+        if p0 >= int(f.part_off[i + 1]):
+            continue
+        r0 = int(f.ring_off[p0])
+        a, b = int(f.coord_off[r0]), int(f.coord_off[r0 + 1])
+        x, y = xy[a:b, 0], xy[a:b, 1]
+        area[i] = 0.5 * abs(float(np.dot(x, np.roll(y, -1)) - np.dot(y, np.roll(x, -1))))
+    keep = _owned_rows(f) & ~tall & (big | (area >= MID_AREA_M2))
+    return frozenset(str(i) for i in np.asarray(f.ids)[~keep].tolist())
+
+
 def part_keys(frame, f, tile=None):
     """{(tx, ty)} of the anchor's road tiles (roads.TILE) that may hold an owned building's centroid (its first ring's
     mean, give or take buildings.CENTRE_PREFILTER_M): the parts to build (tile_buildings decides exactly)."""
@@ -152,13 +193,14 @@ def part_keys(frame, f, tile=None):
     return out
 
 
-def tile_items(frame, f, parts, elev, tx, ty):
+def tile_items(frame, f, parts, elev, tx, ty, skip=None):
     """[(Spec, gmin, gmax)] of the cell's owned buildings in the anchor's road tile (tx, ty) (rings relative to its
-    corner), simplified, their walls SKIRT_M deeper."""
+    corner), simplified, their walls SKIRT_M deeper. skip: the ids left out (default: the ones not owned)."""
     import roads
     x0, y0, x1, y1 = roads.tile_bbox(tx, ty)
-    own = _owned_rows(f)
-    skip = frozenset(str(i) for i in np.asarray(f.ids)[~own].tolist()) if (~own).any() else frozenset()
+    if skip is None:
+        own = _owned_rows(f)
+        skip = frozenset(str(i) for i in np.asarray(f.ids)[~own].tolist()) if (~own).any() else frozenset()
     items = buildings.tile_buildings(frame, x0, y0, x1, y1, [f], elev,
                                      part_layers=[parts] if parts is not None else (), skip=skip)
     out = []
@@ -231,8 +273,9 @@ def build_tile(frame, key, tier, md, elev, out_dir, vfs_dir, aid, kind="prefetch
     with `kind` (a prefetch the hosts have no room for raises netfetch.Deferred: built again on a later pose)."""
     import roads
     bl, pl = LAYERS[tier]
-    cd = md.cell(key, layers=(bl, pl), kind=kind)
-    f, parts = cd.layers.get(bl), cd.layers.get(pl)
+    cd = md.cell(key, layers=(bl,) + ((pl,) if pl else ()), kind=kind)
+    f, parts = cd.layers.get(bl), (cd.layers.get(pl) if pl else None)
+    skip = mid_left_out(frame, f) if tier == "mid" else None
     box = cell_box(frame, key)
     ox = math.floor((box[0] + box[2]) / 2 / roads.TILE) * roads.TILE
     oy = math.floor((box[1] + box[3]) / 2 / roads.TILE) * roads.TILE
@@ -242,7 +285,7 @@ def build_tile(frame, key, tier, md, elev, out_dir, vfs_dir, aid, kind="prefetch
     n = 0
     merged = []
     for tx, ty in sorted(part_keys(frame, f)):
-        items = tile_items(frame, f, parts, elev, tx, ty)
+        items = tile_items(frame, f, parts, elev, tx, ty, skip)
         if not items:
             continue
         tm = mesh(items)
@@ -269,12 +312,22 @@ def build_tile(frame, key, tier, md, elev, out_dir, vfs_dir, aid, kind="prefetch
 
 # ----------------------------------------------------------------------------------------------- the tracker
 
+def mid_tracker():
+    """The mid ring's Tracker: z14 cells to MID_SEND_M at the "mid" tier, none wholly under the far building tiles."""
+    import roads
+    return Tracker(MID_SEND_M, MID_DROP_M, PER_POSE, zoom=MID_ZOOM, tier=lambda d, had=None: "mid",
+                   inner_m=buildings.FAR_SEND_M - roads.TILE)
+
+
 class Tracker:
     """Per connection: which skyline cells the mod has, at which tier (as vegetation.Tracker for the anchor's tiles,
-    with global z12 keys). build(aid, key, tier) -> (vfs path, n) or None, on the tracker's own thread."""
+    with global cell keys). build(aid, key, tier) -> (vfs path, n) or None, on the tracker's own thread. zoom: the
+    cells' (ZOOM; the mid ring's MID_ZOOM); tier(d, had): a cell's tier at distance d (tier_for); inner_m: cells whose
+    square lies wholly within this of the car (Chebyshev) are not built (the near tiers cover all of them)."""
 
-    def __init__(self, send_m=SEND_M, drop_m=DROP_M, per_pose=PER_POSE):
+    def __init__(self, send_m=SEND_M, drop_m=DROP_M, per_pose=PER_POSE, zoom=ZOOM, tier=tier_for, inner_m=None):
         self.send_m, self.drop_m, self.per_pose = send_m, drop_m, per_pose
+        self.zoom, self.tier, self.inner_m = zoom, tier, inner_m
         self.aid = None
         self.sent = {}              # CellKey -> tier the mod has (or that was built empty: nothing sent)
         self.shown = set()          # CellKeys the mod was sent a tile with shapes for (they get a skyline_drop)
@@ -301,7 +354,7 @@ class Tracker:
             if sp >= HEADING_MIN_MS:
                 fx, fy = vel[0] / sp, vel[1] / sp
         want, far = [], []
-        for key in cells_near(frame, x, y, self.drop_m):
+        for key in cells_near(frame, x, y, self.drop_m, self.zoom):
             box = self.boxes.get(key)
             if box is None:
                 box = self.boxes[key] = cell_box(frame, key)
@@ -312,7 +365,10 @@ class Tracker:
                 continue
             if d > self.send_m:
                 continue
-            tier = tier_for(d, self.sent.get(key))
+            if self.inner_m is not None and max(abs(box[0] - x), abs(box[2] - x), abs(box[1] - y),
+                                                abs(box[3] - y)) < self.inner_m:
+                continue
+            tier = self.tier(d, self.sent.get(key))
             if self.sent.get(key) == tier or self.building.get(key) == tier:
                 continue
             order = d
@@ -324,7 +380,7 @@ class Tracker:
             want.append((order, key, tier, d))
         want.sort(key=lambda w: (w[0], w[1]))
         # keys the mod has that left the drop radius (cells_near covers drop_m; one the car left far behind is not in it)
-        near = set(cells_near(frame, x, y, self.drop_m))
+        near = set(cells_near(frame, x, y, self.drop_m, self.zoom))
         far += [k for k in self.sent if k not in near]
         return want, sorted(set(far))
 
@@ -342,7 +398,7 @@ class Tracker:
             self.boxes.pop(key, None)
             if key in self.shown:
                 self.shown.discard(key)
-                conn.send({"type": "skyline_drop", "anchorId": aid, "key": f"{key.x}_{key.y}"})
+                conn.send({"type": "skyline_drop", "anchorId": aid, "key": key_name(key)})
         if busy:
             return
         for _, key, tier, _ in want[:max(0, self.per_pose - len(self.building))]:
@@ -369,7 +425,7 @@ class Tracker:
         self.sent[key] = tier
         if n == 0 and key not in self.shown:
             return                      # nothing to draw, nothing drawn before: no message
-        m = {"type": "skyline_tile", "anchorId": aid, "key": f"{key.x}_{key.y}", "path": path, "n": n, "tier": tier}
+        m = {"type": "skyline_tile", "anchorId": aid, "key": key_name(key), "path": path, "n": n, "tier": tier}
         out_dir = getattr(getattr(conn, "s", None), "out_dir", None)
         data = staging.inline_json(out_dir, path) if out_dir else None
         if data is not None:

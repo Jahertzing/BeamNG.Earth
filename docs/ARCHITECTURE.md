@@ -1557,6 +1557,10 @@ The user: "make the world look alive ... look like a professionally made map".
   cell merged (drawn instead while the car is over 2.6 km from the cell). One build at a time on the far
   building pool, only while no far building tile builds. Denver downtown's cell: 618 buildings + 3,919
   parts ("tall"), 1.3 s, ~19-29 MB fetched once per release; a suburb's "towers" cell ~2 MB.
+  Mid ring (`skyline.mid_tracker`, tier "mid"): z14 cells from 1.9 to 6 km, from the cells' own `buildings`
+  layer, the buildings the "tall" filter leaves out with >= 3 floors, >= 12 m or a >= 1,500 m2 footprint
+  (exactly its complement: nothing drawn twice); message keys "14_x_y". Denver: 44 cells round downtown,
+  63-139 buildings and 0.1-0.4 s each, ~0.5 MB fetched once the skyline's tile has the row groups.
 - **Cost:** ~0.5 s per tile to plan, 5-13k triangles (Fells Point).
 - Tests: `server/tests/test_buildings.py`, `server/tests/test_skyline.py`.
 
