@@ -83,8 +83,9 @@ M.SCHEMA = {
   creditsVisible = { kind = 'bool', default = true, label = 'Data credits on screen' },
   creditsCorner = { kind = 'enum', default = 'bottom-left', values = credits.CORNERS, label = 'Data credits corner' },
   creditsSize = { kind = 'enum', default = 'small', values = { 'small', 'normal' }, label = 'Data credits size' },
-  -- the server's download cache (server cache.py): its size cap in GB, sent on every hello and change
-  cacheCapGb = { kind = 'enum', default = '20', values = { '5', '10', '20', '50', 'unlimited' },
+  -- the server's download cache (server cache.py): its size cap in GB, sent on every hello and change (100 and
+  -- 200: a pre-loaded state, tools/preload.py --region colorado, ~80 GB)
+  cacheCapGb = { kind = 'enum', default = '20', values = { '5', '10', '20', '50', '100', '200', 'unlimited' },
     label = 'Download cache size' },
   devOutlineKm = { kind = 'number', default = 3, min = 0.5, max = 20, label = 'Dev outlines radius (km)' },
   devMapKm = { kind = 'number', default = 10, min = 1, max = 80, label = 'Dev mini-map radius (km)' },
