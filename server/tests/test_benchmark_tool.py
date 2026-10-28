@@ -107,7 +107,11 @@ class FakeGame:
         return {"mod": True, "active": True, "net": "connected", "speed": self.speed, "player": dict(self.player),
                 "nearVisual": "mesh", "level": "beamng_earth",
                 "saved": {"cam": {"free": False, "fov": 75}, "sky": {"mode": "real", "tod": {"time": 0.1}},
-                          "weather": {"mode": "real"}, "perfmonLoaded": False}}
+                          "weather": {"mode": "real"}, "perfmonLoaded": False, "ui": {"cef": True, "imgui": True}}}
+
+    def do_hud(self, visible):
+        self.hud = bool(visible)
+        return {"ok": True, "visible": self.hud}
 
     def do_zeroInputs(self):
         self.parked = True
@@ -165,6 +169,8 @@ class FakeGame:
             self.sky = out["sky"] = saved["sky"]["mode"]
         if parts.get("weather"):
             self.weather = out["weather"] = saved["weather"]["mode"]
+        if parts.get("ui") and saved.get("ui"):
+            self.hud = out["ui"] = saved["ui"]["cef"]
         if parts.get("cam"):
             self.camera = out["cam"] = "game"
         return out
@@ -411,13 +417,39 @@ class RunTest(unittest.TestCase):
         self.assertEqual(len(restores), 2, fns)
         first, last = game.calls[restores[0]][1], game.calls[restores[1]][1]
         self.assertEqual(first[1], {"weather": True, "sky": True, "perfmon": True})
-        self.assertEqual(last[1], {"cam": True})
+        self.assertEqual(last[1], {"cam": True, "ui": True})
         self.assertEqual(restores[1], len(game.calls) - 1, "the camera comes back last")
         # the player goes home between the two, then the inputs are zeroed
         tps = [c[1][0] for c in game.calls[restores[0]:restores[1]] if c[0] == "teleport"]
         self.assertEqual(tps, [{"lat": home[0], "lon": home[1]}])
         self.assertIn("zeroInputs", fns[restores[0]:restores[1]])
         self.assertEqual((game.camera, game.sky, game.weather), ("game", "real", "real"))
+
+    def test_hide_hud(self):
+        """--hide-hud: the HUD off before the first teleport, the shots without it, back as it was (info()'s saved
+        ui) by the last restore, also when a place fails; without the flag it is never touched."""
+        game = FakeGame(self.tmp)
+        rec, _ = self.run_bench(game, hide_hud=True)
+        fns = game.fns()
+        hud = [i for i, c in enumerate(game.calls) if c[0] == "hud"]
+        self.assertEqual([list(game.calls[i][1]) for i in hud], [[False]])
+        self.assertLess(hud[0], fns.index("teleport"))
+        self.assertLess(hud[0], fns.index("view"))
+        self.assertTrue(rec["hud"]["ok"])
+        self.assert_restored(game)
+        self.assertIs(game.hud, True)
+        game = FakeGame(self.tmp, fail={"view": (1, RuntimeError("MCP gone"))})
+        self.tmp = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp)
+        with self.assertRaises(RuntimeError):           # (a lost game: raised after the restore)
+            self.run_bench(game, hide_hud=True)
+        self.assertIs(game.hud, True)
+        game = FakeGame(self.tmp)
+        self.tmp = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp)
+        self.run_bench(game)
+        self.assertNotIn("hud", game.fns())
+        self.assertIs(getattr(game, "hud", True), True)     # (the restore puts back the same: shown)
 
     def test_run(self):
         game = FakeGame(self.tmp)
@@ -518,7 +550,7 @@ class RunTest(unittest.TestCase):
         self.assertIn("weather restore died", r["errors"][0])
         self.assertIn("home", r["errors"][1])
         self.assertEqual(game.calls[-1][0], "restore")
-        self.assertEqual(game.calls[-1][1][1], {"cam": True})
+        self.assertEqual(game.calls[-1][1][1], {"cam": True, "ui": True})
         self.assertEqual(game.camera, "game")
         self.assertIn("RESTORE PROBLEMS", self.logs[-1])
 
