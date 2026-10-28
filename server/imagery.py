@@ -86,6 +86,8 @@ NODATA_EDGE = 2                    # ... and this much round it (the JPEG's grey
 NODATA_WHITE_MIN, NODATA_WHITE_SHARE = 250, 0.25   # ... or (nodata "white") > 25 % this white: white roofs
                                                    # are bright but rarely a quarter of a 240 m tile (MD
                                                    # iMAP's white comes back as 253 in its JPEGs)
+NODATA_WHITE_BLOCK = 24            # px: a white source's square this size all white, reaching the tile's edge, is
+                                   # past its county line (Front Range county MapServers, 2026-10-28: 253 grey-white)
 
 
 @dataclass(frozen=True)
@@ -350,20 +352,42 @@ def _dilate(m, e):
     return (s[np.ix_(i1, j1)] - s[np.ix_(i0, j1)] - s[np.ix_(i1, j0)] + s[np.ix_(i0, j0)]) > 0
 
 
-def nodata_mask(rgb):
+def _blocks(sel, block):
+    """The texels of sel inside a block x block square all in sel; None when there are none. Pure."""
+    if sel.sum() < block * block:
+        return None
+    h, w = sel.shape
+    q = block // 2                  # an all-set square of block holds an all-set aligned one of half its size
+    if h % q == 0 and w % q == 0 and not sel.reshape(h // q, q, w // q, q).all(axis=(1, 3)).any():
+        return None
+    m = _box_any(sel, block)
+    return m if m.any() else None
+
+
+def nodata_mask(rgb, white=False):
     """The texels of a source tile outside its data: in a NODATA_BLOCK square all black (NODATA_MAX), and NODATA_EDGE
     round it; None when there are none. A regional photo stops mid-tile with black past its edge (New Jersey's over
     Manhattan drew black streets and blocks: GitHub #251); a whole tile mostly black was caught (NODATA_SHARE, export
-    sources), a black part of one was not. A deep shadow is rarely a whole square of pure black. Pure."""
+    sources), a black part of one was not. A deep shadow is rarely a whole square of pure black.
+    white: the source fills with white (a county's MapServer export past its line: 253, 253, 253), so a
+    NODATA_WHITE_BLOCK square all white (NODATA_WHITE_MIN) that reaches the tile's edge is outside too (a white roof is
+    smaller and rarely on the edge; past a county line the white runs off the tile). Pure."""
     dark = np.maximum(np.maximum(rgb[..., 0], rgb[..., 1]), rgb[..., 2]) <= NODATA_MAX    # (max(axis=2): 20x slower)
-    if dark.sum() < NODATA_BLOCK * NODATA_BLOCK:
-        return None
-    h, w = dark.shape
-    q = NODATA_BLOCK // 2           # an all-black square of NODATA_BLOCK holds an all-black aligned one of half its size
-    if h % q == 0 and w % q == 0 and not dark.reshape(h // q, q, w // q, q).all(axis=(1, 3)).any():
-        return None
-    m = _box_any(dark, NODATA_BLOCK)
-    if not m.any():
+    m = _blocks(dark, NODATA_BLOCK)
+    if white:
+        lit = np.minimum(np.minimum(rgb[..., 0], rgb[..., 1]), rgb[..., 2]) >= NODATA_WHITE_MIN
+        mw = _blocks(lit, NODATA_WHITE_BLOCK)
+        if mw is not None:
+            edge = np.zeros_like(mw)
+            edge[0], edge[-1], edge[:, 0], edge[:, -1] = mw[0], mw[-1], mw[:, 0], mw[:, -1]
+            if edge.any():              # the white reached from the edge (grown 8 texels a step within mw)
+                while True:
+                    grown = _dilate(edge, 8) & mw
+                    if (grown == edge).all():
+                        break
+                    edge = grown
+                m = edge if m is None else m | edge
+    if m is None:
         return None
     return _dilate(m, NODATA_EDGE) if NODATA_EDGE else m
 
@@ -1054,7 +1078,7 @@ class Imagery:
             if key in self._holes:
                 self._holes.move_to_end(key)
                 return self._holes[key]
-        m = nodata_mask(tile.rgb)
+        m = nodata_mask(tile.rgb, white=key[0].nodata == "white")
         with self._lock:
             self._holes[key] = m
             while len(self._holes) > self.mem_tiles:
