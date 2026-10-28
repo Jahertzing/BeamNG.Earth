@@ -2448,7 +2448,7 @@ def lane_layout(spec, left_hand=False):
     return {"lo": lo, "hi": hi, "strips": strips, "groups": groups, "centre": gc if nc else None}
 
 
-def _along(pts, s):
+def _along_dir(pts, s):
     """(point (3,), unit direction (2,)) s m along a polyline (k, 3) (clamped)."""
     seg = np.diff(pts[:, :2], axis=0)
     L = np.hypot(seg[:, 0], seg[:, 1])
@@ -2545,7 +2545,7 @@ def lane_marks(spec, pts, lon, left_hand=False):
                 for at in ARROW_AT_M:
                     if at + 6.0 > L:
                         continue
-                    p, u = _along(lane, L - at if d > 0 else at)
+                    p, u = _along_dir(lane, L - at if d > 0 else at)
                     for st in arrow_strokes(p, u if d > 0 else -u, t):
                         out.append((ARROW, ARROW["w"], st))
     return out
