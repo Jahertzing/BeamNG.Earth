@@ -108,7 +108,8 @@ class DeckProfileTest(TestCase):
         self.assertAlmostEqual(z[0], 0.0, places=3)
         self.assertAlmostEqual(z[-1], 0.0, places=3)
         m = (s > 60) & (s < 540)
-        self.assertLess(float(np.abs(z[m] - real[m]).max()), decklidar.OBS_TOL_M + 0.05)
+        near = decklidar.smoothed(s, real)          # (its corners rounded: no judder)
+        self.assertLess(float(np.abs(z[m] - near[m]).max()), decklidar.OBS_TOL_M + 0.05)
         self.assertGreater(float(np.interp(300.0, s, z)), decklidar.lidar_road_clear() - 0.05)
 
     def test_without_measurements_as_before(self):
@@ -171,3 +172,13 @@ class LidarLiftTest(TestCase):
         occ = [(np.array([[200.0, -50.0], [200.0, 50.0]]), 40.0)]
         lift = self.g.lidar_lift(self.xy, z, surf, occ)
         np.testing.assert_allclose(lift, 5.0, atol=0.1)
+
+
+class SmoothedTest(TestCase):
+    def test_noise_off_a_straight_ramp_kept(self):
+        s = np.arange(0.0, 201.0, 4.0)
+        ramp = 10.0 + 0.05 * s
+        rng = np.random.default_rng(1)
+        got = decklidar.smoothed(s, ramp + rng.normal(0.0, 0.2, len(s)))
+        self.assertLess(float(np.abs(got - ramp)[5:-5].max()), 0.15)
+        np.testing.assert_allclose(decklidar.smoothed(s, ramp), ramp, atol=1e-9)

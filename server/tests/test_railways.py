@@ -532,5 +532,35 @@ class UnderpassNeighbourTest(unittest.TestCase):
         self.assertEqual(raised, {str(f.ids[0]), str(f.ids[1])})
 
 
+class MotorwayCutTest(unittest.TestCase):
+    """An old line across a motorway at grade loses its track there; one in use, or beside it, keeps it."""
+    ROAD = [(np.array([[0.0, -500.0], [0.0, 500.0]]), 15.0)]     # a 30 m motorway up x = 0
+
+    def test_old_line_cut_around_crossing(self):
+        xy = np.array([[-300.0, 0.0], [300.0, 0.0]])            # two vertices, far either side
+        out = railways._cut_at_motorways([("a", "rail", "ground", xy)], {"a"}, self.ROAD)
+        self.assertEqual(len(out), 2)
+        for _fid, _c, _kind, part in out:
+            self.assertGreaterEqual(np.abs(part[:, 0]).min(), 15.0 + railways.MOTORWAY_CUT_M - railways.CUT_SAMPLE_M)
+        self.assertAlmostEqual(min(np.abs(p[3][:, 0]).max() for p in out), 300.0)
+
+    def test_live_line_and_parallel_line_kept(self):
+        xy = np.array([[-300.0, 0.0], [300.0, 0.0]])
+        side = np.array([[25.0, -300.0], [25.0, 300.0]])         # beside the road, never across it
+        rails = [("a", "rail", "ground", xy), ("b", "rail", "ground", side)]
+        out = railways._cut_at_motorways(rails, {"b"}, self.ROAD)
+        self.assertEqual([p[0] for p in out], ["a", "b"])
+        self.assertIs(out[1][3], side)
+
+    def test_bridge_kept(self):
+        xy = np.array([[-300.0, 0.0], [300.0, 0.0]])
+        out = railways._cut_at_motorways([("a", "rail", "bridge", xy)], {"a"}, self.ROAD)
+        self.assertEqual(len(out), 1)
+
+    def test_mask(self):
+        m = railways.motorway_mask(np.array([[0.0, 0.0], [34.0, 0.0], [36.0, 0.0], [0.0, 600.0]]), self.ROAD)
+        self.assertEqual(m.tolist(), [True, True, False, False])
+
+
 if __name__ == "__main__":
     unittest.main()

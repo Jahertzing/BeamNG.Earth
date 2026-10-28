@@ -132,7 +132,7 @@ def tile_chunks(frame, tx, ty, cells):
     import roads
     box = roads.tile_bbox(tx, ty)
     reach = max(t[0] for t in TRACK.values()) + MARGIN_M
-    carriageways, tracks, seen = {}, [], set()
+    carriageways, tracks, seen, motorway_keys = {}, [], set(), set()
     road_hw = {}                    # fid -> its widest half width over the cells' copies (railways.crossings)
     llb = _lonlat_box(frame, box, reach + 20.0)
     for feats in cells:
@@ -175,8 +175,10 @@ def tile_chunks(frame, tx, ty, cells):
                 if kind is None:
                     carriageways[(fid, k)] = (xy, specs[i].width / 2)
                     road_hw[fid] = specs[i].width / 2
+                    if specs[i].cls in railways.MOTORWAY_CLASSES:
+                        motorway_keys.add((fid, k))
                 else:
-                    tracks.append((kind, xy, meshed))
+                    tracks.append((kind, xy, meshed, bool(got[1]) if meshed else False))
     if not tracks:
         return []
     carriageways = {key: (xy, max(hw, road_hw.get(key[0], hw))) for key, (xy, hw) in carriageways.items()}
@@ -187,11 +189,19 @@ def tile_chunks(frame, tx, ty, cells):
     ballast, sleepers, rails = [], [], []
     cw_lines = [ln for ln, _hw in carriageways.values()]
     todo = []
-    for kind, xy, meshed in tracks:
+    # (an old line across a motorway: none of it there, street track included (railways.MOTORWAY_CUT_M))
+    mw_lines = [carriageways[key] for key in motorway_keys]
+    for kind, xy, meshed, old in tracks:
         if meshed and kind != "tram":
             # (a main line's only street track is where it crosses a road: just those stretches, every metre of every
             # line in reach tested against every carriageway cost a tile ~0.1 s, 2026-10-25)
-            todo += [(kind, w, meshed) for w in _crossing_windows(xy, cw_lines)]
+            for w in _crossing_windows(xy, cw_lines):
+                if old and mw_lines:
+                    w = roads.densify(w, SAMPLE_M)
+                    cut = railways.motorway_mask(w, mw_lines)
+                    todo += [(kind, w[i:j + 1], meshed) for i, j in railways._runs(cut)]
+                else:
+                    todo.append((kind, w, meshed))
         else:
             todo.append((kind, xy, meshed))
     for kind, xy, meshed in todo:

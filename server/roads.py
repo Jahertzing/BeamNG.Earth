@@ -2203,6 +2203,7 @@ def _observed_start(zs, edges, deg, observed):
         if ob is None:
             continue
         z, ok = decklidar.filled(s, ob, zs[k])
+        z = decklidar.smoothed(s, z)
         zs[k] = decklidar.end_blend(s, z, zs[k][0], zs[k][-1], deg[a] == 1, deg[b] == 1)
         meas[k] = ok
         for node, e in ((a, 0), (b, -1)):
