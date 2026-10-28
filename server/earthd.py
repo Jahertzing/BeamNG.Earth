@@ -759,7 +759,7 @@ class Server:
             roadwidthmod.store_dir(cache_dir, mapdata)).get
             if road_widths and mapdata is not None else None)
         if self.road_widths is not None and mapdata.drcog() is not None:  # the edges of pavement first (drcog.py)
-            self.road_widths = mapdata.drcog().widths(self.road_widths)
+            self.road_widths = roadsmod.pavement_first(mapdata.drcog().widths(None), self.road_widths)
         self.grader_lock = threading.Lock()
         # The download cache's bookkeeping (cache.py): every producer reports its disk hits and writes
         self.cache = cache
@@ -5099,6 +5099,9 @@ def main():
                     help="the Denver region's DRCOG 2024 planimetrics (drcog.py): its stereo-compiled roofprints with "
                          "their heights in place of the Overture footprints they match, its edges of pavement for the "
                          "road widths (CC BY 3.0, credited); off = Overture's footprints everywhere")
+    ap.add_argument("--cdot", choices=("on", "off"), default="on",
+                    help="Colorado's highways' lanes from CDOT's highway geometrics (cdot.py): through, auxiliary, "
+                         "express and turn lanes, shoulders and lane widths; no effect elsewhere")
     ap.add_argument("--lidar-heights", choices=("on", "off"), default="on",
                     help="US building heights from USGS 3DEP lidar (lidarheights.py: the Planetary Computer's height-"
                          "above-ground rasters) where the map has none or a machine-learned one; public domain; "
@@ -5139,6 +5142,10 @@ def main():
                          "never what this session used within the hour, the gravity model or netstats/")
     ap.add_argument("-v", "--verbose", action="store_true")
     args = ap.parse_args()
+    os.environ["BNE_CDOT"] = "1" if args.cdot == "on" else "0"     # (every process: mapdata.MapData.cdot)
+    import laneoverrides        # the player's road lanes (laneoverrides.py): every process reads the same file, and an
+    os.environ.setdefault(laneoverrides.ENV_PATH, laneoverrides.path(args.cache_dir))   # edit keys the revisit cache
+    os.environ[laneoverrides.ENV_SHA] = laneoverrides.file_sha(os.environ[laneoverrides.ENV_PATH])
     if args.drcog == "on":      # (every process reads it: mapdata.MapData.drcog; the revisit keys hold BNE_* too)
         os.environ["BNE_DRCOG"] = "1"
     if args.lidar_heights == "on":      # (every process reads it: mapdata.MapData.lidar; the revisit keys hold BNE_* too)

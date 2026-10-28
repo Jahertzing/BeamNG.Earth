@@ -198,6 +198,9 @@ POLICIES = {
     # DRCOG's planimetric layers (drcog.py, --drcog on): ArcGIS REST queries, one or two pages a map cell, cached
     "gis.drcog.org": HostPolicy(rate=2.0, burst=4.0, max_conc=2, daily_budget=20000, allow_prefetch=True,
                                 offline_ok=True, timeout=60.0),
+    # CDOT's highway geometrics (cdot.py, --cdot on): an ArcGIS REST query a Colorado map cell, cached
+    "dtdapps.codot.gov": HostPolicy(rate=2.0, burst=4.0, max_conc=2, daily_budget=20000, allow_prefetch=True,
+                                    offline_ok=True, timeout=60.0),
     # the Planetary Computer's STAC search and tile service (lidarheights.py, --lidar-heights on): 17 requests a map
     # cell (one search, 16 PNG tiles of ~8 KB), cached; and Colorado's NAIP 2023 mosaic (pcnaip.py, imagery
     # "co_naip2023"): one 1024 px tile per export parent, ~1.6 s. Throttled at Microsoft's discretion (no published
@@ -303,6 +306,7 @@ ROLES = {
     "gis.drcog.org": "the Denver region's measured buildings and street widths (DRCOG); the map's own meanwhile",
     "planetarycomputer.microsoft.com": ("US building heights from lidar and Colorado's 2023 aerial photos (NAIP); the map's "
                                         "own heights and coarser photos meanwhile"),
+    "dtdapps.codot.gov": "Colorado highways' lane counts (CDOT); OpenStreetMap's meanwhile",
     "tecnagamer.github.io": "railway details and US railroad crossing equipment; estimated meanwhile",
     "api.open-meteo.com": "live weather; the weather stays as it is meanwhile",
     "downloads.sourceforge.net": "the gravity model; standard gravity meanwhile",
