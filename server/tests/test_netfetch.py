@@ -285,7 +285,7 @@ class TransportTest(unittest.TestCase):
                 return b"ok"
 
         class Conn:
-            def __init__(self, netloc, timeout=None):
+            def __init__(self, netloc, timeout=None, context=None):   # (context: truststore's, on Windows)
                 made.append(self)
                 self.sent = 0
 
