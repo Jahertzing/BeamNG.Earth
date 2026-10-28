@@ -21,7 +21,8 @@ first within each; what is on disk already, known missing or in the region's man
            each regional source: one 64 px export per z13 tile, kept in <cache>/preload/coverage), to the next one
            where that one has gaps (past its county line), and to NAIP where no regional source has it;
            USGS z16-z15 over the region, z14-z12 over --far-km
-  mapdata  the z14 cells, every layer (mapdata.ALL_LAYERS), for the pinned Overture release
+  mapdata  the z14 cells, every layer but the skyline's (CELL_LAYERS), for the pinned Overture release, with DRCOG's
+           roofprints in its area as the server builds them (--drcog, default on as the settings page)
 Every host runs at once, each within its policy (netfetch.POLICIES: rate, requests at once); a host stops for the day
 at its soft daily budget (the game needs the rest; --over-budget: on at half rate) and the next run resumes there.
 Finished keys go to <cache>/preload/<region>.done (the manifest; --recheck ignores it).
@@ -63,15 +64,22 @@ import regions as regmod  # noqa: E402
 FREDERICK = (40.0992, -104.9372)
 SERVER_PORT = 47613             # earthd --port's default
 GB = 1e9
-# Rough sizes and times for the estimate (Front Range, 2026-10-27/28): bytes downloaded and written to the cache per
-# request, and seconds per request one at a time (a host runs min(max_conc, workers) at once, within its rate)
+# Rough sizes and times for the estimate: bytes downloaded and written to the cache per request, and seconds per
+# request one at a time (a host runs min(max_conc, workers) at once, within its rate). Calibrated on the 20 km
+# Frederick pre-load (Jeff's PC, 2026-10-28, 29.6 min): Mapterhorn at its 50/s rate (4,209 tiles in 82 s; 173 KB a
+# tile on disk), the town's exports at its 4/s rate (4,595 in 1,150 s; 16 children of ~15 KB: 240 KB a parent), map
+# cells 2.5 s each on 4 threads (410 in 250 s); the counties' 1024 px exports 260-490 KB, 0.4-1.7 s (probes)
 EST = {
-    "dem": (55e3, 55e3, 0.15),
+    "dem": (55e3, 173e3, 0.15),
     "xyz": (30e3, 30e3, 0.1),
-    "export": (380e3, 16 * 25e3, 0.9),          # a county's 1024 px export: 260-490 KB, 0.4-1.7 s; 16 JPEGs q92
+    "export": (380e3, 240e3, 0.9),
     "export_slow": (300e3, 16 * 45e3, 6.0),     # USGS's NAIP exportImage (summer, busier JPEGs): 2.7-14 s
-    "cell": (1.0e6, 650e3, 4.0),                # all layers of a cell (Overture range reads, the first time)
+    # a cell's layer files (~1.3 MB) and the Overture / OSM / canopy range blocks it reads (shared with its neighbours:
+    # 112 MB for the first 6 cells of a 1 km test, ~3.8 MB a cell over the real cache's 1.55 GB of map data)
+    "cell": (3.0e6, 3.5e6, 2.5),
 }
+# The z14 cells' layers: all but the skyline's tall ones (skyline.py builds those per z12 cell)
+CELL_LAYERS = tuple(ly for ly in mapdatamod.ALL_LAYERS if not ly.startswith(("tall_", "tower")))
 SLOW_HOSTS = {"imagery.nationalmap.gov", "apps.geo.fpac.usda.gov"}
 WORKERS = {"dem": 16, "xyz": 8, "cell": 4}
 MID_PAD = 0.25                  # the DEM's z15-z13 reach this share of far_km round the region
@@ -211,6 +219,64 @@ def plan_exports(region, chain, coverage=None, skip=()):
             if cands:
                 out.append((key, par[(px, py)], cands))
     return out
+
+
+# --- the hosts -------------------------------------------------------------------------------------------------------
+def probe_url(src, region):
+    """A small request of src near the region (its home, else the middle of where the region meets its box): a 64 px
+    export of a z13 tile, or a z10 tile."""
+    la, lo = region.home
+    if src.bounds and not (src.bounds[0] <= la <= src.bounds[2] and src.bounds[1] <= lo <= src.bounds[3]):
+        s, w, n, e = region.bounds
+        bs, bw, bn, be = src.bounds
+        la, lo = (max(s, bs) + min(n, bn)) / 2, (max(w, bw) + min(e, be)) / 2
+    if src.export:
+        x, y = (int(v) for v in mapcells.tile_xy(la, lo, PROBE_Z))
+        mb = imagerymod.mercator_bbox(PROBE_Z, x, y)
+        return src.url.format(bbox=",".join(f"{v:.3f}" for v in mb), bbox4326=imagerymod.lat_lon_bbox(mb),
+                              size=PROBE_PX)
+    x, y = (int(v) for v in mapcells.tile_xy(la, lo, 10))
+    return src.url.format(z=10, x=x, y=y, ty=(1 << 10) - 1 - y)
+
+
+def check_hosts(net, region, chain, only, skip=()):
+    """{name: (host, error)} of the sources whose host does not answer one small request (DNS, refused, timing out,
+    server errors; a 404 is an answer), each host asked once, all at once: their keys are left out instead of failing
+    one by one (USDA's NAIP host on Jeff's PC: 608 requests, every one failed). name "dem": Mapterhorn."""
+    asked = {}                                      # host -> (url, [names])
+    if "imagery" in only:
+        s, w, n, e = region.bounds
+        for src in export_sources(chain, skip):
+            if src.bounds and (src.bounds[2] < s or src.bounds[0] > n or src.bounds[3] < w or src.bounds[1] > e):
+                continue
+            h = netfetch.host_of(src.url)
+            asked.setdefault(h, (probe_url(src, region), []))[1].append(src.name)
+        if "usgs" not in skip:
+            u = imagerymod.SOURCES["usgs"]
+            asked.setdefault(netfetch.host_of(u.url), (probe_url(u, region), []))[1].append("usgs")
+    if "dem" in only:
+        x, y = (int(v) for v in mapcells.tile_xy(*region.home, 10))
+        u = demmod.MAPTERHORN["url"].format(z=10, x=x, y=y)
+        asked.setdefault(netfetch.host_of(u), (u, []))[1].append("dem")
+
+    def one(item):
+        host, (url, names) = item
+        try:
+            net.get(url, kind="demand")
+            return host, names, None
+        except netfetch.NotFound:
+            return host, names, None
+        except Exception as e:  # noqa: BLE001 (any failure: the host is left out this run)
+            return host, names, f"{type(e).__name__}: {e}"[:120]
+
+    dead = {}
+    if asked:
+        with ThreadPoolExecutor(len(asked)) as ex:
+            for host, names, err in ex.map(one, asked.items()):
+                if err:
+                    for nm in names:
+                        dead[nm] = (host, err)
+    return dead
 
 
 # --- coverage probe --------------------------------------------------------------------------------------------------
@@ -539,7 +605,7 @@ def run_all(net, img, dem, md, plan, manifest, only, over_budget=False, stop=Non
             t = tok("cell", key.z, key.x, key.y)
             if t in manifest:
                 return False
-            todo = tuple(ly for ly in mapdatamod.ALL_LAYERS if not md.has(key, ly))
+            todo = tuple(ly for ly in CELL_LAYERS if not md.has(key, ly))
             if todo:
                 md.cell(key, layers=todo, kind="demand")
             manifest.add(t)
@@ -619,7 +685,7 @@ def host_rate(net, host, workers, sec):
     return min(p.rate or 1e9, conc / sec)
 
 
-def estimate(region, net, img, dem, md, plan, manifest, only, release):
+def estimate(region, net, img, dem, md, plan, manifest, only, release, coverage=None):
     """Rows of the estimate (and prints them): per lane needed / to fetch, MB down / written, hours, days of budget."""
     rows = []
 
@@ -660,7 +726,7 @@ def estimate(region, net, img, dem, md, plan, manifest, only, release):
                 max(1, net.policy(host).max_conc or 1))
     if md is not None and "mapdata" in only:
         todo = [c for c, _ in plan["cells"] if tok("cell", c.z, c.x, c.y) not in manifest
-                and not all(md.has(c, ly) for ly in mapdatamod.ALL_LAYERS)]
+                and not all(md.has(c, ly) for ly in CELL_LAYERS)]
         row(f"map cells z14 (Overture {release})", "overturemaps-us-west-2.s3.us-west-2.amazonaws.com",
             len(plan["cells"]), len(todo), EST["cell"], WORKERS["cell"])
 
@@ -677,6 +743,13 @@ def estimate(region, net, img, dem, md, plan, manifest, only, release):
     total_req = sum(r["todo"] for r in rows)
     print(f"  {'total':40s} {sum(r['needed'] for r in rows):7d} {total_req:8d} {down / 1e6:8.0f} {wrote / 1e6:8.0f} "
           f"{longest:6.1f}   (hosts in parallel: the slowest sets the time)")
+    edge = edge_parents(plan["exports"], coverage) if coverage else 0
+    if edge:
+        nat = [r for r in rows if "USGS" in r["name"]]
+        extra = edge * EST["export_slow"][2] / max(1, net.policy("imagery.nationalmap.gov").max_conc or 1) / 3600
+        print(f"  + up to {edge} z17 parents on a county's edge may need the next source too (the worst case, all of "
+              f"them to USGS's NAIP: +{extra:.1f} h{', ' + str(math.ceil((edge + (nat[0]['todo'] if nat else 0)) / 3000)) + ' days of its budget' if edge > 1500 else ''})")
+        longest = max(longest, (nat[0]["hours"] if nat else 0.0) + extra)
     slow = max(rows, key=lambda r: r["hours"]) if rows else None
     if slow and slow["hours"] > 0:
         print(f"  slowest: {slow['name']} at {slow['rate']:.1f} requests/s ({slow['host']})")
@@ -684,7 +757,22 @@ def estimate(region, net, img, dem, md, plan, manifest, only, release):
         late = [r["name"] for r in rows if r["days"] > 1]
         print(f"  ! {days} days: past a host's daily budget its lane stops until the next UTC day ({', '.join(late)});"
               " run it again each day (or --over-budget: on at half rate)")
-    return dict(rows=rows, down=down, wrote=wrote, hours=longest, days=days, requests=total_req)
+    return dict(rows=rows, down=down, wrote=wrote, hours=longest, days=days, requests=total_req, edge=edge)
+
+
+def edge_parents(exports, coverage):
+    """The z17 parents whose first source has data there but not at a neighbouring z15 parent: past a county line in
+    part, so the next source gets asked for its gaps too."""
+    n = 0
+    for (z, x, y), _, cands in exports:
+        src = cands[0]
+        cov = coverage.get(src.name) if src.bounds else None
+        if z != 17 or not cov:
+            continue
+        px, py = parent15(z, x, y)
+        if any(cov.get((px + dx, py + dy)) is False for dx, dy in ((1, 0), (-1, 0), (0, 1), (0, -1))):
+            n += 1
+    return n
 
 
 def check_cap(cache_dir, cap_gb, wrote, dry_run):
@@ -750,6 +838,8 @@ def main(argv=None):
     ap.add_argument("--no-probe", action="store_true", help="no coverage probe: each regional source by its box")
     ap.add_argument("--over-budget", action="store_true", help="past a host's soft daily budget: on at half rate")
     ap.add_argument("--recheck", action="store_true", help="ignore the manifest (check every key on disk)")
+    ap.add_argument("--drcog", choices=("on", "off"), default="on",
+                    help="DRCOG's roofprints in the buildings, as the server's --drcog (the settings page: default on)")
     ap.add_argument("--allow-running", action="store_true",
                     help="run even while a world server listens on its port (its cache index may lose this run's)")
     a = ap.parse_args(argv)
@@ -766,6 +856,7 @@ def main(argv=None):
               "server first (or --cache-dir elsewhere, or --allow-running).", file=sys.stderr)
         return 2
 
+    os.environ["BNE_DRCOG"] = "1" if a.drcog == "on" else "0"   # (mapdata names a cell's buildings by it)
     # (a dry run keeps out of the day's request counts: a running server saves its own over them)
     net = netfetch.Fetcher(stats_dir=None if a.dry_run else os.path.join(cache_dir, "netstats"))
     if a.region:
@@ -800,6 +891,12 @@ def main(argv=None):
           + (f"; manifest: {len(manifest.done)} keys done" if manifest.done else ""))
     stop = threading.Event()
     chain = [imagerymod.SOURCES[nm] for nm in imagerymod.DEFAULT_CHAIN]
+    dead = check_hosts(net, region, chain, only, skip)
+    for name, (host, err) in dead.items():
+        print(f"  ! left out: {name} ({host} does not answer: {err})", flush=True)
+    skip |= set(dead) - {"dem"}
+    if "dem" in dead:
+        only.discard("dem")
     coverage = None
     if "imagery" in only and not a.no_probe:
         coverage = probe_coverage(net, cache_dir, region, chain, skip, stop)
@@ -809,7 +906,7 @@ def main(argv=None):
         "exports": plan_exports(region, chain, coverage, skip) if "imagery" in only else [],
         "cells": plan_cells(region) if md is not None else [],
     }
-    est = estimate(region, net, img, dem, md, plan, manifest, only, a.release)
+    est = estimate(region, net, img, dem, md, plan, manifest, only, a.release, coverage)
     check_cap(cache_dir, a.cache_cap, est["wrote"], a.dry_run)
     if a.dry_run:
         net.close()

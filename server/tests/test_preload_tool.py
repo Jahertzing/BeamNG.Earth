@@ -210,6 +210,28 @@ class PlanTest(unittest.TestCase):
         self.assertEqual(cells[0][0], mapcells.cell_of(*FREDERICK))
         self.assertTrue(all(c.z == mapcells.ZOOM for c, _ in cells))
 
+    def test_dead_hosts_left_out(self):
+        """One small request per host up front; a host that fails it (USDA's NAIP host not resolving) is left out,
+        a 404 is an answer."""
+        asked = []
+
+        class Net:
+            def get(self, url, kind="demand"):
+                asked.append(netfetch.host_of(url))
+                if "fpac.usda.gov" in url:
+                    raise netfetch.FetchFailed("getaddrinfo failed", url, "apps.geo.fpac.usda.gov")
+                if "mapterhorn" in url:
+                    raise netfetch.NotFound("404", url, "tiles.mapterhorn.com")
+                return None
+        reg = preload.disc_region(*FREDERICK, 1.0)
+        dead = preload.check_hosts(Net(), reg, self.chain, {"dem", "imagery"})
+        self.assertEqual(set(dead), {"naipusda"})
+        self.assertEqual(dead["naipusda"][0], "apps.geo.fpac.usda.gov")
+        self.assertEqual(len(asked), len(set(asked)), "each host once")
+        self.assertIn("gis.frederickco.gov", asked)
+        self.assertNotIn("mdgeodata.md.gov", asked, "Maryland's box is nowhere near")
+        self.assertEqual(preload.check_hosts(Net(), reg, self.chain, {"mapdata"}), {})
+
     def test_classify_probe(self):
         a = np.full((64, 64, 3), 253, np.uint8)             # white past the county line ...
         a[:, :20] = np.random.default_rng(2).integers(40, 200, (64, 20, 3))      # ... photo in the west
