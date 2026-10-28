@@ -88,7 +88,7 @@ class Lettering(unittest.TestCase):
         for make in (lambda: gs.gore_face("220"), lambda: gs.mile_face(214), lambda: gs.speed_face(75),
                      lambda: gs.reassurance_face([("I", "25", "NORTH")])):
             f, (w, h) = make()
-            self.assertTrue(f.polys and f.texts)
+            self.assertTrue(f.polys and f.tris and not f.texts)          # (lettering as geometry)
             self.assertGreater(w, 0.3)
 
     def test_triangulate_concave(self):
@@ -190,10 +190,10 @@ class Tile(unittest.TestCase):
         P = P + np.array([box[0], box[1], 0.0])                          # (the tile's corner: the frame)
         self.assertEqual(len(T), len(M))
         used = set(M.tolist())
-        for m in (gs.M_PANEL, gs.M_WHITE, gs.M_TEXT, gs.M_STEEL, gs.M_PAINT):
+        for m in (gs.M_PANEL, gs.M_WHITE, gs.M_LETTER, gs.M_STEEL, gs.M_PAINT):
             self.assertIn(m, used)
         # the gantry's panels hang over the road (5.5 m clearance), the truss spans to the median leg
-        text = P[np.unique(T[M == gs.M_TEXT])]
+        text = P[np.unique(T[M == gs.M_LETTER])]
         high = text[text[:, 2] > 4.5]                                     # (the gore's EXIT sign: low, on its posts)
         self.assertTrue(len(high))
         self.assertGreater(high[:, 2].min(), gs.CLEARANCE_M - 0.1)
@@ -220,7 +220,7 @@ class Tile(unittest.TestCase):
             out = gs.tile(self.frame, rs, box, items=gore)
             P, T, _, _, M = out["mesh"]
             P = P + np.array([box[0], box[1], 0.0])
-            text = P[np.unique(T[M == gs.M_TEXT])]                            # the gore's EXIT sign
+            text = P[np.unique(T[M == gs.M_LETTER])]                            # the gore's EXIT sign
             self.assertTrue(len(text))
             self.assertGreater(text[:, 0].min(), 8.0, "right of the continuing carriageway's edge")
             self.assertGreater(text[:, 1].min(), 30.0, "where the ramp has left, not at the junction")
@@ -241,7 +241,7 @@ class Tile(unittest.TestCase):
     def test_text_faces_viewer(self):
         out = gs.tile(self.frame, self.roads, (-128.0, -128.0, 128.0, 128.0), items=self.items)
         P, T, _, _, M = out["mesh"]
-        t = T[M == gs.M_TEXT]
+        t = T[M == gs.M_LETTER]
         n = np.cross(P[t[:, 1]] - P[t[:, 0]], P[t[:, 2]] - P[t[:, 0]])
         self.assertTrue((n[:, 1] < 0).all())                               # toward the northbound traffic (-y)
 

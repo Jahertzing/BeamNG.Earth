@@ -281,15 +281,18 @@ class Face:
     def rect(self, x0, y0, x1, y1, color, layer):
         self.poly([(x0, y0), (x1, y0), (x1, y1), (x0, y1)], color, layer)
 
-    def text(self, s, cap, x, y, ink="w", layer=3):
-        """s with its pen at x on the baseline y; returns its width."""
+    def text(self, s, cap, x, y, ink="w", layer=3, atlas=False):
+        """s with its pen at x on the baseline y, as geometry (vtext; atlas: textured quads of the glyph atlas, which
+        went blocky up close and broke up far off: the user, 2026-10-28); returns its width."""
+        if not atlas:
+            return self.vtext(s, cap, x, y, ink, layer)
         self.texts.append((layer, text_quads(s, cap, x, y), ink))
         return text_width(s, cap)
 
-    def text_c(self, s, cap, cx, y, ink="w", layer=3, vector=False):
-        """s centred on cx (vector: as geometry, vtext)."""
+    def text_c(self, s, cap, cx, y, ink="w", layer=3, vector=True):
+        """s centred on cx."""
         w = text_width(s, cap)
-        (self.vtext if vector else self.text)(s, cap, cx - w / 2, y, ink, layer)
+        self.text(s, cap, cx - w / 2, y, ink, layer)
         return w
 
     def vtext(self, s, cap, x, y, ink="w", layer=3):
@@ -1869,6 +1872,8 @@ def tile(frame, roads, box, ground=None, urban=None, barriers=None, mph=True, le
     avoid = []
     clear = Clear(roads)
     for it, (x, y) in items:
+        if len(mesh.P) > VERTS_MAX:
+            break                       # (the engine's 16-bit indices)
         xy = np.array([x, y])
         if it["k"] in ("exit_dir", "adv_1", "adv_half", "gore"):
             avoid.append(xy)
