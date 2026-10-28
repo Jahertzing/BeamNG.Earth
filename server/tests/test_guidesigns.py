@@ -234,6 +234,71 @@ class Tile(unittest.TestCase):
         self.assertIsNone(out["mesh"])
 
 
+class Streets(unittest.TestCase):
+    """Street name signs at a town crossroads: East Colfax Avenue (14 m, primary) across Grant Street (9 m)."""
+
+    def _roads(self, urban=True, grant="Grant Street"):
+        c = (100.0, 100.0, 0.0)
+        colfax = roads.Spec(14.0, "paved", urban, "primary", False, 2.5, 0)
+        res = roads.Spec(9.0, "paved", urban, "residential", False, 2.0, 0)
+        rs = [("cw", colfax, np.array([(0.0, 100.0, 0.0), c]), LON0), ("ce", colfax, np.array([c, (256.0, 100.0, 0.0)]),
+                                                                          LON0),
+              ("gs", res, np.array([(100.0, 0.0, 0.0), c]), LON0), ("gn", res, np.array([c, (100.0, 256.0, 0.0)]),
+                                                                       LON0)]
+        names = {"cw": "East Colfax Avenue", "ce": "East Colfax Avenue", "gs": grant, "gn": grant}
+        return rs, names
+
+    def test_street_name(self):
+        self.assertEqual(gs.street_name("East Colfax Avenue"), "E Colfax Ave")
+        self.assertEqual(gs.street_name("Park Avenue West"), "Park Ave W")
+        self.assertEqual(gs.street_name("Broadway"), "Broadway")
+        self.assertEqual(gs.street_name("Calle Ñandú"), "Calle Nandu")
+        self.assertEqual(gs.street_name(None), "")
+
+    def test_crossroads(self):
+        rs, names = self._roads()
+        mesh, col = gs.Mesh(), gs.Boxes()
+        n = gs.street_signs(mesh, col, rs, (0, 0, 256, 256), names)
+        self.assertEqual(n, 2)                                      # a wide street: two corners
+        self.assertEqual(len(col.aabbs), 2)
+        P = np.asarray(mesh.P)
+        for a in col.aabbs:                                         # each post on a corner, off both carriageways
+            x, y = (a[0] + a[3]) / 2, (a[1] + a[4]) / 2
+            self.assertGreater(abs(y - 100.0), 7.0 + 1.0)
+            self.assertGreater(abs(x - 100.0), 4.5 + 1.0)
+        text = [P[t[0]] for t, m in zip(mesh.T, mesh.M) if m == gs.M_TEXT]
+        self.assertTrue(text)
+        self.assertGreater(min(p[2] for p in text), gs.BLADE_TOP_M)
+        self.assertLess(max(p[2] for p in text), gs.BLADE_TOP_M + 0.8)
+        a = col.aabbs[0]
+        px, py = (a[0] + a[3]) / 2, (a[1] + a[4]) / 2
+        mine = [p for p in text if abs(p[0] - px) < 2 and abs(p[1] - py) < 2]
+        lower = np.array([p for p in mine if p[2] < gs.BLADE_TOP_M + 0.33])     # Colfax's blade (the widest, below)
+        upper = np.array([p for p in mine if p[2] > gs.BLADE_TOP_M + 0.36])
+        self.assertGreater(np.ptp(lower[:, 0]), 5 * np.ptp(lower[:, 1]))          # along Colfax (east-west)
+        self.assertGreater(np.ptp(upper[:, 1]), 5 * np.ptp(upper[:, 0]))          # along Grant
+        avoid = [((a[0] + a[3]) / 2, (a[1] + a[4]) / 2) for a in col.aabbs]
+        mesh2, col2 = gs.Mesh(), gs.Boxes()
+        self.assertEqual(gs.street_signs(mesh2, col2, rs, (0, 0, 256, 256), names, avoid=avoid), 2)
+        self.assertTrue(all(a not in col.aabbs for a in col2.aabbs))      # other corners
+
+    def test_none(self):
+        rs, names = self._roads(urban=False)
+        self.assertEqual(gs.street_signs(gs.Mesh(), gs.Boxes(), rs, (0, 0, 256, 256), names), 0)   # (out of town)
+        rs, names = self._roads(grant="East Colfax Avenue")
+        self.assertEqual(gs.street_signs(gs.Mesh(), gs.Boxes(), rs, (0, 0, 256, 256), names), 0)   # (one name)
+        rs, names = self._roads()
+        self.assertEqual(gs.street_signs(gs.Mesh(), gs.Boxes(), rs, (0, 0, 50, 50), names), 0)     # (another tile's)
+
+    def test_tile(self):
+        rs, names = self._roads()
+        t = gs.tile(None, rs, (0, 0, 256, 256), names=names)
+        self.assertIsNotNone(t["mesh"])
+        self.assertEqual(len(t["col"][2]), 2)
+        self.assertIsNone(gs.tile(None, rs, (0, 0, 256, 256), names=names, mph=False)["mesh"])
+        self.assertIsNone(gs.tile(None, rs, (0, 0, 256, 256))["mesh"])
+
+
 class Write(unittest.TestCase):
     def test_write_tile(self):
         frame = geodesy.EnuFrame(_lat(3000), LON0, 0.0)

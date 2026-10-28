@@ -27,6 +27,7 @@ import math
 import os
 import re
 import threading
+import unicodedata
 
 import numpy as np
 
@@ -79,6 +80,14 @@ BILLBOARD_EVERY_M = 1400.0      # (hashed: a billboard roughly this often each s
 BILLBOARD_OFF_M = (22.0, 40.0)
 BILLBOARD_CLEAR_M = 350.0       # m kept from a sign gantry
 BILLBOARD_ADS = 23              # West Coast USA's dragbillboard_sign01 .. 23 (trees.lua bbad01 ..)
+STREET_CLASSES = {"trunk", "primary", "secondary", "tertiary", "residential", "unclassified", "living_street"}
+STREET_MAJOR = {"trunk", "primary", "secondary", "tertiary"}
+BLADE_CAP = (0.15, 0.10)        # a street name blade's capitals: major streets (6"), the rest (4")
+BLADE_TOP_M = 3.15              # m from the ground to the post's top (the lower blade's bottom: MUTCD 7 ft + the stop
+                                # or yield sign under it on the same corner elsewhere)
+STREET_CLEAR_M = 1.3            # m from the corner's two carriageway edges to the post (the sidewalk's corner)
+STREET_WIDE_M = 7.0             # a junction whose widest street is wider than this (both halves) gets a second corner
+VERTS_MAX = 60000               # a tile's sign mesh at most (the engine's 16-bit indices)
 
 MILE_M = 1609.344
 
@@ -1370,6 +1379,131 @@ def _inside(q, line, hw, margin=0.3):
     return float(np.min(np.hypot(p[:, 0] - q[0], p[:, 1] - q[1]))) < hw - margin
 
 
+SUFFIX = {"street": "St", "avenue": "Ave", "boulevard": "Blvd", "drive": "Dr", "road": "Rd", "parkway": "Pkwy",
+          "place": "Pl", "court": "Ct", "lane": "Ln", "circle": "Cir", "highway": "Hwy", "terrace": "Ter",
+          "trail": "Trl", "square": "Sq", "expressway": "Expy", "freeway": "Fwy", "mall": "Mall", "way": "Way",
+          "crossing": "Xing", "point": "Pt"}
+DIRS = {"north": "N", "south": "S", "east": "E", "west": "W", "northeast": "NE", "northwest": "NW",
+        "southeast": "SE", "southwest": "SW"}
+
+
+def street_name(name):
+    """A street's name as its blade spells it: the suffix and a leading or trailing direction abbreviated (East
+    Colfax Avenue: E Colfax Ave); '' for none."""
+    nm = str(name or "").strip()
+    if not nm or nm == "None" or nm == "nan":
+        return ""
+    w = nm.split()
+    if len(w) >= 3 and w[0].lower() in DIRS:
+        w[0] = DIRS[w[0].lower()]
+    if len(w) >= 3 and w[-1].lower() in DIRS:
+        w[-1] = DIRS[w[-1].lower()]
+    for k in (len(w) - 1, len(w) - 2):
+        if 1 <= k < len(w) and w[k].lower() in SUFFIX and (k == len(w) - 1 or w[-1] in DIRS.values()):
+            w[k] = SUFFIX[w[k].lower()]
+            break
+    glyphs = font()["glyphs"]
+    out = []
+    for ch in " ".join(w):
+        if ch != " " and ch not in glyphs:      # (an accent the atlas lacks: its letter)
+            ch = unicodedata.normalize("NFKD", ch)[0]
+        if ch == " " or ch in glyphs:
+            out.append(ch)
+    return "".join(out)
+
+
+def blade_face(text, cap):
+    """A street name blade (MUTCD D3-1): white mixed-case lettering on green, a thin white border; bottom middle at
+    the origin."""
+    H = round(cap * 2.0 + 0.03, 3)
+    W = max(0.6, text_width(text, cap) + cap * 1.4)
+    f = Face()
+    f.poly(rounded_rect(-W / 2, 0, W / 2, H, cap * 0.25), WHITE, 0)
+    f.poly(rounded_rect(-W / 2 + 0.012, 0.012, W / 2 - 0.012, H - 0.012, cap * 0.2), GREEN, 1)
+    f.text_c(text, cap, 0.0, (H - cap) / 2, "w", 2)
+    return f, (W, H)
+
+
+def _blade(mesh, face, o, along):
+    """A two-sided blade: face on both sides of o (3D, its bottom middle), its length along along (unit 2D)."""
+    a = np.array([along[0], along[1], 0.0])
+    nrm = np.array([along[1], -along[0], 0.0])          # (right x up: the side drawn faces it)
+    o = np.asarray(o, float)
+    draw_face(mesh, face, o + nrm * 0.004, a, nrm, back=False)
+    draw_face(mesh, face, o - nrm * 0.004, -a, -nrm, back=False)
+
+
+def _corner(c, a, b, clear):
+    """The point outside both carriageways of arms a and b (furniture._arms' entries, u away from the junction c)
+    clear m from each edge, or None where they are nearly in line (no corner)."""
+    ua, ub = np.asarray(a[2], float), np.asarray(b[2], float)
+    sin = abs(ua[0] * ub[1] - ua[1] * ub[0])
+    if sin < 0.35 or float(ua @ ub) < -0.94:
+        return None
+    s_a = (b[1].width / 2 + clear) / sin
+    s_b = (a[1].width / 2 + clear) / sin
+    if max(s_a, s_b) > 30.0:
+        return None
+    return np.asarray(c, float)[:2] + ua * s_a + ub * s_b
+
+
+def street_signs(mesh, col, roads, box, names, ground=None, avoid=(), left_hand=False):
+    """Street name signs at the junctions in town where two named streets meet: a post on a corner with the two
+    blades crossed on top, each blade along its street (read by the traffic on the other); two corners at a wide
+    junction. names: {fid: OpenStreetMap / Overture name}; avoid: (x, y) of the props already standing near (signals,
+    stop signs, lamps). Junctions inside box only (each is built by one tile)."""
+    import furniture
+    x0, y0, x1, y1 = box
+    lines = [(sp.width / 2, np.asarray(pts, float)[:, :2]) for _, sp, pts, _ in roads if len(pts) >= 2]
+    av = np.asarray([p[:2] for p in avoid], float).reshape(-1, 2)
+    n = 0
+    for k, arms in sorted(furniture._arms(roads).items()):
+        if len(mesh.P) > VERTS_MAX:
+            break
+        c = np.asarray(arms[0][3], float)
+        if len(arms) < 3 or not (x0 <= c[0] < x1 and y0 <= c[1] < y1) or not all(a[1].urban for a in arms):
+            continue
+        named = [(a, street_name(names.get(a[0]))) for a in arms
+                 if a[1].cls in STREET_CLASSES and not a[1].link]
+        named = sorted(((a, nm) for a, nm in named if nm), key=lambda t: (-t[0][1].width, t[1]))
+        if len({nm for _, nm in named}) < 2:
+            continue
+        sa = named[0]
+        sb = next(t for t in named if t[1] != sa[1])
+        order = sorted(arms, key=lambda a: math.atan2(a[2][1], a[2][0]))
+        near = [(h, ln) for h, ln in lines if np.hypot(*(ln - c[:2]).T).min() < 60.0]
+        spots = []
+        for i in range(len(order)):
+            p = _corner(c, order[i], order[(i + 1) % len(order)], STREET_CLEAR_M)
+            if p is None or not all(furniture._seg_dist_min(p, ln) >= h + 0.8 for h, ln in near):
+                continue
+            if len(av) and float(np.min(np.hypot(*(av - p).T))) < 1.2:
+                continue
+            spots.append(p)
+        if not spots:
+            continue
+        spots.sort(key=lambda p: _h01(round(float(p[0]), 1), round(float(p[1]), 1)))
+        put = [spots[0]]
+        if max(a[1].width for a in arms) > STREET_WIDE_M and len(spots) > 1:
+            put.append(max(spots[1:], key=lambda p: float(np.hypot(*(p - spots[0])))))
+        for p in put:
+            z = _gz(ground, p[0], p[1], c[2] + 0.15)
+            top = z + BLADE_TOP_M
+            mesh.box((p[0], p[1], z - 0.3), (p[0], p[1], top + 0.05), 0.03, 0.03, M_STEEL)
+            col.add((p[0], p[1], z - 0.3), (p[0], p[1], top), 0.04)
+            zb = top + 0.02
+            for (arm, nm) in (sa, sb):
+                cap = BLADE_CAP[0] if arm[1].cls in STREET_MAJOR else BLADE_CAP[1]
+                face, (W, H) = blade_face(nm, cap)
+                u = np.asarray(arm[2], float)
+                if u[0] < -1e-6 or (abs(u[0]) <= 1e-6 and u[1] < 0):     # (either way along: the same blade)
+                    u = -u
+                _blade(mesh, face, (p[0], p[1], zb), u)
+                zb += H + 0.03
+            n += 1
+    return n
+
+
 def billboards(roads, box, frame, urban, ground, avoid, left_hand=False):
     """Prop rows (trees.lua) of billboards along motorways outside towns: West Coast USA's drag-strip billboard
     and one of its ads, BILLBOARD_EVERY_M or so apart, BILLBOARD_OFF_M beyond the right edge, facing the traffic,
@@ -1435,15 +1569,23 @@ def items_near(frame, box, margin=400.0, source=None):
     return [(g, (float(a), float(b))) for g, a, b in zip(got, np.atleast_1d(ex), np.atleast_1d(ny))]
 
 
-def tile(frame, roads, box, ground=None, urban=None, barriers=None, mph=True, left_hand=False, items=None):
+def tile(frame, roads, box, ground=None, urban=None, barriers=None, mph=True, left_hand=False, items=None,
+         names=None, avoid=()):
     """A road tile's highway signs: {"mesh": Mesh.result (render-only), "col": Boxes.result (posts and legs,
     collision only), "props": billboard rows}, positions relative to the tile's corner (box[0], box[1], 0). roads:
-    roads.build_tile's (fid, spec, centreline (k, 3), lon); items: items_near's (None: looked up)."""
+    roads.build_tile's (fid, spec, centreline (k, 3), lon); items: items_near's (None: looked up); names: {fid: the
+    street's name} for the street name signs (where mph: the American blades), avoid: the props' (x, y) they keep
+    clear of."""
     x0, y0, x1, y1 = box
     origin = (x0, y0, 0.0)
     mesh, col = Mesh(), Boxes()
+    if names and mph:
+        try:
+            street_signs(mesh, col, roads, box, names, ground, avoid, left_hand)
+        except Exception:               # (the highway signs regardless)
+            mesh, col = Mesh(), Boxes()
     if not any(sp.cls in HIGHWAY_MAIN for _, sp, _, _ in roads):
-        return {"mesh": None, "col": None, "props": []}
+        return {"mesh": mesh.result(origin), "col": col.result(origin), "props": []}
     if items is None:
         items = items_near(frame, box) if frame is not None else []
     avoid = []
