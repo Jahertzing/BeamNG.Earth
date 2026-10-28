@@ -66,5 +66,17 @@ class HitchTest(unittest.TestCase):
         self.assertEqual(ad._causes(rows), {"mod.roads": [2, 120], "engine.gfx": [1, 70]})
 
 
+class ProcSamplerTest(unittest.TestCase):
+    def test_no_proc_folder(self):
+        """Windows: no /proc. Without psutil the sampler gives empty groups instead of failing the run."""
+        from unittest import mock
+        isdir = os.path.isdir
+        with mock.patch.object(ad.os.path, "isdir", lambda p: False if p == "/proc" else isdir(p)), \
+                mock.patch.object(ad, "_psutil", return_value=None):
+            got = ad.ProcSampler().sample()
+        self.assertEqual(got["server"]["procs"], 0)
+        self.assertEqual(got["game"]["procs"], 0)
+
+
 if __name__ == "__main__":
     unittest.main()
