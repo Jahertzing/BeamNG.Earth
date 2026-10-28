@@ -59,12 +59,16 @@ package.loaded['beamngEarth/roads'] = {
 local lat, lon = anchor:enuToGeodetic(200, 100, 0)
 local hlat, hlon = anchor:enuToGeodetic(230, 100, 0)
 
--- a pending anchor request: the state alone, the car untouched
-st.pending = { purpose = 'rebase' }
+-- a teleport under way, or the mod setting the car down: the state alone, the car untouched
+st.pending = { purpose = 'teleport' }
 local r = G.step({ lat = lat, lon = lon, hlat = hlat, hlon = hlon, v = 27 })
-T.check(r.pending == 'rebase' and #veh.moves == 0 and #tele == 0 and #veh.vels == 0, 'pending: nothing moves')
+T.check(r.pending == 'teleport' and #veh.moves == 0 and #tele == 0 and #veh.vels == 0, 'pending: nothing moves')
 T.check(r.roads.q == 2 and r.backlog == 0 and r.anchor == 3, 'pending: the load state still reported')
 st.pending = nil
+st.placeFrames = 2
+r = G.step({ lat = lat, lon = lon, hlat = hlat, hlon = hlon, v = 27 })
+T.check(r.placing and #veh.moves == 0 and #tele == 0 and #veh.vels == 0, 'the mod placing the car: nothing moves')
+st.placeFrames = nil
 
 -- no ground at the point: untouched, said
 ground = nil
@@ -105,6 +109,16 @@ T.check(#tele == 2, 'an upset car: set again')
 veh.up = vec3(0, 0, 1)
 G.step({ lat = lat, lon = lon, hlat = hlat, hlon = hlon, v = 27, reset = true })
 T.check(#tele == 3, 'reset: set again')
+
+-- a rebase's anchor asked for ahead of the rebase distance: the car goes on (it commits only past the distance)
+st.pending = { purpose = 'rebase', ready = true }
+local before = #veh.moves + #tele
+r = G.step({ lat = lat, lon = lon, hlat = hlat, hlon = hlon, v = 27 })
+T.check(#veh.moves + #tele == before + 1 and r.pending == 'rebase' and r.ready == true, 'a ready rebase: moved on')
+st.pending = { purpose = 'rebase', ready = false }
+r = G.step({ lat = lat, lon = lon, hlat = hlat, hlon = hlon, v = 0 })
+T.check(#veh.moves + #tele == before + 2 and not r.ready, 'a rebase still preparing: set where it stands')
+st.pending = nil
 
 -- after a rebase the same point lands in the new frame
 local anchor2 = geodesy.newAnchor(40.1, -104.92)
