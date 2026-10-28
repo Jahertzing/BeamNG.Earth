@@ -711,7 +711,7 @@ local function startTraffic()
   end
 end
 
--- The watched traffic went off: the traffic cars it dropped (still flagged, not in its table) deleted, and the
+-- The watched traffic went off: the traffic cars it dropped (flagged traffic, not in its table) deleted, and the
 -- choice's cars set up again.
 local function restartTraffic()
   local gt = gameplay_traffic
@@ -720,7 +720,7 @@ local function restartTraffic()
   local me, gone = playerId(), 0
   for i = (be and be.getObjectCount and be:getObjectCount() or 0) - 1, 0, -1 do
     local o = be:getObject(i)
-    if o and o:getId() ~= me and o.isTraffic == 'true' and o.isParked ~= 'true' and not td[o:getId()] then
+    if o and o:getId() ~= me and require('beamngEarth/collisionfoci').flagKind(o) == 'traffic' and not td[o:getId()] then
       o:delete()
       gone = gone + 1
     end

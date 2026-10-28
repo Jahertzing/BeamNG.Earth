@@ -91,8 +91,27 @@ function M.isWalker(o)
   return ok and name == M.WALKER_JBEAM
 end
 
--- The game's vehicles as { id, x, y, kind }: AI traffic (gameplay_traffic), parked cars (gameplay_parking), the rest
--- 'player' (spawned by a player; in BeamMP another player's car is also a vehicle of this game).
+-- The kind a vehicle object o is by its own fields, or nil: the stock traffic and parked cars are flagged once their
+-- system takes them (isTraffic, isParked), but core_multiSpawn names each car's group as it spawns it (vehicleGroup):
+-- the traffic cars still spawning were 'player' cars, and a teleport then had farcars save, delete and spawn them
+-- again as plain cars, leaving gameplay_traffic off with no traffic (2026-10-28, a teleport just after the level load).
+function M.flagKind(o)
+  local ok, k = pcall(function()
+    if o.isTraffic == 'true' then return 'traffic' end
+    if o.isParked == 'true' then return 'parked' end
+    local g = o.vehicleGroup
+    if type(g) == 'string' then
+      if g:sub(1, 11) == 'autoTraffic' then return 'traffic' end
+      if g == 'autoParking' then return 'parked' end
+    end
+    return nil
+  end)
+  return ok and k or nil
+end
+
+-- The game's vehicles as { id, x, y, kind }: AI traffic (gameplay_traffic), parked cars (gameplay_parking), and the
+-- ones flagged so (flagKind), the rest 'player' (spawned by a player; in BeamMP another player's car is also a vehicle
+-- of this game).
 function M.vehicles()
   local out = {}
   if not be or not be.getObjectCount then return out end
@@ -115,7 +134,8 @@ function M.vehicles()
     if o and o.getPosition and not (floats and floats(o:getId())) and not M.isWalker(o) then
       local id = o:getId()
       local p = o:getPosition()
-      out[#out + 1] = { id = id, x = p.x, y = p.y, kind = traffic[id] and 'traffic' or parked[id] and 'parked' or 'player' }
+      out[#out + 1] = { id = id, x = p.x, y = p.y,
+        kind = traffic[id] and 'traffic' or parked[id] and 'parked' or M.flagKind(o) or 'player' }
     end
   end
   return out
