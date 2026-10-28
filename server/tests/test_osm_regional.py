@@ -115,6 +115,20 @@ class TableTest(unittest.TestCase):
         self.assertEqual(list(f.attrs[osmtags.TURN_START]), ["", "", "", ""])
         self.assertEqual(list(f.attrs["osm_turn_lanes"]), ["left|through", "", "left|through", ""])
 
+    def test_join_parts(self):
+        """osm_parts: a merged segment's ways in order along it with Layercake's lanes of each; "" for one way."""
+        class F:
+            attrs = {"src_record": np.array(["w5@1", "w1@3"]),
+                     "src_ways": np.array([json.dumps([{"record_id": "w9@2", "between": [0.4, 1.0]},
+                                                       {"record_id": "w5@1", "between": [0.0, 0.4]}]),
+                                           json.dumps([{"record_id": "w1@3", "between": None}])])}
+
+            def __len__(self):
+                return 2
+        f = osmtags.join_parts(F(), {5: {"lanes": 2}, 9: {"width": 7.0}})
+        self.assertEqual(json.loads(f.attrs["osm_parts"][0]), [[0.0, 0.4, 2], [0.4, 1.0, None]])
+        self.assertEqual(f.attrs["osm_parts"][1], "")
+
     def test_first_table_by_tag_wins(self):
         a = self.write("b-newer", stamp="2026-10-28")
         b = self.write("a-older", stamp="2026-01-01")

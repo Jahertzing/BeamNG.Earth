@@ -1,5 +1,6 @@
 """Turn pockets and width tapers (roads.pocket_profiles, widen_off / widen_edges, and their use in lane_marks, extras,
 build_tile, roadmesh.ribbons, surface._road_segments and grading.widen_plan; feature turn-pockets)."""
+import json
 import os
 import sys
 import unittest
@@ -204,6 +205,47 @@ class PocketTest(unittest.TestCase):
         left = [a for a in arrows if a[:, 1].mean() > 0.2]
         self.assertTrue(left)                                  # the left arrow in the pocket (left of the old centre)
         self.assertTrue(all(abs(a[:, 1].mean() - (float(yellow[0][-1, 1]) - lw / 2)) < 1.6 for a in left))
+
+
+class PartsTest(unittest.TestCase):
+    """A segment Overture merged from several OSM ways (osm_parts: osmtags.join_parts)."""
+
+    def merged(self, parts, lanes, row):
+        f = road([[(0, 0), (200, 0)]], ["primary"], ["Main"], lanes=[lanes], rows=[row])
+        f.attrs["osm_parts"] = np.array([json.dumps(parts)])
+        return f
+
+    def test_pocket_over_its_way_share(self):
+        """The approach (2 lanes) and the pocket way (its last 30 %, 3 lanes, left|through forward) merged: the pocket
+        over the pocket way's 60 m, its taper on the approach; the pocket way's extra lane is the pocket, no step."""
+        f = self.merged([[0, 0.7, 2], [0.7, 1, 3]], 2,
+                        {"lanes:forward": "1", "lanes:backward": "1", "turn:lanes:forward": "left|through"})
+        wd = profiles(f)["id000"]
+        lw = edges_at(wd, wd.L)[0]
+        self.assertGreater(lw, 2.5)
+        self.assertAlmostEqual(edges_at(wd, wd.L * 0.7 + 1.0)[0], lw)                      # (full from its way on)
+        self.assertAlmostEqual(edges_at(wd, wd.L * 0.7 - roads.POCKET_TAPER_M / 2)[0], lw / 2, places=6)
+        self.assertEqual(edges_at(wd, wd.L * 0.7 - roads.POCKET_TAPER_M - 1.0), (0.0, 0.0))
+        self.assertEqual([c[0] for c in wd.comps], ["ins"])                                 # (no (d) step)
+
+    def test_lanes_by_part(self):
+        """Two ways of 2 and 4 lanes merged (no turn lanes): the 4-lane half wider by two lanes, opening over the taper
+        inside it."""
+        f = self.merged([[0, 0.5, 2], [0.5, 1, 4]], 2, {})
+        wd = profiles(f)["id000"]
+        lw = roads._lane_width(roads.road_specs(f, None)[0])
+        self.assertEqual(edges_at(wd, 50.0), (0.0, 0.0))
+        el, er = edges_at(wd, 100.0 + roads.POCKET_TAPER_M + 1.0)
+        self.assertAlmostEqual(el + er, 2 * lw, places=6)
+        self.assertAlmostEqual(el, er, places=6)
+        self.assertAlmostEqual(sum(edges_at(wd, 100.0 + roads.POCKET_TAPER_M / 2)), lw, places=6)
+
+    def test_one_way_segments_and_unknown_lanes_unchanged(self):
+        self.assertEqual(profiles(self.merged([[0, 0.5, None], [0.5, 1, 2]], 2, {})), {})
+        f = road([[(0, 0), (200, 0)]], ["primary"], ["Main"], lanes=[2], rows=[{}])
+        f.attrs["osm_parts"] = np.array([""])
+        self.assertEqual(profiles(f), {})
+        self.assertIsNone(roads.osm_parts(f, 0))
 
 
 class CentreLaneTest(unittest.TestCase):

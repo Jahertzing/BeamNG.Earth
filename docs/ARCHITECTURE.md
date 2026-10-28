@@ -1090,6 +1090,10 @@ three days of testing: dem 741 MB / 7.5k files, imagery 1.4 GB / 35k, deshadow 7
   way from its sources (the longest share), and a merged segment's turn lanes from the way at the end they lead to
   (turn:lanes:forward the last way's, :backward and `osm_turn_lanes_start` the first's): a pocket way merged with its
   approach gives a pocket at the end (rule (a)), not turn lanes along the whole segment.
+  The merged ways' shares and Layercake lane counts are kept per segment (`osm_parts`, `osmtags.join_parts`; roads
+  layer 8): rule (a)'s pocket covers its own way's share (POCKET_M where the segment is one way), and where OSM's
+  lanes are the ones in use (`Spec.lsrc` None / "osm"), a part of another lane count is wider or narrower by those
+  lanes, the step tapering inside the wider part as rule (b) (rule (d); a pocket's part keeps the segment's width).
 - Turn lanes without turn:lanes (rule (c), 2026-10-28): CDOT counts a stretch's left turn lanes into its
   lanes (a painted median: `lanes_c`; else the direction's lanes), and its stretches are short, so CO-52
   through Frederick widens near its junctions by segment; those steps now taper too (a centre turn lane
