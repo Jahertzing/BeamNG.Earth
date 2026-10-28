@@ -164,8 +164,27 @@ function B.info()
   local cl, li = cloudLayer(), levelInfo()
   if cl then saved.weather.cloud = { coverage = tonumber(cl.coverage), cirrusCoverage = tonumber(cl.cirrusCoverage) } end
   if li then saved.weather.fog = { fogDensity = tonumber(li.fogDensity), fogAtmosphereHeight = tonumber(li.fogAtmosphereHeight) } end
+  local ui = ext('ui_visibility')
+  if ui and ui.getCef then saved.ui = { cef = ui.getCef(), imgui = ui.getImgui and ui.getImgui() } end
   out.saved = saved
   return toJson(out)
+end
+
+-- The HUD (the game's UI and the imgui windows: the free camera's key help, the speedometer, our credits line) shown or
+-- hidden for the shots, as the game's toggleUi action (Alt+U) does; restore() puts back what info() saved.
+function B.hud(visible)
+  local ui = ext('ui_visibility')
+  if not (ui and ui.set) then return toJson({ ok = false, error = 'no ui_visibility' }) end
+  ui.set(visible and true or false)
+  return toJson({ ok = true, visible = ui.get and ui.get() })
+end
+
+local function restoreUi(u)
+  local ui = ext('ui_visibility')
+  if not ui then return false end
+  if u.cef ~= nil and ui.setCef then ui.setCef(u.cef) end
+  if u.imgui ~= nil and ui.setImgui then ui.setImgui(u.imgui) end
+  return true
 end
 
 function B.zeroInputs()
@@ -430,10 +449,10 @@ local function restoreWeather(w)
   return w.mode
 end
 
--- parts: which to restore ({ cam = true, sky = true, weather = true, perfmon = true }; nil = all)
+-- parts: which to restore ({ cam = true, sky = true, weather = true, perfmon = true, ui = true }; nil = all)
 function B.restore(saved, parts)
   saved = decode(saved)
-  parts = parts and decode(parts) or { cam = true, sky = true, weather = true, perfmon = true }
+  parts = parts and decode(parts) or { cam = true, sky = true, weather = true, perfmon = true, ui = true }
   local out, errors = {}, {}
   local function step(name, fn, arg)
     if not parts[name] or arg == nil then return end
@@ -446,6 +465,7 @@ function B.restore(saved, parts)
     if not loaded and ext('beamngEarth_perfmon') then extensions.unload('beamngEarth_perfmon') end
     return loaded
   end, saved.perfmonLoaded)
+  step('ui', restoreUi, saved.ui)
   -- the camera last, and always (also without a saved camera: the game camera)
   if parts.cam then step('cam', restoreCamera, saved.cam or { free = false }) end
   out.errors = errors
