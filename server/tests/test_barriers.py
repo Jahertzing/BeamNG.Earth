@@ -83,6 +83,18 @@ class MedianTest(unittest.TestCase):
         for b in js:
             self.assertFalse(((b["line"][:, 0] > 122.0) & (b["line"][:, 0] < 134.0)).any())
 
+    def test_twin_bridge_decks_get_one_median_barrier(self):
+        """I-25's twin bridges 3 m apart: roadmesh joins their slabs and leaves the parapets out; a barrier on the
+        slab between them at deck level, once."""
+        def deck(fid, y, z=25.0):
+            return {"n": [[-100.0, y, z], [400.0, y, z]], "w": 11.8, "deck": True, "fid": fid, "ctx": True}
+        bs = barriers.tile_barriers(FRAME, [], flat, BOX, decks=[deck("d1", 7.4), deck("d2", -7.4)])
+        self.assertEqual(kinds(bs), ["jersey"])
+        self.assertLess(np.abs(bs[0]["line"][:, 1]).max(), 0.05)
+        self.assertTrue(np.allclose(bs[0]["z"], 25.0))
+        far = barriers.tile_barriers(FRAME, [], flat, BOX, decks=[deck("d1", 12.0), deck("d2", -12.0)])
+        self.assertEqual(far, [], "12 m apart: each deck keeps its parapets")
+
     def test_split_level_median_too_tall_none(self):
         hi = road("a", 9.0, 1, z=16.0)
 

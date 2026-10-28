@@ -300,7 +300,7 @@ def tile_barriers(frame, roads, elev, exact, decks=(), mapped=None, parapets=(),
              if spec.kind in roadsmod.BUILT and len(pts) >= 2]
     built.sort(key=lambda r: r[0])
     mapped = [m for m in (mapped or []) if len(m[1]) >= 2]
-    if not mapped and not parapets and not any(_guarded(spec) for _, spec, _ in built):
+    if not mapped and not parapets and not decks and not any(_guarded(spec) for _, spec, _ in built):
         return []                   # (most road tiles: no motorway, nothing mapped)
     others = roadsmod._Segs({fid: (pts[:, :2], spec.width / 2) for fid, spec, pts in built})
     mains_rows, main_of = [], {}
@@ -435,6 +435,8 @@ def tile_barriers(frame, roads, elev, exact, decks=(), mapped=None, parapets=(),
             tall.append([r[0], r[1][sl], r[2][sl], r[3][sl], r[4], r[5],
                          (r[6][0] if i == 0 else True, r[6][1] if j == len(ok) - 1 else True), r[7], r[8]])
     raw = tall
+    # the medians between twin bridge decks joined into one slab (roadmesh: no parapets there)
+    raw.extend(_deck_medians(decks, near_box))
     # the rural roads' parapets as guardrails (the US's and Canada's)
     for w in parapets:
         b = np.asarray(w["base"], np.float64)
@@ -469,6 +471,67 @@ def tile_barriers(frame, roads, elev, exact, decks=(), mapped=None, parapets=(),
                     foot = gz[sl] - (POST_DOWN_M if kind == "wbeam" else FOOT_M)
                     raw.append([kind, line, gz[sl], foot, float(hh), face, (True, True), mid_, 0])
     return _clip_out(raw, exact, {m[3] for m in mapped})
+
+
+DECK_MEDIAN_MIN_W = 7.0     # m: a deck this wide or wider (a carriageway's) gets a median barrier beside its twin
+DECK_DZ_M = 1.0             # m two decks' surfaces may differ at most for one barrier between them
+
+
+def _deck_medians(decks, box):
+    """Median barriers between two parallel bridge decks whose edges lie under roadmesh.MEDIAN_JOIN_M apart (roadmesh.deck
+    joins their slabs and leaves the parapets out: I-25's twin bridges were open to the other carriageway), as
+    tile_barriers' raw rows, on the slab at the higher deck's level; each spot by the lower feature id. decks: deck
+    chunks ("n" points (k, 3), "w", "fid"); only those with "ctx" (each deck's whole stretch near the tile once). Pure."""
+    import grading
+    import roadmesh
+    rows = [(str(c.get("fid")), np.asarray(c["n"], np.float64)[:, :3], float(c.get("w") or 0) / 2) for c in decks or ()
+            if c.get("ctx") and c.get("fid") is not None and float(c.get("w") or 0) >= DECK_MEDIAN_MIN_W
+            and len(c.get("n") or ()) >= 2]
+    if len(rows) < 2:
+        return []
+    A = np.concatenate([n[:-1] for _f, n, _h in rows])
+    B = np.concatenate([n[1:] for _f, n, _h in rows])
+    H = np.concatenate([np.full(len(n) - 1, h) for _f, n, h in rows])
+    F = np.concatenate([np.full(len(n) - 1, f, dtype=object) for f, n, _h in rows])
+    ab = B[:, :2] - A[:, :2]
+    L2 = np.maximum((ab * ab).sum(1), 1e-12)
+    u = ab / np.sqrt(L2)[:, None]
+    out = []
+    for fid, n, h in rows:
+        xy, s = grading.resample(n[:, :2], STEP_M)
+        if len(xy) < 2:
+            continue
+        z = np.interp(s, np.r_[0.0, np.cumsum(np.hypot(*np.diff(n[:, :2], axis=0).T))], n[:, 2])
+        D = np.gradient(xy, axis=0)
+        D /= np.maximum(np.hypot(*D.T), 1e-9)[:, None]
+        N = np.stack([-D[:, 1], D[:, 0]], axis=1)
+        sel = np.flatnonzero(F > fid)                   # (each spot by the lower id)
+        if not len(sel):
+            continue
+        a, b2, hh, uu = A[sel], B[sel], H[sel], u[sel]
+        t = np.clip(((xy[:, None, :] - a[None, :, :2]) * ab[sel][None]).sum(-1) / L2[sel][None], 0.0, 1.0)
+        Q = a[None, :, :2] + t[..., None] * ab[sel][None]
+        Qz = a[None, :, 2] + t * (b2[None, :, 2] - a[None, :, 2])
+        V = Q - xy[:, None, :]
+        lat = (V * N[:, None, :]).sum(-1)
+        along = (V * D[:, None, :]).sum(-1)
+        par = np.abs((uu[None] * D[:, None, :]).sum(-1)) >= math.cos(math.radians(PARALLEL_DEG))
+        for sd in (1, -1):
+            gap = sd * lat - h - hh[None]
+            ok = (par & (sd * lat > 0) & (np.abs(along) <= ACROSS_M) & (gap >= MEDIAN_MIN_M)
+                  & (gap < roadmesh.MEDIAN_JOIN_M) & (np.abs(Qz - z[:, None]) <= DECK_DZ_M))
+            g = np.where(ok, gap, np.inf)
+            j = np.argmin(g, axis=1)
+            best = g[np.arange(len(xy)), j]
+            have = np.isfinite(best) & (xy[:, 0] >= box[0]) & (xy[:, 0] <= box[2]) & (xy[:, 1] >= box[1]) \
+                & (xy[:, 1] <= box[3])
+            for i, k2 in _runs(have, min_n=3):
+                sl = slice(i, k2 + 1)
+                mid = xy[sl] + N[sl] * sd * (h + best[sl, None] / 2)
+                zt = np.maximum(z[sl], Qz[np.arange(len(xy)), j][sl])
+                zf = np.minimum(z[sl], Qz[np.arange(len(xy)), j][sl]) - FOOT_M
+                out.append(["jersey", mid, zt, zf, JERSEY_H, 0, (False, False), fid, 0])
+    return out
 
 
 def _left(line):
