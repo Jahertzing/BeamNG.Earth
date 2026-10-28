@@ -1,4 +1,4 @@
-# gcpatch: keep the grass when the physics block moves (optional, Linux)
+# gcpatch: keep the grass when the physics block moves (optional; Linux, and Windows via gcpatchwin.py)
 
 BeamNG.Earth moves its hidden physics TerrainBlock under the player every ~128 m. The engine
 then frees every grass cell on that block. The mod hides this by regenerating the grass in the
@@ -41,3 +41,13 @@ It contains one line, such as `applied: grass kept across terrain block moves (B
 
 ## Turn off
 Remove the launch option, or add `BNGEARTH_GCPATCH_OFF=1` in front of it.
+
+## Windows (gcpatchwin.py)
+Windows has no `LD_PRELOAD`, so `launcher.py` patches the running game from outside instead: `gcpatchwin.py` finds
+`BeamNG.drive.x64.exe`'s process, looks up the same handler in the executable's code (MSVC build: `test dl, 1; je;
+<epilogue>; jmp <free all>; test dl, 0Eh; je <return>`, one match only, jumps and epilogue masked; 0.40.3: RVA
+0x9d77a7), checks those bytes in the game's memory and writes the 0Eh -> 00h with `WriteProcessMemory`, toggled by
+the same level flag file every 250 ms and put back to stock when the launcher stops first. Same status file. It also
+patches a game that was already running or that Steam started, as long as the launcher runs. Off with
+`launcher.py --no-gcpatch` or `BNGEARTH_GCPATCH_OFF=1`; by hand: `python gcpatchwin.py --user-dir <user folder>\current`;
+`python gcpatchwin.py --find <BeamNG.drive.x64.exe>` prints where the byte is without a game.
