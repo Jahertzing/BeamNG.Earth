@@ -7,6 +7,10 @@ a node named <object><size> is that detail's mesh): near the camera a speck of H
 there; an empty "nulldetail" level first drew the whole shape nowhere, at any distance, in 0.40), then balls of GLOW_R
 m, each one kept while its picture spans about MIN_PX pixels.
 
+It also makes bne_beacon_glow.dae, the red aviation obstruction lights over tall buildings (buildings.py G_BEACON,
+trees.lua's beaconglow group): the same balls in material bne_beacon, BEACON_R, with no speck (no lens to show near),
+out to the skyline's 40 km.
+
     python3 tools/build_lamp_glow.py
 """
 import math
@@ -31,6 +35,9 @@ SCREEN_PX = 1130.0          # px per radian on screen: 1440 pixels high at the g
 ENGINE_PX = 4100.0
 LAST_PX = 2.0               # the detail size where the last ball stops (the engine's own files' smallest)
 SEG, RINGS = 8, 5
+# the beacons: a ball from the camera out, doubling, the last ~3 px wide at 40 km
+BEACON_R = (0.4, 0.8, 1.6, 3.2, 6.4, 12.8, 25.6, 51.2)
+BEACON_MIN_PX = 3.0
 
 
 def sphere(r):
@@ -54,18 +61,22 @@ def sphere(r):
     return np.array(P), np.array(T, np.int64)
 
 
-def detail_sizes():
-    """The detail sizes (the engine's) where the speck and each ball start, falling: the speck from NEAR_M in, each
-    ball out to where it spans MIN_PX on screen."""
-    R = GLOW_R[-1] * math.sqrt(3.0)                 # the shape's radius: its bounding box's half diagonal
-    ends = [NEAR_M] + [2.0 * r * SCREEN_PX / MIN_PX for r in GLOW_R[:-1]]
+def detail_sizes(radii=GLOW_R, min_px=MIN_PX, near_m=NEAR_M):
+    """The detail sizes (the engine's) where the speck and each ball start, falling: the speck from near_m in (none
+    without), each ball out to where it spans min_px on screen."""
+    R = radii[-1] * math.sqrt(3.0)                  # the shape's radius: its bounding box's half diagonal
+    ends = ([near_m] if near_m else []) + [2.0 * r * SCREEN_PX / min_px for r in radii[:-1]]
     return [R * ENGINE_PX / d for d in ends] + [LAST_PX]
 
 
 def main():
-    sizes = detail_sizes()
+    make("bne_lamp_glow.dae", "bne_lamp_lens", "1 0.8 0.5 1", (HIDDEN_R,) + GLOW_R, detail_sizes())
+    make("bne_beacon_glow.dae", "bne_beacon", "0.8 0.1 0.05 1", BEACON_R, detail_sizes(BEACON_R, BEACON_MIN_PX, None))
+
+
+def make(name_out, mat, colour, radii, sizes):
     geoms, nodes = [], []
-    for k, r in enumerate((HIDDEN_R,) + GLOW_R):
+    for k, r in enumerate(radii):
         P, T = sphere(r)
         n = P / r
         UV = np.c_[0.5 + 0.5 * n[:, 0], 0.5 + 0.5 * n[:, 1]]
@@ -88,14 +99,14 @@ def main():
         name = f"glow{int(round(sizes[k]))}"
         nodes.append(f'<node id="{name}" name="{name}" type="NODE"><matrix sid="transform">1 0 0 0 0 1 0 0 0 0 1 0 0 0 '
                      f'0 1</matrix><instance_geometry url="#{g}"><bind_material><technique_common><instance_material '
-                     'symbol="mat0" target="#bne_lamp_lens"/></technique_common></bind_material></instance_geometry>'
+                     f'symbol="mat0" target="#{mat}"/></technique_common></bind_material></instance_geometry>'
                      '</node>')
     ident = '<matrix sid="transform">1 0 0 0 0 1 0 0 0 0 1 0 0 0 0 1</matrix>'
     xml = f'''<?xml version="1.0" encoding="utf-8"?>
 <COLLADA xmlns="http://www.collada.org/2005/11/COLLADASchema" version="1.4.1">
 <asset><unit name="meter" meter="1"/><up_axis>Z_UP</up_axis></asset>
-<library_effects><effect id="bne_lamp_lens-fx"><profile_COMMON><technique sid="common"><lambert><diffuse><color>1 0.8 0.5 1</color></diffuse></lambert></technique></profile_COMMON></effect></library_effects>
-<library_materials><material id="bne_lamp_lens" name="bne_lamp_lens"><instance_effect url="#bne_lamp_lens-fx"/></material></library_materials>
+<library_effects><effect id="{mat}-fx"><profile_COMMON><technique sid="common"><lambert><diffuse><color>{colour}</color></diffuse></lambert></technique></profile_COMMON></effect></library_effects>
+<library_materials><material id="{mat}" name="{mat}"><instance_effect url="#{mat}-fx"/></material></library_materials>
 <library_geometries>{"".join(geoms)}</library_geometries>
 <library_visual_scenes><visual_scene id="scene"><node id="base00" name="base00" type="NODE">{ident}<node id="start01" name="start01" type="NODE">{ident}
 {"".join(nodes)}
@@ -104,7 +115,7 @@ def main():
 </COLLADA>
 '''
     out = os.path.join(HERE, "..", "mod", "beamng_earth", "levels", "beamng_earth", "art", "shapes", "beamngEarth",
-                       "bne_lamp_glow.dae")
+                       name_out)
     tmp = staging.tmp_for(out)
     with open(tmp, "w", newline="\n") as f:
         f.write(xml)

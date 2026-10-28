@@ -25,6 +25,8 @@ M.MATERIALS = {
   bne_stadium_light = { '0.95 0.97 1', 3000, when = function(c) return c.night and M.evening(c.hour) end },
   -- the Castle Rock star (nightglow.lua): its season
   bne_star_bulb = { '1 0.96 0.86', 4000, when = function(c) return c.night and M.starSeason(c.year, c.month, c.day) end },
+  -- the red obstruction lights on tall buildings (buildings.py G_BEACON): aviation red, steady (L-810)
+  bne_beacon = { '1 0.06 0.03', 2500 },
   -- a city's sky glow (nightglow.lua): additive, a faint haze of light
   bne_city_glow = { '1 1 1', 6 },
 }
@@ -116,7 +118,7 @@ local function apply(night)
   end
   -- the lamps' far glow (trees.lua's lampglow group, off by day)
   local okt, trees = pcall(require, 'beamngEarth/trees')
-  if okt and trees.setGroupEnabled then pcall(trees.setGroupEnabled, { 'lampglow' }, night) end
+  if okt and trees.setGroupEnabled then pcall(trees.setGroupEnabled, { 'lampglow', 'beaconglow' }, night) end
   M.night = night
 end
 

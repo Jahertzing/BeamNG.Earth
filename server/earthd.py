@@ -1328,6 +1328,7 @@ class Server:
             drives = []
             props.extend(buildingsmod.doors(items, lines, x0, y0, drives))
             props.extend(buildingsmod.toll_booth_rows(items, x0, y0))
+            props.extend(buildingsmod.beacon_rows(items, x0, y0))      # (red lights on towers)
             drives.extend(buildingsmod.garage_drives(items, lines, x0, y0))
             chunks += drives
             park = parkingmod.clear_of(park, props, drives)

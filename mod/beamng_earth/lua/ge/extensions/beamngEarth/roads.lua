@@ -274,7 +274,8 @@ end
 -- the road tiles; the user, 2026-10-27: "extend the street and window lights as far as the buildings render"): glow
 -- rows of trees.lua's lampglow group (drawn at night only) while the tile shows, one trees tile per 256 m square
 -- (its distance rings and caps; ranks hashed under the farthest ring's 0.2: every one shown, a cap thinning evenly).
-M.FAR_LAMP_GROUPS = { 'lampglow' }
+-- Its tall buildings' red obstruction lights (buildings.beacon_points, f.beacons) the same way, group beaconglow.
+M.FAR_LAMP_GROUPS = { 'lampglow', 'beaconglow' }
 local function farLamps(key, f, on)
   if on == (f.lampKeys ~= nil) then return end
   local ok, trees = pcall(require, 'beamngEarth/trees')
@@ -285,11 +286,13 @@ local function farLamps(key, f, on)
     return
   end
   local by, tag = {}, 'FL' .. tostring(key):gsub('[^%w]', '') .. '|'
-  for i, p in ipairs(f.lamps) do
-    if type(p) == 'table' and p[1] and p[2] and p[3] then
-      local k = tag .. math.floor(p[1] / 256) .. '_' .. math.floor(p[2] / 256)
-      by[k] = by[k] or {}
-      by[k][#by[k] + 1] = { 0, p[1], p[2], p[3], 0, 1, 1, ((i * 7919) % 997) / 997 * 0.19 }
+  for g, list in ipairs({ f.lamps or {}, f.beacons or {} }) do
+    for i, p in ipairs(list) do
+      if type(p) == 'table' and p[1] and p[2] and p[3] then
+        local k = tag .. math.floor(p[1] / 256) .. '_' .. math.floor(p[2] / 256)
+        by[k] = by[k] or {}
+        by[k][#by[k] + 1] = { g - 1, p[1], p[2], p[3], 0, 1, 1, ((i * 7919) % 997) / 997 * 0.19 }
+      end
     end
   end
   f.lampKeys = {}
@@ -548,7 +551,8 @@ function M.onFarTile(msg, currentAnchor, kind)
     far[key] = { anchor = msg.anchorId, shape = sl and sl.path or data.shape, pos = data.pos, slot = sl,
                  sky = sky and { tonumber(ux), tonumber(uy) } or nil,
                  deckOf = kind == 'B' and tileKey(msg.anchorId, msg.key) or nil,
-                 lamps = type(data.lamps) == 'table' and #data.lamps > 0 and data.lamps or nil }
+                 lamps = type(data.lamps) == 'table' and #data.lamps > 0 and data.lamps or nil,
+                 beacons = type(data.beacons) == 'table' and #data.beacons > 0 and data.beacons or nil }
     farQ[#farQ + 1] = key
   else
     slotDrop(sl)
@@ -599,7 +603,7 @@ local function updateFar(gov)
         f.hidden = hide
       end
     end
-    if f.lamps then farLamps(key, f, f.id ~= nil and not f.hidden) end
+    if f.lamps or f.beacons then farLamps(key, f, f.id ~= nil and not f.hidden) end
   end
   while #farQ > 0 and #walkQ == 0 and gov:try('roadWalk') do
     local key = table.remove(farQ, 1)

@@ -91,5 +91,35 @@
     "translucent": true,
     "translucentBlendOp": "Add",
     "translucentZWrite": false
+  },
+  "bne_beacon": {
+    "name": "bne_beacon",
+    "mapTo": "bne_beacon",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "8ba71af4-6851-5422-bb2a-01e99c460cf3",
+    "Stages": [
+      {
+        "baseColorFactor": [
+          0.25,
+          0.03,
+          0.02,
+          1.0
+        ],
+        "metallicFactor": 0,
+        "roughnessFactor": 0.3,
+        "emissiveFactor": [
+          0,
+          0,
+          0
+        ]
+      },
+      {},
+      {},
+      {}
+    ],
+    "castShadows": false,
+    "doubleSided": true,
+    "translucent": false
   }
 }

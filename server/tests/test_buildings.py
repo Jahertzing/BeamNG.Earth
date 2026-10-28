@@ -887,6 +887,26 @@ class StadiumLightTest(unittest.TestCase):
         self.assertEqual(m.n, 0)
 
 
+class BeaconTest(unittest.TestCase):
+    def test_tall_buildings_get_red_lights(self):
+        """A tower over 200 ft gets a red obstruction light over its roof (one, in the middle), a long one one at each
+        end, a low block none; the rows are trees.lua rows of G_BEACON, shown at every distance (rank 0)."""
+        tower = bld.plan(rect(0, 0, 30, 30), {"class": "office", "height": 120.0}, 0, 39.74, -104.99)
+        slab = bld.plan(rect(0, 100, 90, 20), {"class": "office", "height": 80.0}, 0, 39.74, -104.99)
+        low = bld.plan(rect(100, 0, 40, 40), {"class": "office", "height": 40.0}, 0, 39.74, -104.99)
+        items = [(tower, 1600.0, 1602.0), (slab, 1600.0, 1600.0), (low, 1600.0, 1600.0)]
+        pts = bld.beacon_points(items, 1000.0, 2000.0)
+        self.assertEqual(len(pts), 3)
+        x, y, z = pts[0]
+        self.assertAlmostEqual(x, 1015.0, places=0)
+        self.assertAlmostEqual(y, 2015.0, places=0)
+        self.assertAlmostEqual(z, bld.base_z(tower, 1600.0, 1602.0) + 120.0 + bld.BEACON_UP_M, places=1)
+        self.assertGreater(abs(pts[1][0] - pts[2][0]), 60.0, "the slab's two: one at each end")
+        rows = bld.beacon_rows(items, 1000.0, 2000.0)
+        self.assertEqual({r[0] for r in rows}, {bld.G_BEACON})
+        self.assertTrue(all(r[7] == 0.0 for r in rows))
+
+
 class NightShiftTest(unittest.TestCase):
     def test_floors_start_at_different_bays(self):
         """A tower's floors of an equal-bay band start a hashed whole number of bays along (the night maps light the

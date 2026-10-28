@@ -2794,6 +2794,36 @@ def toll_booth_rows(items, x0, y0):
     return rows
 
 
+# Aviation obstruction lights (FAA AC 70/7460-1L: a structure over 200 ft carries red lights on its top; the user,
+# 2026-10-28: "drive into denver at night and see the lights"): a red glow over every building this tall, night only
+# (trees.lua's beaconglow group, tools/build_lamp_glow.py's beacon balls: a point on screen at any distance), and one
+# at each end of a long roof (the standard's corner lights) instead of the middle.
+G_BEACON = "beaconglow"
+BEACON_MIN_H = 61.0         # m: 200 ft over the ground
+BEACON_UP_M = 1.5           # m over the roof
+BEACON_LONG_M = 50.0        # m: a roof longer than this gets one at each end
+
+
+def beacon_points(items, x0, y0):
+    """[x, y, z] (anchor frame) of the red obstruction lights over the buildings among items (rings relative to
+    (x0, y0)) BEACON_MIN_H or more tall (not bridges)."""
+    out = []
+    for spec, gmin, gmax in items:
+        top = float(spec.min_h or 0.0) + float(spec.height or 0.0)
+        if top < BEACON_MIN_H or spec.cls in BRIDGE_CLASSES or len(spec.ring) < 3:
+            continue
+        z = base_z(spec, gmin, gmax) + top + BEACON_UP_M
+        c, u, hl, _hw = oriented_box(np.asarray(spec.ring, np.float64)[:, :2])
+        pts = [c] if 2 * hl <= BEACON_LONG_M else [c - u * (hl - 2.0), c + u * (hl - 2.0)]
+        out += [[round(float(p[0] + x0), 2), round(float(p[1] + y0), 2), round(z, 2)] for p in pts]
+    return out
+
+
+def beacon_rows(items, x0, y0):
+    """beacon_points as prop rows (trees.lua rows, group G_BEACON; rank 0: shown at every distance)."""
+    return [[G_BEACON, x, y, z, 0.0, 1.0, 1.0, 0.0] for x, y, z in beacon_points(items, x0, y0)]
+
+
 def collider_boxes(items, x0, y0):
     """Boxes [x0, y0, z0, x1, y1, z1] (anchor frame) around each building: the mod does not make the tile's
     mesh solid while the player's car is inside one (roads.lua playerIn)."""
@@ -3202,6 +3232,9 @@ def far_tile(frame, tx, ty, md, ground, out_dir, vfs_dir, aid, lamp_region=None)
                       built_squares(items, 0.0, 0.0, x1 - x0), ground, lamp_region)
     if lamps:
         data["lamps"] = lamps
+    beacons = beacon_points(items, x0, y0)
+    if beacons:
+        data["beacons"] = beacons
     if mesh is not None:
         shape = f"bldfar_{aid}_{tx}_{ty}.cdae"
         write(os.path.join(out_dir, shape), mesh)
@@ -3447,6 +3480,9 @@ def skyline_tile(frame, ux, uy, md, ground, out_dir, vfs_dir, aid, lamp_region=N
         shape = f"bldsky_{aid}_{ux}_{uy}.cdae"
         if lamps:
             data["lamps"] = lamps
+        beacons = beacon_points(picked, x0, y0)
+        if beacons:
+            data["beacons"] = beacons
         write(os.path.join(out_dir, shape), mesh)
         data["shape"] = f"{vfs_dir}/{shape}"
         data["pos"] = [x0, y0, 0.0]
