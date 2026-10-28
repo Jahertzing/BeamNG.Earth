@@ -47,7 +47,10 @@ class HouseWindowTest(TR.RecessTest):
             for i, ws in wins_of(spec).items():
                 a, d, out, L = fk._wall(ring, i)
                 slots = bld.house_window_slots(spec, a, d, out, L, spec.height, i)
-                self.assertLessEqual(len(ws), len(slots))
+                self.assertLessEqual(sum(w.s_std is not None for w in ws), len(slots))
+                for w in ws:                            # (no native slot: a low floor's window, or a middle bay)
+                    if w.s_std is None:
+                        self.assertTrue(w.kind == "low" or not (spec.door and spec.door[0] == i))
                 if slots and not ws:
                     blank += 1
                     self.assertTrue(L < fk.BLANK_SIDE_L)
@@ -153,6 +156,72 @@ class HouseWindowTest(TR.RecessTest):
         for spec in specs[:5]:
             for x, y in zip(TR.walls(spec), TR.walls(spec)):
                 np.testing.assert_array_equal(x, y)
+
+    def low_house(self, k=0):
+        spec = HF.houses(12)[k]
+        spec.floors, spec.floor_h, spec.height = 1, 2.5, 2.5            # (a ranch house's 2.5 m walls: no sash fits)
+        return spec
+
+    def test_low_walls_get_low_windows(self):
+        """A floor too low for the standard sash (no slot on any wall) gets low windows in its bays: cut, glazed with
+        the sash, trimmed, watertight; none with the variety off."""
+        rng = np.random.default_rng(7)
+        got = 0
+        for k in range(12):
+            spec = self.low_house(k)
+            if not (spec.wall and spec.windows is not False):
+                continue
+            ring = bld.drawn_ring(spec)
+            ws = [w for ws in wins_of(spec).values() for w in ws]
+            self.assertTrue(all(w.kind == "low" or w.s_std is None for w in ws))
+            for w in ws:
+                self.assertGreaterEqual(w.h, fk.LOW_MIN_H)
+                self.assertLessEqual(w.zf + w.h, spec.height - fk.LOW_HEAD_GAP + 1e-9)
+            before, after = TR.walls(spec, kit=False), TR.walls(spec)
+            self.assertEqual(int((before[2] == 2).sum()), 0)                    # (natively none)
+            glass = int(((after[2] == 2) & np.isclose(after[1][:, 0, 0], bld.WIN_UV[0])).sum())
+            self.assertGreater(glass, 0)
+            self.covers(spec, fk.RECESS_HOUSE_M, before, after, rng)
+            self.reveals_face_in(spec, fk.RECESS_HOUSE_M, after)
+            got += glass
+            fk.HOUSE_VARIETY = False
+            self.assertEqual(sum(len(x) for x in wins_of(spec).values()), 0)
+            fk.HOUSE_VARIETY = True
+        self.assertGreater(got, 10)
+
+    def test_middle_bay_on_walls_without_the_door(self):
+        """An odd number of bays: the ground floor's middle one has a window on every wall but the front door's (the
+        native walls left it out everywhere: a one-bay wall had none)."""
+        added = 0
+        for spec in self.specs(60):
+            ring = bld.drawn_ring(spec)
+            for i, ws in wins_of(spec).items():
+                a, d, n, L = fk._wall(ring, i)
+                nb = int(L // bld.HOUSE_BAY_M)
+                if nb < 1 or nb % 2 == 0 or not ws and L < fk.BLANK_SIDE_L:
+                    continue
+                mid_s = L * (nb // 2 + 0.5) / nb
+                base = spec.height - spec.floors * spec.floor_h
+                here = [w for w in ws if abs(w.s - mid_s) < 1e-6 and w.zf < base + spec.floor_h]
+                if spec.door and spec.door[0] == i:
+                    self.assertEqual(here, [], "a window in the door's bay")
+                elif here and here[0].s_std is None:
+                    added += 1
+        self.assertGreater(added, 5)
+
+    def test_porch_roof_has_an_underside(self):
+        """The porch roof's box has its underside (from the street it was see-through, only its end face showing)."""
+        found = 0
+        for spec in HF.houses(80):
+            if not (spec.porch and spec.door):
+                continue
+            m = HF._Rec()
+            bld._porch(m, spec, 0.0, bld._Looks(spec.seed))
+            top = bld.PORCH_DECK_M + bld.PORCH_H_M
+            under = [Q for Q, _ in m.q if abs(Q[:, 2] - top).max() < 1e-9 and HF.normal(Q)[2] < -0.99]
+            self.assertEqual(len(under), 1)
+            found += 1
+        self.assertGreater(found, 2)
 
     def test_deterministic(self):
         for spec in self.specs(10):
