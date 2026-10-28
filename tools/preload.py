@@ -86,6 +86,8 @@ EST = {
 # cell, ~0.9 MB of layer files, 1.4 s a cell a thread; the Frederick run's 2.5 s had its first blocks to fetch
 EST["sky"] = (150e3, 100e3, 1.0)        # a skyline cell's few layers (the tall filter runs in the fetch plan)
 EST["edges"] = (1.2e6, 240e3, 2.0)      # a cell's edges: GeoJSON pages (~5x the npz); 236 KB a cell in Jeff's cache
+# hosts slower than the export estimate (the live Front Range run, 2026-10-28: seconds a request at 2 at once x 2)
+EST_HOST_SEC = {"apps.douglas.co.us": 3.6}
 ROADS_SHARE = 0.3               # a roads-only cell's share of a full one's bytes and time
 RANGE_BPS = 12e6                # bytes/s of one range request from download.mapterhorn.com (2026-10-28: 8 MB in 0.7 s)
 # The z14 cells' layers: all but the skyline's tall ones (skyline.py builds those per z12 cell)
@@ -296,9 +298,10 @@ def plan_exports(region, chain, coverage=None, skip=()):
 
 
 # --- the hosts -------------------------------------------------------------------------------------------------------
-def probe_url(src, region):
+def probe_url(src, region, net=None, cache_dir=None):
     """A small request of src near the region (its home, else the middle of where the region meets its box): a 64 px
-    export of a z13 tile, or a z10 tile."""
+    export of a z13 tile (a source with a resolver: its template, which may register it: netfetch.FetchError), or a
+    z10 tile."""
     la, lo = region.home
     if src.bounds and not (src.bounds[0] <= la <= src.bounds[2] and src.bounds[1] <= lo <= src.bounds[3]):
         s, w, n, e = region.bounds
@@ -306,25 +309,33 @@ def probe_url(src, region):
         la, lo = (max(s, bs) + min(n, bn)) / 2, (max(w, bw) + min(e, be)) / 2
     if src.export:
         x, y = (int(v) for v in mapcells.tile_xy(la, lo, PROBE_Z))
-        mb = imagerymod.mercator_bbox(PROBE_Z, x, y)
-        return src.url.format(bbox=",".join(f"{v:.3f}" for v in mb), bbox4326=imagerymod.lat_lon_bbox(mb),
-                              size=PROBE_PX)
+        return imagerymod.export_url(src, PROBE_Z, x, y, PROBE_PX, net, imagery_dir(cache_dir))
     x, y = (int(v) for v in mapcells.tile_xy(la, lo, 10))
     return src.url.format(z=10, x=x, y=y, ty=(1 << 10) - 1 - y)
 
 
-def check_hosts(net, region, chain, only, skip=(), dem_source="tiles"):
+def imagery_dir(cache_dir):
+    return os.path.join(cache_dir, "imagery") if cache_dir else None
+
+
+def check_hosts(net, region, chain, only, skip=(), dem_source="tiles", cache_dir=None):
     """{name: (host, error)} of the sources whose host does not answer one small request (DNS, refused, timing out,
     server errors; a 404 is an answer), each host asked once, all at once: their keys are left out instead of failing
     one by one (USDA's NAIP host on Jeff's PC: 608 requests, every one failed). name "dem": Mapterhorn."""
     asked = {}                                      # host -> (url, [names])
+    failed = {}
     if "imagery" in only:
         s, w, n, e = region.bounds
         for src in export_sources(chain, skip):
             if src.bounds and (src.bounds[2] < s or src.bounds[0] > n or src.bounds[3] < w or src.bounds[1] > e):
                 continue
             h = netfetch.host_of(src.url)
-            asked.setdefault(h, (probe_url(src, region), []))[1].append(src.name)
+            try:
+                url = probe_url(src, region, net, cache_dir)
+            except netfetch.FetchError as e:     # (a resolver that cannot register its source)
+                failed[src.name] = (h, f"{type(e).__name__}: {e}"[:120])
+                continue
+            asked.setdefault(h, (url, []))[1].append(src.name)
         if "usgs" not in skip:
             u = imagerymod.SOURCES["usgs"]
             asked.setdefault(netfetch.host_of(u.url), (probe_url(u, region), []))[1].append("usgs")
@@ -343,7 +354,7 @@ def check_hosts(net, region, chain, only, skip=(), dem_source="tiles"):
         except Exception as e:  # noqa: BLE001 (any failure: the host is left out this run)
             return host, names, f"{type(e).__name__}: {e}"[:120]
 
-    dead = {}
+    dead = dict(failed)
     if asked:
         with ThreadPoolExecutor(len(asked)) as ex:
             for host, names, err in ex.map(one, asked.items()):
@@ -390,20 +401,22 @@ def save_coverage(cache_dir, src, cov):
     os.replace(tmp, p)
 
 
-def probe_coverage(net, cache_dir, region, chain, skip=(), stop=None, write=True):
+def probe_coverage(net, cache_dir, region, chain, skip=(), stop=None, write=True, new_probes=True):
     """{source name: {(x15, y15): bool}} for the regional export sources whose box meets the region: what is not
     known yet is probed (PROBE_PX px exports of the z13 tiles, the host's own rate). Unknown parents (a failed
     probe) stay out (by the box)."""
     from PIL import Image
-    srcs = [s for s in export_sources(chain, skip) if s.bounds]
-    z13 = region.tiles(PROBE_Z)
+    # (a statewide source with a resolver, the Planetary Computer's NAIP: data in the whole state, a 404 past it; its
+    # probe would be one request per z13 tile of the state)
+    srcs = [s for s in export_sources(chain, skip) if s.bounds and not s.resolver]
+    z13 = region.tiles(PROBE_Z, where=region.where("exports", bool))     # (a tier without photos asks none)
     out = {}
 
     def one(src):
         cov = load_coverage(cache_dir, src)
         todo = [(x, y) for x, y in z13 if imagerymod.in_bounds(src, PROBE_Z, x, y)
                 and (x << 2, y << 2) not in cov]
-        if not todo:
+        if not todo or not new_probes:          # (--no-probe: what was probed before, by the box elsewhere)
             return src, cov, 0, 0
         failed = 0
         lock = threading.Lock()
@@ -413,10 +426,8 @@ def probe_coverage(net, cache_dir, region, chain, skip=(), stop=None, write=True
             if stop is not None and stop.is_set():
                 return
             x, y = t
-            mb = imagerymod.mercator_bbox(PROBE_Z, x, y)
-            url = src.url.format(bbox=",".join(f"{v:.3f}" for v in mb), bbox4326=imagerymod.lat_lon_bbox(mb),
-                                 size=PROBE_PX)
             try:
+                url = imagerymod.export_url(src, PROBE_Z, x, y, PROBE_PX, net, imagery_dir(cache_dir))
                 r = net.get(url, kind="demand")
                 rows = classify_probe(np.asarray(Image.open(io.BytesIO(r.body)).convert("RGB")))
             except netfetch.NotFound:
@@ -834,6 +845,12 @@ def dem_range_lane(run, dem, dem_ranges, manifest):
         ln.put(prio, item)
 
 
+def fallthrough(src):
+    """A source whose failure passes its parents to the next source (USDA's NAIP down: USGS's): the national ones and
+    a resolver's (the Planetary Computer's); a county's failure is left for the next run instead."""
+    return not src.bounds or bool(src.resolver)
+
+
 def export_lanes(run, img, exports, manifest):
     """One lane per export source; a parent starts at its first candidate source and moves to the next where that
     one has gaps (past its edge), fails (a national source: USDA's host down, then USGS's) or has nothing."""
@@ -858,7 +875,7 @@ def export_lanes(run, img, exports, manifest):
         done, gaps = export_state(img, src, key)
         if not done:
             if not net.available(lane.host):
-                if not src.bounds:                  # a national source down: the next one
+                if fallthrough(src):                # a national source down: the next one
                     forward(item, prio)
                     return False
                 raise netfetch.HostUnavailable(f"{lane.host} is not answering", host=lane.host)
@@ -870,7 +887,7 @@ def export_lanes(run, img, exports, manifest):
             try:
                 img._download(src, z, x | last, y | last)
             except imagerymod.ImageryError:
-                if not src.bounds:
+                if fallthrough(src):
                     forward(item, prio)
                     return False
                 raise
@@ -951,9 +968,10 @@ def estimate(region, net, img, dem, md, plan, manifest, only, release, coverage=
         for name, d in per.items():
             host = netfetch.host_of(d["src"].url)
             slow = host in SLOW_HOSTS
+            down, wrote, sec = EST["export_slow" if slow else "export"]
             row(f"{name} z{'/z'.join(map(str, sorted(d['z'])))}" + (" (USDA, else USGS: no regional photo)" if not d["src"].bounds
                                                                      else ""),
-                host, d["n"], d["todo"], EST["export_slow" if slow else "export"],
+                host, d["n"], d["todo"], (down, wrote, EST_HOST_SEC.get(host, sec)),
                 max(1, net.policy(host).max_conc or 1))
     if md is not None and "mapdata" in only:
         todo = [ly for c, _, ly in plan["cells"] if cell_tok(c, ly) not in manifest
@@ -994,10 +1012,14 @@ def estimate(region, net, img, dem, md, plan, manifest, only, release, coverage=
           f"{longest:6.1f}   (hosts in parallel: the slowest sets the time)")
     edge = edge_parents(plan["exports"], coverage) if coverage else 0
     if edge:
-        nat = [r for r in rows if "USGS" in r["name"]]
-        extra = edge * EST["export_slow"][2] / max(1, net.policy("imagery.nationalmap.gov").max_conc or 1) / 3600
-        print(f"  + up to {edge} z17 parents on a county's edge may need the next source too (the worst case, all of "
-              f"them to USGS's NAIP: +{extra:.1f} h{', ' + str(math.ceil((edge + (nat[0]['todo'] if nat else 0)) / 3000)) + ' days of its budget' if edge > 1500 else ''})")
+        # the next source of a county's parent: the state's NAIP 2023 where it is in the plan, else USGS's NAIP
+        nat = [r for r in rows if r["name"].startswith("co_naip2023")] or [r for r in rows if "USGS" in r["name"]]
+        if nat and nat[0]["name"].startswith("co_naip2023"):
+            extra, who = edge / nat[0]["rate"] / 3600, "the Planetary Computer's NAIP 2023"
+        else:
+            extra = edge * EST["export_slow"][2] / max(1, net.policy("imagery.nationalmap.gov").max_conc or 1) / 3600
+            who = "USGS's NAIP"
+        print(f"  + up to {edge} z17 parents on a county's edge may need the next source too ({who}: +{extra:.1f} h)")
         longest = max(longest, (nat[0]["hours"] if nat else 0.0) + extra)
     slow = max(rows, key=lambda r: r["hours"]) if rows else None
     if slow and slow["hours"] > 0:
@@ -1084,7 +1106,8 @@ def main(argv=None):
                     help="the cache's cap (default: the one the mod set, else cache.DEFAULT_CAP_GB; 0 = unlimited)")
     ap.add_argument("--dry-run", action="store_true", help="print the plan and its size, fetch nothing (but the "
                                                            "coverage probe, a few hundred small images)")
-    ap.add_argument("--no-probe", action="store_true", help="no coverage probe: each regional source by its box")
+    ap.add_argument("--no-probe", action="store_true", help="no new coverage probes: the coverage probed before, "
+                                                           "elsewhere each regional source by its box")
     ap.add_argument("--over-budget", action="store_true", help="past a host's soft daily budget: on at half rate")
     ap.add_argument("--recheck", action="store_true", help="ignore the manifest (check every key on disk)")
     ap.add_argument("--dem-source", choices=("pmtiles", "tiles"), default="pmtiles",
@@ -1154,15 +1177,15 @@ def main(argv=None):
           + (f"; manifest: {len(manifest.done)} keys done" if manifest.done else ""))
     stop = threading.Event()
     chain = [imagerymod.SOURCES[nm] for nm in imagerymod.DEFAULT_CHAIN]
-    dead = {} if a.no_host_check else check_hosts(net, region, chain, only, skip, a.dem_source)
+    dead = {} if a.no_host_check else check_hosts(net, region, chain, only, skip, a.dem_source, cache_dir)
     for name, (host, err) in dead.items():
         print(f"  ! left out: {name} ({host} does not answer: {err})", flush=True)
     skip |= set(dead) - {"dem"}
     if "dem" in dead:
         only.discard("dem")
     coverage = None
-    if "imagery" in only and not a.no_probe:
-        coverage = probe_coverage(net, cache_dir, region, chain, skip, stop)
+    if "imagery" in only:
+        coverage = probe_coverage(net, cache_dir, region, chain, skip, stop, new_probes=not a.no_probe)
     plan = {
         "dem": plan_dem(region) if "dem" in only else [],
         "xyz": plan_xyz(region, skip=skip) if "imagery" in only else [],

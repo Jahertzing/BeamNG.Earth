@@ -49,6 +49,7 @@ national photos, then worldwide satellite photos. If one does not answer, the ne
 |---|---|---|---|---|
 | Regional aerial photos (state and national mapping agencies) | see the list below | the regions below, mostly 10-30 cm per pixel | Coarser photos from the next source (US national photos or Sentinel-2). | optional |
 | Maryland six-inch photos (MD iMAP) | `mdgeodata.md.gov` | Maryland, 15 cm per pixel | Coarser photos meanwhile. | named |
+| Colorado NAIP 2023 (Microsoft Planetary Computer) | `planetarycomputer.microsoft.com` | Colorado, 30 cm per pixel, after the county photos | The US national photos meanwhile. | optional |
 | USGS / USDA NAIP aerial photos | `imagery.nationalmap.gov` | the lower 48 US states, 30-60 cm per pixel, near you | Coarser photos meanwhile. | named |
 | USDA NAIP aerial photos (second source) | `apps.geo.fpac.usda.gov` | the same photos, from the US Department of Agriculture | Coarser photos meanwhile. | named |
 | USGS The National Map photos | `basemap.nationalmap.gov` | the US, the middle distance and the distant land | Sentinel-2 satellite photos meanwhile. | named |
@@ -69,7 +70,8 @@ Baden-Wurttemberg (`owsproxy.lgl-bw.de`), Lower Saxony (`opendata.lgln.niedersac
 (`maps.six.nsw.gov.au`), Tasmania (`services.thelist.tas.gov.au`), Ontario (`ws.geoservices.lrc.gov.on.ca`), and on
 Colorado's Front Range: Frederick (`gis.frederickco.gov`), Boulder County (`maps.bouldercounty.org`), Thornton
 (`maps.thorntonco.gov`), Arapahoe County (`gis.arapahoegov.com`), Douglas County (`apps.douglas.co.us`), Jefferson
-County (`gisportal.jeffco.us`), Lakewood (`egis.lakewood.org`) and Colorado Springs (`gis.coloradosprings.gov`).
+County (`gisportal.jeffco.us`), Lakewood (`egis.lakewood.org`), Colorado Springs (`gis.coloradosprings.gov`), Larimer
+County (`maps1.larimer.org`) and Pitkin County (`maps.pitkincounty.com`).
 
 ## Land cover, trees and water
 

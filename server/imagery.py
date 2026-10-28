@@ -121,6 +121,9 @@ class Source:
     # Flown leaf-off (bare trees, dormant grass): render() gives its vegetation the summer reference's colour
     # (season.leaf_on) when the Imagery's leaf_on is set
     leaf_off: bool = False
+    # An export source whose URL template comes from a function (export_url: RESOLVERS[name](fetcher, cache_dir)),
+    # not from url, which then only names its host (policies, the breaker, the status)
+    resolver: str = ""
 
 
 SOURCES = {
@@ -170,13 +173,20 @@ import imagery_regional  # noqa: E402
 REGIONAL_XYZ_MIN_ZOOM = 16
 for _n, (_url, _attr, _bounds, _kind, _leaf, *_more) in imagery_regional.REGIONAL.items():
     _max = _more[0] if _more else 17    # an export finer than 1 m texels (z18: one 1024 px image per z16 parent)
+    _nodata = _more[1] if len(_more) > 1 else "white"
     if _kind == "xyz":          # a tile cache: also on the nearer far rings (REGIONAL_XYZ_MIN_ZOOM+)
         SOURCES[_n] = Source(_n, _url, _max, _attr, probe_zooms=(12,), min_zoom=REGIONAL_XYZ_MIN_ZOOM, bounds=_bounds,
                              leaf_off=_leaf)
     else:                       # a WMS / ArcGIS export: one 1024 px image per z15 parent, ahead of the player
-        SOURCES[_n] = Source(_n, _url, _max, _attr, min_zoom=17, export=2, lazy=True, bounds=_bounds, nodata="white",
+        SOURCES[_n] = Source(_n, _url, _max, _attr, min_zoom=17, export=2, lazy=True, bounds=_bounds, nodata=_nodata,
                              leaf_off=_leaf)
-DEFAULT_CHAIN = ("md6in", *imagery_regional.REGIONAL, "naipusda", "naip", "usgs", "eox2023", "eox2016")
+# Colorado's 2023 NAIP (0.3 m; USGS's service has the 2019 flight, 0.6 m, ~15 s an image) from Microsoft's Planetary
+# Computer, a mosaic tile per export parent (pcnaip.py): ahead of USDA's and USGS's NAIP, behind the counties' photos
+SOURCES["co_naip2023"] = Source(
+    "co_naip2023", "https://planetarycomputer.microsoft.com/api/data/v1/mosaic/naip-co-2023", 17,
+    "USDA NAIP 2023 via Microsoft Planetary Computer (public domain)", min_zoom=17, export=2, lazy=True,
+    bounds=(36.99, -109.06, 41.01, -102.04), nodata="black", resolver="pcnaip")
+DEFAULT_CHAIN = ("md6in", *imagery_regional.REGIONAL, "co_naip2023", "naipusda", "naip", "usgs", "eox2023", "eox2016")
 # The line the mod shows (V1_3_SPEC §C), for the default chain: every source's own credit, EOX's in
 # its June 2026 wording (docs/research/2026-10-10-rate-limits.md: "EOxCloudless https://cloudless.eox.at
 # by EOX IT Services GmbH (Contains modified Copernicus Sentinel data 2023)", 2016: "... 2016 & 2017").
@@ -219,6 +229,24 @@ def tone_lut(strength=1.0, lift=1.0):
     x = np.arange(256) / 255.0
     y = x + strength * (lift * 0.06 * (1 - x) ** 3 - 0.10 * x ** 3)
     return np.clip(np.rint(y * 255), 0, 255).astype(np.uint8)
+
+
+def _pcnaip(fetcher, cache_dir):
+    import pcnaip
+    return pcnaip.template(fetcher, cache_dir)
+
+
+RESOLVERS = {"pcnaip": _pcnaip}
+
+
+def export_url(src, z, x, y, size, fetcher=None, cache_dir=None):
+    """An export source's request for the zoom-z tile x, y (the parent) at size px: its template (src.url, or its
+    resolver's) filled with the box ({bbox} EPSG:3857, {bbox4326}), {size}, the tile ({pz}, {px}, {py}) and {scale}
+    (size / 256). A resolver that cannot give one raises netfetch.FetchError."""
+    tmpl = RESOLVERS[src.resolver](fetcher, cache_dir) if src.resolver else src.url
+    mb = mercator_bbox(z, x, y)
+    return tmpl.format(bbox=",".join(f"{v:.3f}" for v in mb), bbox4326=lat_lon_bbox(mb), size=size, pz=z, px=x,
+                       py=y, scale=max(1, size // TILE))
 
 
 def ground_res(lat, z):
@@ -570,8 +598,11 @@ class Imagery:
             if data is not None:
                 self._count(src.name + ":disk")
                 return data
-            mb = mercator_bbox(z - k, x >> k, y >> k)
-            url = src.url.format(bbox=",".join(f"{v:.3f}" for v in mb), bbox4326=lat_lon_bbox(mb), size=TILE << k)
+            try:
+                url = export_url(src, z - k, x >> k, y >> k, TILE << k, self.fetcher, self.cache_dir)
+            except netfetch.FetchError as e:
+                self._count(src.name + ":error")
+                raise ImageryError(f"imagery fetch failed: {src.name}: {e}") from None
             if self.fetcher.miss_alive(miss, url):
                 return None
             kind = getattr(self._local, "kind", "demand")

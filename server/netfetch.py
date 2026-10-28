@@ -199,9 +199,12 @@ POLICIES = {
     "gis.drcog.org": HostPolicy(rate=2.0, burst=4.0, max_conc=2, daily_budget=20000, allow_prefetch=True,
                                 offline_ok=True, timeout=60.0),
     # the Planetary Computer's STAC search and tile service (lidarheights.py, --lidar-heights on): 17 requests a map
-    # cell (one search, 16 PNG tiles of ~8 KB), cached
+    # cell (one search, 16 PNG tiles of ~8 KB), cached; and Colorado's NAIP 2023 mosaic (pcnaip.py, imagery
+    # "co_naip2023"): one 1024 px tile per export parent, ~1.6 s. Throttled at Microsoft's discretion (no published
+    # numbers): four at once, a few a second; optional (USGS's NAIP and USGS fill in)
     "planetarycomputer.microsoft.com": HostPolicy(rate=4.0, burst=8.0, max_conc=4, daily_budget=20000,
-                                                  allow_prefetch=True, offline_ok=True, timeout=60.0),
+                                                  allow_prefetch=True, offline_ok=True, timeout=60.0,
+                                                  miss_ttl=90 * DAY, optional=True),
     "stac.overturemaps.org": HostPolicy(rate=5.0, burst=10.0, max_conc=2, daily_budget=5000,
                                         allow_prefetch=True, offline_ok=True, timeout=20.0),
     **{h: HostPolicy(rate=20.0, burst=40.0, max_conc=4, daily_budget=None, allow_prefetch=True,
@@ -298,7 +301,8 @@ ROLES = {
     "davidmegginson.github.io": "the airport list; the copy on disk is used meanwhile",
     "data.openstreetmap.us": "road details from OpenStreetMap (lanes, widths, sidewalks); estimated meanwhile",
     "gis.drcog.org": "the Denver region's measured buildings and street widths (DRCOG); the map's own meanwhile",
-    "planetarycomputer.microsoft.com": "US building heights from lidar; the map's own heights meanwhile",
+    "planetarycomputer.microsoft.com": ("US building heights from lidar and Colorado's 2023 aerial photos (NAIP); the map's "
+                                        "own heights and coarser photos meanwhile"),
     "tecnagamer.github.io": "railway details and US railroad crossing equipment; estimated meanwhile",
     "api.open-meteo.com": "live weather; the weather stays as it is meanwhile",
     "downloads.sourceforge.net": "the gravity model; standard gravity meanwhile",
