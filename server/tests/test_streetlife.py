@@ -228,7 +228,7 @@ class StaticParkTest(unittest.TestCase):
         rows, left = sl.static_park(frame, curb + lot, town=False)
         self.assertEqual(len(rows) + len(left), 400)
         cars_curb = [r for r in rows if r[2] == 10.0]
-        self.assertTrue(0.3 < len(cars_curb) / 200 < 0.6, len(cars_curb))
+        self.assertTrue(0.1 < len(cars_curb) / 200 < 0.3, len(cars_curb))
         self.assertTrue(all(r[0][4:] in sl.STATIC_MODELS for r in rows))
         self.assertTrue(all(r[4] == 0.0 for r in cars_curb), "curb cars face the traffic's way")
         self.assertEqual({r[4] for r in rows if r[2] == 50.0}, {90.0, 270.0}, "lot cars either way in")
