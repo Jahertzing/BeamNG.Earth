@@ -1008,9 +1008,10 @@ class LuaChunkTest(unittest.TestCase):
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
         self.assertIn("0 failed", r.stdout)
 
-class CliTest(unittest.TestCase):
+class CliRunTest(unittest.TestCase):
     """The command line reaches the run (2026-10-28: --hide-hud was parsed but main() built the options without it;
-    RunTest.test_hide_hud set options(hide_hud=True) directly and never saw it)."""
+    RunTest.test_hide_hud set options(hide_hud=True) directly and never saw it). (Not CliTest: that name is taken
+    above, and a second class of it hid the first's tests.)"""
 
     def test_every_run_flag_reaches_the_options(self):
         got = {}
@@ -1041,6 +1042,39 @@ class CliTest(unittest.TestCase):
         for k, v in want.items():
             self.assertEqual(o[k], v, f"--{k.replace('_', '-')} did not reach the run")
         self.assertEqual([p["id"] for p in got["places"]], ["fells_point"])
+
+
+class LuaArgumentsTest(unittest.TestCase):
+    """Bench.call() sends every argument to the chunk as JSON text (lua_long(json.dumps(a))), and the fake game
+    decodes it back, so the fakes never see what Lua gets: 2026-10-28 B.hud(visible) used the text "false" as is,
+    which Lua takes as true, and --hide-hud never hid anything. Every chunk function Python calls with arguments must
+    decode each of them (decode() / jsonDecode()) before use."""
+
+    def test_every_called_function_decodes_its_arguments(self):
+        lua = (ROOT / "tools" / "benchmark.lua").read_text()
+        py = (ROOT / "tools" / "benchmark.py").read_text()
+        with_args = set(re.findall(r'\b(?:self|b)\.call\("(\w+)",', py))   # (not self.mcp.call: a tool, not the chunk)
+        self.assertIn("hud", with_args)
+        funcs = {m.group(1): (m.group(2), m.group(3)) for m in
+                 re.finditer(r"^function B\.(\w+)\(([^)]*)\)\n(.*?)^end", lua, re.M | re.S)}
+        for fn in sorted(with_args):
+            self.assertIn(fn, funcs, f"B.{fn} not in the chunk")
+            params, body = funcs[fn]
+            for p in [x.strip() for x in params.split(",") if x.strip()]:
+                self.assertRegex(body, rf"(?:\bdecode|\bjsonDecode)\(\s*{p}\s*\)",
+                                 f"B.{fn} uses its argument {p!r} without decoding it (it arrives as JSON text)")
+
+    def test_call_sends_json_text(self):
+        """(What the test above relies on: call() wraps each argument as JSON in a Lua long string.)"""
+        sent = []
+
+        class G:
+            def lua(self, code, timeout=60):
+                sent.append(code)
+                return "{}"
+        b = bm.Bench(G(), bm.options(), clock=FakeClock(), log=lambda *a: None)
+        b.call("hud", False)
+        self.assertEqual(sent, ["return BNGE_BENCH.hud([[false]])"])
 
 
 if __name__ == "__main__":
