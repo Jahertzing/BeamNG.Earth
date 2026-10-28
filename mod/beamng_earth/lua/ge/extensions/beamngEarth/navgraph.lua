@@ -58,6 +58,11 @@ M.JUMP_M = 30           -- a car this much farther than at the last check was re
 -- Interstate, and 350 m keeps it near enough to be caught up with or to pass (I-25, 2026-10-28).
 M.AHEAD_MS = 20         -- (45 mph)
 M.AHEAD_M = { 150, 350 }
+-- ... and starts at speed: gameplay_traffic.forceTeleport leaves a car standing (only the stock respawn gives it a
+-- speed, at most 14 m/s), so on I-25 each car put ahead was a standing car 150-350 m in front of a player at 75 mph,
+-- the traffic ran at 40-55 mph and the player's autodrive behind it averaged 46 (the traffic bench, 2026-10-28)
+M.AHEAD_PACE = 0.85     -- of the player's speed
+M.AHEAD_V_MAX = 31      -- m/s (70 mph)
 -- (gameplay_walk: 0.40's traffic.lua calls gameplay_walk.addVehicleToBlacklist when it activates its cars, and this
 -- level had none loaded: the cars spawned and never drove, 2026-10-19)
 M.EXTENSIONS = { 'core_multiSpawn', 'gameplay_traffic', 'gameplay_walk' }
@@ -407,6 +412,11 @@ function M.aheadSpot(px, py, vx, vy, b)
   return px, py, dx, dy, M.AHEAD_M[1], hi
 end
 
+-- Pure: the speed (m/s) a car put ahead of a player moving at psp m/s starts at.
+function M.aheadSpeed(psp)
+  return math.max(0, math.min(M.AHEAD_V_MAX, psp * M.AHEAD_PACE))
+end
+
 -- Pure: how near a cut a car heading for it is respawned: CUT_FRESH_M while fresh (age s since it appeared), unless
 -- this module put it ahead along the player's way (ahead); else CUT_M or CUT_S seconds at its speed sp.
 function M.cutReach(age, sp, ahead)
@@ -517,6 +527,9 @@ local function guard(b, all)
             stats.aheadRespawns = (stats.aheadRespawns or 0) + 1
             putAhead[id] = 'next'       -- (its jump, seen at the next check, is ours)
             pcall(gt.forceTeleport, id, vec3(ax, ay, pp.z), vec3(adx, ady, 0), amin, amax)
+            -- (the stock speed boost: its traffic vehicle pushes the car along its heading on its next update)
+            local td = gt.getTrafficData and gt.getTrafficData()[id]
+            if td and not td.hasTrailer then td.respawnSpeed = M.aheadSpeed(pu:length()) end
           elseif cp and cf then
             pcall(gt.forceTeleport, id, cp, -cf, M.RESPAWN_M[1], M.RESPAWN_M[2])
           else

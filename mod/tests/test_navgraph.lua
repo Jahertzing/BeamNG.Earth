@@ -206,4 +206,10 @@ do
   T.check(N.cutReach(10, 10, nil) == N.CUT_M, 'cutReach: an older slow car: CUT_M')
   T.check(N.cutReach(1, 30, true) < N.CUT_FRESH_M, 'cutReach: within the AHEAD_M spots of the far end, so no loop')
 end
+-- a car put ahead starts near the player's speed, not standing
+do
+  T.check(math.abs(N.aheadSpeed(30) - 30 * N.AHEAD_PACE) < 1e-9, 'aheadSpeed: a share of the player\'s speed')
+  T.check(N.aheadSpeed(60) == N.AHEAD_V_MAX, 'aheadSpeed: capped')
+  T.check(N.aheadSpeed(N.AHEAD_MS) > 13.9, 'aheadSpeed: faster than the stock boost\'s cap from AHEAD_MS on')
+end
 T.done('test_navgraph')
