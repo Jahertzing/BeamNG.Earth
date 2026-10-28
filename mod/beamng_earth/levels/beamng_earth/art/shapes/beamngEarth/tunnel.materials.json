@@ -607,5 +607,58 @@
     ],
     "groundType": "ASPHALT",
     "translucent": false
+  },
+  "bne_guardrail_steel": {
+    "name": "bne_guardrail_steel",
+    "mapTo": "bne_guardrail_steel",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "aa56d9de-ede9-551b-a237-830bc10dbf41",
+    "Stages": [
+      {
+        "baseColorMap": "/assets/materials/tileable/metal/metal_paint/metal_paint_d.color.dds",
+        "normalMap": "/assets/materials/tileable/metal/metal_paint/metal_paint_nm.normal.dds",
+        "roughnessFactor": 0.42,
+        "metallicFactor": 0.7,
+        "baseColorFactor": [
+          0.74,
+          0.76,
+          0.77,
+          1
+        ]
+      },
+      {},
+      {},
+      {}
+    ],
+    "groundType": "METAL",
+    "translucent": false
+  },
+  "bne_noise_wall": {
+    "name": "bne_noise_wall",
+    "mapTo": "bne_noise_wall",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "72316547-3a76-54da-bc4a-f4cefa5034a7",
+    "Stages": [
+      {
+        "baseColorMap": "/assets/materials/tileable/concrete/concrete_plain/t_concrete_plain_b.color.png",
+        "normalMap": "/assets/materials/tileable/concrete/concrete_plain/t_concrete_plain_nm.normal.png",
+        "roughnessMap": "/assets/materials/tileable/concrete/concrete_plain/t_concrete_plain_r.data.png",
+        "ambientOcclusionMap": "/assets/materials/tileable/concrete/concrete_plain/t_concrete_plain_ao.data.png",
+        "metallicFactor": 0,
+        "baseColorFactor": [
+          0.74,
+          0.67,
+          0.57,
+          1
+        ]
+      },
+      {},
+      {},
+      {}
+    ],
+    "groundType": "CONCRETE",
+    "translucent": false
   }
 }

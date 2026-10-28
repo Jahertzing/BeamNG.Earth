@@ -4173,6 +4173,8 @@ PARAPET_ROAD_GAP_M = 2.0
 NO_PARAPET_CLASSES = {"motorway", "motorway_link", "trunk", "trunk_link", "service", "track"}
 CLIFF_MIN_CUT_M = 6.0   # a rural cut this deep: rock faces (cliff_rows), when CLIFF_WALLS_ON; else a dry-stone wall
 CLIFF_WALLS_ON = os.environ.get("BNE_CLIFF_WALLS", "off") == "on"
+# highway barriers (barriers.py; the user, 2026-10-28): BNE_BARRIERS=off leaves them out
+BARRIERS_ON = os.environ.get("BNE_BARRIERS", "on") != "off"
 
 
 def _parapets(xy, z, out_n, rh, inside, steps, gs, others, own, decks):
@@ -4691,7 +4693,7 @@ def build_tile(frame, tx, ty, cells, elev, urban_fn=None, walks=None, bridges=No
                lines=None, wires=None, town=None, park=None, left_hand=False, structures=(), mph=True, tunnels=None,
                buried=0.0, lamp_region=None,
                walls=None, deck_context=None, ground=None, terrain_paint=True, cover_out=None, walk_cuts=(),
-               signals=None):
+               signals=None, barriers=None, barrier_lines=None):
     """The chunks of one tile. cells: the mapgeom.Features of the "roads" layer of every cell touching
     the tile; elev(lat, lon) -> metres (the DEM); urban_fn: as road_specs. Features in several cells are
     taken once (by id). The carriageways, then each road's sidewalks / gutters / markings (extras), cut
@@ -4701,7 +4703,9 @@ def build_tile(frame, tx, ty, cells, elev, urban_fn=None, walks=None, bridges=No
     bridges: a BridgeProfiles (deck heights of whole chains, shared by every tile); None: from the
     chains among these cells. ground(x, y) -> z: the terrain block's drawn ground in the frame, the sidewalks' heights
     (drape_walks); None: elev's. walk_cuts: [(centreline (k, 2), half width)] where no sidewalk runs (a gas station's
-    made-up driveway: gasstations.tile_sites cuts). Pure given its inputs (sorted by feature id)."""
+    made-up driveway: gasstations.tile_sites cuts). barriers: a list that gets the tile's highway barriers (barriers.py:
+    median barriers, guardrails, noise walls; roadmesh.tunnel draws them), barrier_lines: OpenStreetMap's mapped ones
+    near the tile (barriers.mapped_for). Pure given its inputs (sorted by feature id)."""
     x0, y0, x1, y1 = tile_bbox(tx, ty)
     box = (x0 - OVERLAP, y0 - OVERLAP, x1 + OVERLAP, y1 + OVERLAP)
     near = (x0 - NEAR_M, y0 - NEAR_M, x1 + NEAR_M, y1 + NEAR_M)
@@ -4799,6 +4803,16 @@ def build_tile(frame, tx, ty, cells, elev, urban_fn=None, walks=None, bridges=No
         if props is not None:                   # a rural cut: rock-face pieces instead (cliff_rows)
             props.extend(cliff_rows([w for w in tile_walls if w["rock"]], roads))
         chunks = _off_wall_tops(chunks, [w for w in tile_walls if not w["rock"]])
+    if barriers is not None and BARRIERS_ON:    # median barriers, guardrails and noise walls (barriers.py)
+        import barriers as barriersmod
+        import furniture
+        par = []
+        if walls is not None and furniture._na(lamp_region):
+            # (the US's and Canada's rural roads: a W-beam guardrail along a drop, not an Alpine stone parapet)
+            par = [w for w in walls if w.get("parapet")]
+            walls[:] = [w for w in walls if not w.get("parapet")]
+        barriers.extend(barriersmod.tile_barriers(frame, roads, elev, exact, decks=decks_near, mapped=barrier_lines,
+                                                  parapets=par, left_hand=left_hand))
     corners, jcuts, crosswalks, jramps, jlines, jinternal = ({}, {}, [], {}, {}, set()) if walks is None else \
         junctions.find(roads, has_sidewalks, None)
     # (no curb extensions: they were on every town street with parking, after Fells Point's, and most streets have none:
