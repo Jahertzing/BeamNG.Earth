@@ -62,6 +62,10 @@ ROADS_Q = 1                 # road tiles round the car still to come, at most, t
 BACKLOG_Q = 4               # far tiles likewise (the ghost's --backlog-q)
 EDGE_M = 160.0              # the next block must be ready before the car is this near its block's edge
 MAX_WAIT_S = 180.0
+# the ground's "not final" (earthd ground_progress: the block's base photo waiting to be drawn again with lazy imagery or
+# analysis regions still to come) waited for this long at most: the server itself gives up after GROUND_WAIT_S (90 s),
+# and on the first headless runs nothing came in those 90 s (2026-10-28: two stops of 91 s by 11.5 km)
+GROUND_WAIT_S = 20.0
 GAVE_UP_M = 1000.0          # after giving up at a spot, no standing again for this far
 START_S = 600.0             # the server's start (its caches cut back, the airports read) at most
 FOLLOW_RETRY_S = 2.0        # after a terrain_error
@@ -227,7 +231,7 @@ def waiting_for(st, edge, a):
         why.append(f"terrain block ({tp['cx']:.0f}, {tp['cy']:.0f}) not ready, {edge:.0f} m from the edge")
     pr = st.get("progress") or {}
     g, r, f = pr.get("ground") or (1, 1), pr.get("roads") or (0, 0), pr.get("far") or (0, 0)
-    if g[0] < g[1]:
+    if g[0] < g[1] and (st.get("ground_s") or 0.0) < a.ground_wait:
         why.append("ground not final")
     if r[1] - r[0] > a.roads_q:
         why.append(f"road tiles {r[0]}/{r[1]}")
@@ -447,6 +451,7 @@ class Drive:
         pose_at = sample_at = 0.0
         wait = None             # the current wait: {"at_km": km, "t0": now, "why": [...]}
         free_until = -1.0       # gave up at a spot: on without standing until here (m)
+        ground_t0 = None        # since when the ground is not final
         lat0, lon0 = self.route.point(0.0)
         self.teleport(lat0, lon0, now)
         samples = open(os.path.join(self.out, "samples.jsonl"), "w", encoding="utf-8") if self.out else None
@@ -459,6 +464,12 @@ class Drive:
                 if self.frame is None or self.st["pending"] and self.st["pending"]["purpose"] == "teleport":
                     why = ["anchor request pending (teleport)"]
                 else:
+                    g = (self.st.get("progress") or {}).get("ground") or (1, 1)
+                    if g[0] < g[1]:
+                        ground_t0 = now if ground_t0 is None else ground_t0
+                        self.st["ground_s"] = now - ground_t0
+                    else:
+                        ground_t0, self.st["ground_s"] = None, 0.0
                     why = waiting_for(self.st, edge, self.a)
                     if now >= pose_at:
                         pose_at = now + POSE_S
@@ -534,6 +545,8 @@ def main(argv=None):
     ap.add_argument("--backlog-q", type=int, default=BACKLOG_Q)
     ap.add_argument("--edge-m", type=float, default=EDGE_M)
     ap.add_argument("--max-wait", type=float, default=MAX_WAIT_S)
+    ap.add_argument("--ground-wait", type=float, default=GROUND_WAIT_S,
+                    help="s to wait for the ground's final photo at most (the server's own limit is 90)")
     ap.add_argument("--connect", type=int, default=None, help="drive a server already listening on this port")
     ap.add_argument("--cache-dir", default=None, help="the server's cache (default: the launcher's)")
     ap.add_argument("--world-dir", default=None, help="the world folder (default: the server's)")
