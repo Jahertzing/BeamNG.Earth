@@ -964,7 +964,8 @@ three days of testing: dem 741 MB / 7.5k files, imagery 1.4 GB / 35k, deshadow 7
   `far_<a>_<key>_grass.dds`, shared by the texture's revisions), and `satmat.lua` gives the material a layer of
   the same photo with our procedural grass detail and detail normal maps on UV1 (`tools/make_grass_textures.py`:
   one 32 m repeat holding tufts, clumps and patches, so each mip level carries the scale that fits its distance),
-  shown through the mask, under the asphalt layer. Mean 0.5 grey: the photo's colour stays. A tile built before
+  shown through the mask, under the asphalt layer, in every near-visual mode (in detail mode past the drawn block).
+  Mean 0.5 grey: the photo's colour stays. A tile built before
   its land cover was cached goes without (no mask rather than a hole). The settings page's "Grass in the distant
   ground" turns it off for the tiles loaded after.
 - Grass cards to 1 km (2026-10-28, same ask; `server/grasscards.py`, `earthd --grass-cards on`, any near-visual

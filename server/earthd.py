@@ -578,8 +578,9 @@ class Server:
         self.near_visual = near_visual
         # the near tiles' asphalt layer (mesh mode: the tiles are the ground seen; surface.road_mask)
         self.road_masks = roadsmod.ROADS_IN_GROUND and near_visual not in BLOCK_DRAWN
-        # the ground tiles' grass layer (mesh mode, with surfaces: surface.grass_mask)
-        self.grass_masks = near_visual not in BLOCK_DRAWN
+        # the ground tiles' grass layer (with surfaces: surface.grass_mask). Every mode: in terrain / detail mode the
+        # tiles past the drawn block are the ground seen (2026-10-28: the user's game runs detail mode, and had none)
+        self.grass_masks = True
         if tex is None and cells == 32:
             tex = (tex_near, tex_near, tex_far)         # the v1.3.1 rule: the two finest levels are near
         # Every layout-dependent rule reads self.layout (terrain mode: frozen at 32 cells)
@@ -2469,7 +2470,7 @@ class Server:
             log.debug("road mask of %s: %s", tile.key, e)
 
     def write_grass_mask(self, anchor, tile, px, texture):
-        """The tile's grass mask beside its texture (self.grass_masks: mesh mode; surface.grass_mask over the photo's
+        """The tile's grass mask beside its texture (self.grass_masks, with surfaces; surface.grass_mask over the photo's
         square with its gutter, px the texture's edge), written before the tile is sent (the mod looks for it when it
         sets the texture). A re-rendered texture (_r<n>) shares it: the land cover did not change."""
         if not self.grass_masks or self.surface is None or tile.level > surfacemod.GRASS_MASK_MAX_LEVEL:
