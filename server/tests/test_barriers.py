@@ -61,6 +61,39 @@ class MedianTest(unittest.TestCase):
         two = barriers.tile_barriers(FRAME, [road("a", 20.0, 1), road("b", -20.0, -1, d=-1)], flat, BOX)
         self.assertEqual(kinds(two), [], "drawn the other way but travelling along +x too (dir -1): the same way")
 
+    def test_managed_lanes_drawn_overlapping_meet_at_one_barrier(self):
+        """I-25's express lanes in Thornton: a pair with no lane count, drawn 11 m wide with their centrelines 8 m
+        apart (3 m overlapping), between the general lanes the same ways: one concrete barrier halfway between the pair,
+        none between a pair the same way, nor anything inside a carriageway."""
+        rs = [road("gpn", 13.0, 1, width=10.8), road("exn", 4.0, 1, width=11.0), road("exs", -4.0, -1, width=11.0),
+              road("gps", -13.0, -1, width=10.8)]
+        bs = barriers.tile_barriers(FRAME, rs, flat, BOX)
+        self.assertEqual(kinds(bs), ["jersey"], bs)
+        self.assertLess(np.abs(bs[0]["line"][:, 1]).max(), 0.05)
+        self.assertAlmostEqual(float(np.ptp(bs[0]["line"][:, 0])), 256.0, delta=0.01)
+        same = barriers.tile_barriers(FRAME, [road("a", 4.0, 1, width=11.0), road("b", -4.0, 1, width=11.0)], flat, BOX)
+        self.assertEqual(same, [], "the same way overlapping: one road")
+        one = barriers.tile_barriers(FRAME, [road("a", 1.5, 1, width=11.0), road("b", -1.5, -1, width=11.0)], flat, BOX)
+        self.assertEqual(one, [], "centrelines 3 m apart: one road drawn twice")
+
+    def test_twin_medians_side_by_side_one_kept(self):
+        raw = [["jersey", np.c_[np.linspace(0, 100, 51), np.full(51, 0.0)], None, None, 1.0, 0, (False, False), "b", 0],
+               ["jersey", np.c_[np.linspace(0, 200, 101), np.full(101, 2.0)], None, None, 1.0, 0, (False, False), "a",
+                0],
+               ["wbeam", np.c_[np.linspace(0, 100, 51), np.full(51, 1.0)], None, None, 1.0, 1, (False, False), "c", 1]]
+        for r in raw:
+            r[2] = r[3] = np.zeros(len(r[1]))
+        out = barriers._one_median(raw)
+        self.assertEqual(sorted((r[0], r[7]) for r in out), [("jersey", "a"), ("wbeam", "c")],
+                         "b's lies within MEDIAN_TWIN_M of a's (the lower id) all along: cut; a guardrail stays")
+        raw[0][1] = np.c_[np.linspace(150, 400, 126), np.full(126, 0.0)]
+        out = barriers._one_median(raw)
+        b = [r for r in out if r[7] == "b"]
+        self.assertEqual(len(b), 1)
+        self.assertLessEqual(float(b[0][1][0, 0]), 200.0 + 0.01, "it reaches back to a's end: no gap")
+        self.assertGreater(float(b[0][1][0, 0]), 190.0)
+        self.assertEqual(b[0][6], (True, False), "its new start a real end")
+
     def test_very_wide_median_none(self):
         self.assertEqual(barriers.tile_barriers(FRAME, [road("a", 40.0, 1), road("b", -40.0, -1)], flat, BOX), [])
 
@@ -230,6 +263,21 @@ class NoiseWallTest(unittest.TestCase):
         self.assertEqual([b["fid"] for b in bs if b["kind"] == "noise"], ["osm1"])
         ramp = ("r", spec(width=6.0, link=True), np.array([[-300.0, 22.0, 10.0], [600.0, 22.0, 10.0]]), LON)
         bs = barriers.tile_barriers(FRAME, rs + [ramp], flat, BOX, homes=self.HOMES)
+        self.assertEqual([b for b in bs if b["kind"] == "noise"], [])
+
+    def test_noise_wall_along_a_subdivisions_streets(self):
+        """No residential land use mapped (most of the Front Range) but a subdivision's street 50 m off the edge: a
+        noise wall on that side; a street crossing under the motorway alone: none."""
+        rs = [road("a", 9.0, 1), road("b", -9.0, -1)]
+        street = ("s", spec("residential", 6.0, urban=True, oneway=False, d=0),
+                  np.array([[-300.0, 70.0, 10.0], [600.0, 70.0, 10.0]]), LON)
+        bs = barriers.tile_barriers(FRAME, rs + [street], flat, BOX)
+        noise = [b for b in bs if b["kind"] == "noise"]
+        self.assertEqual(len(noise), 1)
+        self.assertGreater(float(noise[0]["line"][:, 1].min()), 0.0, "on the street's side")
+        across = ("s", spec("residential", 6.0, urban=True, oneway=False, d=0),
+                  np.array([[128.0, -300.0, 4.0], [128.0, 300.0, 4.0]]), LON)
+        bs = barriers.tile_barriers(FRAME, rs + [across], flat, BOX)
         self.assertEqual([b for b in bs if b["kind"] == "noise"], [])
 
     def test_residential_parts(self):

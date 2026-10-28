@@ -10,12 +10,15 @@ Where they stand:
 - a motorway's median (or an expressway's: a divided trunk that is no arterial, roads._arterial): two carriageways side
   by side, parallel, their edges MEDIAN_JERSEY_M or less apart: a concrete F-shape barrier halfway between the edges
   (CDOT's Type 7, 42 in); further apart, up to MEDIAN_CABLE_M, and running opposite ways: a four-cable barrier on the
-  median's middle line (CDOT's high-tension cable rail, I-25 south of Castle Rock);
+  median's middle line (CDOT's high-tension cable rail, I-25 south of Castle Rock); two running opposite ways drawn
+  overlapping (up to MEDIAN_OVERLAP_M: a managed lanes' pair, too wide with no lane count) meet at a concrete barrier
+  halfway; where two pairs' medians run side by side (MEDIAN_TWIN_M) one is kept;
 - a motorway's, expressway's or ramp's outer edge (and a wide median's): a W-beam guardrail (31 in MGS on steel posts
   every 6 ft 3 in) where the ground falls GUARD_DROP_M within GUARD_PROBE_M of the edge (an embankment), over
   GUARD_DECK_M before a bridge or a tunnel (the road ends with no ground road going on) and past an overpass' piers;
-- a motorway's outer side along homes (residential land use NOISE_PROBES_M off its edge), where OpenStreetMap maps no
-  noise wall near: a NOISE_PROC_H_M concrete noise wall NOISE_OFF_M off the edge, clear of the ramps beside it;
+- a motorway's outer side along homes (residential land use NOISE_PROBES_M off its edge, or a residential street
+  NOISE_STREET_AT_M +- NOISE_STREET_R_M off it), where OpenStreetMap maps no noise wall near: a NOISE_PROC_H_M
+  concrete noise wall NOISE_OFF_M off the edge, clear of the ramps beside it;
 - in the US and Canada the rural roads' stone parapets (roads._parapets: Alpine dry-stone walls) as W-beam guardrails.
 Procedural barriers give way to mapped ones nearby (OSM_NEAR_M). A W-beam's real ends turn down into the ground (a
 buried terminal) over TERMINAL_M; where a run only stops at a tile edge or the end of a road feature it goes on in the
@@ -38,7 +41,12 @@ MAIN_CLASSES = {"motorway", "trunk"}
 # the median
 MEDIAN_JERSEY_M = 12.0      # m between two carriageways' edges at most for a concrete barrier between them ...
 MEDIAN_CABLE_M = 35.0       # ... and for a cable barrier (opposite ways only); wider medians have none
-MEDIAN_MIN_M = -0.3         # m: carriageways overlapping more than this are one road
+MEDIAN_MIN_M = -0.3         # m: carriageways the same way overlapping more than this are one road ...
+MEDIAN_OVERLAP_M = 4.0      # ... the opposite ways' up to this: drawn too wide (a managed lanes' pair with no lane
+                            # count, I-25's express lanes), they meet at a concrete barrier half way
+MEDIAN_CENTRES_M = 4.0      # m between two such carriageways' centrelines at least
+MEDIAN_TWIN_M = 4.0         # m: a median barrier this near another pair's is cut there (where a managed lanes' pair
+                            # begins beside the general lanes)
 PARALLEL_DEG = 25.0         # a carriageway within this of a road's direction runs beside it ...
 ACROSS_M = 4.0              # ... where its nearest point lies within this along the road (square across from it)
 # the edges
@@ -90,7 +98,11 @@ PILASTER_OVER = 0.15        # ... standing this over the panels
 # procedural noise walls: OpenStreetMap maps few (one in ten places along I-25, 2026-10-28), CDOT builds them where
 # homes back onto a motorway (Thornton, Northglenn, Highlands Ranch)
 NOISE_OFF_M = 10.0          # m off a motorway's edge (its right of way's edge) ...
-NOISE_PROBES_M = (25.0, 45.0, 70.0)     # ... where residential land use lies this far off the edge (any of them)
+NOISE_PROBES_M = (25.0, 45.0, 70.0)     # ... where residential land use lies this far off the edge (any of them),
+NOISE_STREET_AT_M = 50.0    # ... or a residential street this far off the edge, give or take ...
+NOISE_STREET_R_M = 35.0     # ... this (Overture's land use leaves most of the Front Range's subdivisions out; their
+                            # streets are mapped)
+HOME_STREETS = {"residential", "living_street"}
 NOISE_ROAD_GAP_M = 4.0      # m it keeps from another carriageway (a ramp or frontage road beside: none there)
 NOISE_MAPPED_M = 40.0       # m: none this near a mapped noise wall
 NOISE_FILL_N = 12           # gaps of up to this many samples closed (24 m), ...
@@ -323,10 +335,11 @@ class _Mains:
         self.r = np.concatenate(R) if R else np.zeros(0, np.int64)
         self.v = np.concatenate(V) if V else np.zeros((0, 2), f)
 
-    def beside(self, P, D, N, rh, own):
-        """Per point P (k, 2) of road `own` (direction D, left normal N, half width rh) and side (+1 left, -1 right): the
-        edge-to-edge gap to the nearest main carriageway running beside it there (inf: none within MEDIAN_CABLE_M), its
-        road index and whether it runs the other way. {side: (gap (k,), road (k,), opposite (k,))}. Pure."""
+    def beside(self, P, D, N, rh, own, way=0.0):
+        """Per point P (k, 2) of road `own` (direction D, left normal N, half width rh, travel `way` along D: +1, -1, 0
+        both) and side (+1 left, -1 right): the edge-to-edge gap to the nearest main carriageway running beside it there
+        (inf: none within MEDIAN_CABLE_M; down to -MEDIAN_OVERLAP_M for one running the other way), its road index and
+        its travel direction along D. {side: (gap (k,), road (k,), along (k,))}. Pure."""
         k = len(P)
         out = {s: (np.full(k, np.inf), np.full(k, -1), np.zeros(k, bool)) for s in (1, -1)}
         if not len(self.h) or not k:
@@ -348,9 +361,11 @@ class _Mains:
         along = (V * D[:, None, :]).sum(-1)
         u = ab / np.sqrt(L2)[:, None]
         par = np.abs((u[None] * D[:, None, :]).sum(-1)) >= math.cos(math.radians(PARALLEL_DEG))
+        against = (v[None] * D[:, None, :]).sum(-1) * way < 0
         for s in (1, -1):
             gap = s * lat - rh - h[None]
-            ok = par & (s * lat > 0) & (np.abs(along) <= ACROSS_M) & (gap >= MEDIAN_MIN_M) & (gap <= MEDIAN_CABLE_M)
+            low = (gap >= MEDIAN_MIN_M) | (against & (gap >= -MEDIAN_OVERLAP_M) & (s * lat >= MEDIAN_CENTRES_M))
+            ok = par & (s * lat > 0) & (np.abs(along) <= ACROSS_M) & low & (gap <= MEDIAN_CABLE_M)
             g = np.where(ok, gap, np.inf)
             j = np.argmin(g, axis=1) if len(sel) else np.zeros(k, np.int64)
             best = g[np.arange(k), j]
@@ -384,7 +399,18 @@ def tile_barriers(frame, roads, elev, exact, decks=(), mapped=None, parapets=(),
     mains = _Mains(mains_rows)
     main_fids = [fid for fid, spec, _ in built if _main(spec)]
     side_roads = roadsmod._Segs({fid: (pts[:, :2], spec.width / 2) for fid, spec, pts in built if not _main(spec)})
-    main_segs = roadsmod._Segs({fid: (pts[:, :2], spec.width / 2) for fid, spec, pts in built if _main(spec)})
+    main_lines = {fid: (pts[:, :2], spec.width / 2) for fid, spec, pts in built if _main(spec)}
+
+    def off_mains(mid, fid, pf):
+        """Which median points (k, 2) keep off every main carriageway but their pair's (fid and pf (k,), the partner's
+        fid per point; an overlapping pair's median lies on both)."""
+        ok = np.ones(len(mid), bool)
+        for p in sorted(set(pf.tolist())):
+            at = pf == p
+            ok[at] = ~roadsmod._Segs({f: r for f, r in main_lines.items() if f not in (fid, p)}).near(mid[at], -0.2)
+        return ok
+    streets = roadsmod._Segs({fid: (pts[:, :2], spec.width / 2) for fid, spec, pts in built
+                              if spec.cls in HOME_STREETS})
     ends = np.array([p for _, _, pts in built for p in (pts[0, :2], pts[-1, :2])], np.float64).reshape(-1, 2)
 
     keep_off = [(xy, 0.0) for kind, xy, _h, _f in mapped if kind in SAFETY]
@@ -423,7 +449,7 @@ def tile_barriers(frame, roads, elev, exact, decks=(), mapped=None, parapets=(),
         sl = slice(max(int(idx[0]) - 1, 0), int(idx[-1]) + 2)
         xy, s, z, D, N, ext, end_run = xy[sl], s[sl], z[sl], D[sl], N[sl], ext[sl], end_run[sl]
         rh = spec.width / 2
-        bes = mains.beside(xy, D, N, rh, main_of.get(fid, -1)) if _main(spec) else \
+        bes = mains.beside(xy, D, N, rh, main_of.get(fid, -1), float(spec.dir or 0)) if _main(spec) else \
             {sd: (np.full(len(xy), np.inf), np.full(len(xy), -1), np.zeros(len(xy), bool)) for sd in (1, -1)}
         steps = rh + np.arange(0.5, GUARD_PROBE_M + 0.01, 1.0)
         rec = dict(fid=fid, spec=spec, xy=xy, s=s, z=z, D=D, N=N, rh=rh, ext=ext, bes=bes, end_run=end_run,
@@ -433,10 +459,11 @@ def tile_barriers(frame, roads, elev, exact, decks=(), mapped=None, parapets=(),
             for o in steps:
                 probe_pts.append(xy + N * sd * o)
             probe_pts.append(xy + N * sd * (rh + NOISE_OFF_M))                  # a noise wall's line
-        if homes and spec.cls == "motorway" and _main(spec):
-            # (homes beside it: residential land use off either edge)
-            rec["homes"] = {sd: np.any([_in_parts(homes, xy + N * sd * (rh + o)) for o in NOISE_PROBES_M], axis=0)
-                            for sd in (1, -1)}
+        if (homes or len(streets.h)) and spec.cls == "motorway" and _main(spec):
+            # (homes beside it: residential land use or streets off either edge)
+            rec["homes"] = {sd: np.any([_in_parts(homes or [], xy + N * sd * (rh + o)) for o in NOISE_PROBES_M]
+                                       + [streets.near(xy + N * sd * (rh + NOISE_STREET_AT_M), NOISE_STREET_R_M)],
+                                       axis=0) for sd in (1, -1)}
         info.append(rec)
     g = ground(np.concatenate(probe_pts)) if probe_pts else np.zeros(0)
     probe_off = np.r_[0, np.cumsum([len(pp) for pp in probe_pts])]
@@ -466,7 +493,9 @@ def tile_barriers(frame, roads, elev, exact, decks=(), mapped=None, parapets=(),
                     if not want.any():
                         continue
                     mid = xy + N * sd * (rh + np.where(np.isfinite(gap), gap, 0.0)[:, None] / 2)
-                    ok = want & ~side_roads.near(mid, MEDIAN_ROAD_GAP_M) & ~main_segs.near(mid, -0.2) & off_mapped(mid)
+                    ok = want & ~side_roads.near(mid, MEDIAN_ROAD_GAP_M) & off_mapped(mid)
+                    if ok.any():
+                        ok[ok] = off_mains(mid[ok], fid, pf[ok])
                     for i, j in _runs(ok, min_n=MIN_RUN_N if kind == "jersey" else MIN_RUN_N * 2):
                         sl = slice(i, j + 1)
                         med_pts.append((len(raw), mid[sl], xy[sl] + N[sl] * sd * rh,
@@ -526,7 +555,7 @@ def tile_barriers(frame, roads, elev, exact, decks=(), mapped=None, parapets=(),
             sl = slice(i, j + 1)
             tall.append([r[0], r[1][sl], r[2][sl], r[3][sl], r[4], r[5],
                          (r[6][0] if i == 0 else True, r[6][1] if j == len(ok) - 1 else True), r[7], r[8]])
-    raw = tall
+    raw = _one_median(tall)
     # the medians between twin bridge decks joined into one slab (roadmesh: no parapets there)
     raw.extend(_deck_medians(decks, near_box))
     # the rural roads' parapets as guardrails (the US's and Canada's)
@@ -563,6 +592,33 @@ def tile_barriers(frame, roads, elev, exact, decks=(), mapped=None, parapets=(),
                     foot = gz[sl] - (POST_DOWN_M if kind == "wbeam" else FOOT_M)
                     raw.append([kind, line, gz[sl], foot, float(hh), face, (True, True), mid_, 0])
     return _clip_out(raw, exact, {m[3] for m in mapped})
+
+
+def _one_median(raw):
+    """raw with each median barrier's points within MEDIAN_TWIN_M of another pair's median cut out, the pair with the
+    lower feature id keeping its (the same on every tile)."""
+    import roads as roadsmod
+    med = sorted((n for n, r in enumerate(raw) if r[0] in ("jersey", "cable") and r[8] == 0),
+                 key=lambda n: (raw[n][7], raw[n][0], tuple(np.round(raw[n][1][0], 1))))
+    if len(med) < 2:
+        return raw
+    drop, extra, kept = set(), [], {}
+    for n in med:
+        r = raw[n]
+        if kept:
+            near = roadsmod._Segs(kept).near(r[1], MEDIAN_TWIN_M)
+            if near.any():
+                drop.add(n)
+                # (what is left reaches back under the other one's end: no gap where a carriageway's feature ends)
+                near &= ~_dilate(~near, np.r_[0.0, np.cumsum(np.hypot(*np.diff(r[1], axis=0).T))], MEDIAN_TWIN_M)
+                for i, j in _runs(~near, fill=0, min_n=MIN_RUN_N):
+                    sl = slice(i, j + 1)
+                    extra.append([r[0], r[1][sl], r[2][sl], r[3][sl], r[4], r[5],
+                                  (r[6][0] if i == 0 else True, r[6][1] if j == len(near) - 1 else True), r[7], r[8]])
+                    kept[f"{n}:{i}"] = (r[1][sl], 0.0)
+                continue
+        kept[str(n)] = (r[1], 0.0)
+    return [r for n, r in enumerate(raw) if n not in drop] + extra
 
 
 DECK_MEDIAN_MIN_W = 7.0     # m: a deck this wide or wider (a carriageway's) gets a median barrier beside its twin
