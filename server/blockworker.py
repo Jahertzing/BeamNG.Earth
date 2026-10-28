@@ -551,7 +551,8 @@ def _roads_tile(aid, lat, lon, zoom, tx, ty, out_dir, vfs_dir, sidewalks, lift, 
             props.extend(streetlifemod.tile_rows(
                 frame, _s.md, roadsmod.cells_of_tile(frame, tx, ty, margin=0.0), drives, walks, lines, box, tile_ground,
                 us=bool(mph) and str(lamp_region or "").startswith("na"), town=bool(town), left_hand=left_hand,
-                props=props, spots=park))
+                props=props, spots=park,
+                blockers=[buildingsmod.drawn_ring(spec) + np.array([x0, y0]) for spec, *_ in items]))
         drives.extend(buildingsmod.garage_drives(items, lines, x0, y0))
         chunks += drives
         park = parkingmod.clear_of(park, props, drives)

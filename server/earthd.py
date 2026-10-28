@@ -1360,7 +1360,8 @@ class Server:
                     anchor.frame, self.mapdata, roadsmod.cells_of_tile(anchor.frame, tx, ty, margin=0.0), drives, walks,
                     lines, roadsmod.tile_bbox(tx, ty), tile_ground,
                     us=bool(self.mph(anchor)) and str(self.lamp_region(anchor) or "").startswith("na"),
-                    town=bool(town), left_hand=self.left_hand(anchor), props=props, spots=park))
+                    town=bool(town), left_hand=self.left_hand(anchor), props=props, spots=park,
+                    blockers=[buildingsmod.drawn_ring(spec) + np.array([x0, y0]) for spec, *_ in items]))
             drives.extend(buildingsmod.garage_drives(items, lines, x0, y0))
             chunks += drives
             park = parkingmod.clear_of(park, props, drives)

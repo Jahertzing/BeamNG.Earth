@@ -62,8 +62,13 @@ WALK_SETBACK_M = 0.6        # ... and off the sidewalk's outer edge
 MAILBOX_SIDE_M = 0.55       # m beside the driveway's edge
 MAILBOX_IN_M = 0.45         # m in from the road's edge (the USPS: the box's face 6-8 in back of the curb or shoulder)
 MAILBOX_H = 1.25            # m: the post and box (the box's floor 41-45 in up)
-CBU_CELL_DEG = 0.0012       # a cluster box serves the houses of a ~130 x 100 m cell (8-16 houses) ...
-CBU_MIN_HOUSES = 5          # ... with at least this many driveways on sidewalk streets in the tile
+CBU_NEAR_M = 110.0          # a house with at least CBU_MIN_HOUSES town-street driveways this near (its own included) is
+CBU_MIN_HOUSES = 8          # in a subdivision: its mail in a cluster box; fewer (estates, the country): a mailbox at
+                            # its driveway
+CBU_CELL_DEG = 0.002        # one cluster box for a subdivision's houses in a ~220 x 170 m cell (USPS CBUs: 8-16 doors
+CBU_CELL_MIN = 3            # each, a few pads a subdivision), where it has at least this many of them
+NO_MAIL_CLASSES = {"service", "track", "path", "footway", "cycleway", "pedestrian", "steps", "bridleway"}   # (alleys)
+OFF_END_M = 1.0             # a driveway's mouth this far past its road's end (a dead end): nothing at the curb
 CBU_H = 1.75
 CART_SHARE = 0.12           # houses with their carts out
 CART_H = 1.07               # a 96-gallon cart: 42 in
@@ -74,6 +79,7 @@ BUS_SHELTER_H = 2.85
 BUS_CURB_M = 0.7            # m behind the curb (the road's edge where no sidewalk is drawn)
 BUS_SHELTER_BACK_M = 2.4    # m behind the sign
 BUS_SNAP_M = 25.0           # a mapped stop this far from a road's edge at most (OSM maps them at the pole or on the way)
+BUS_SHIFTS_M = (0.0, 6.0, -6.0, 12.0, -12.0, 18.0)   # along the traffic (past the junction first), to clear the crossing
 BUS_CLASSES = {"primary", "secondary", "tertiary", "trunk", "residential", "unclassified"}
 
 USPS_SPACING_M = 420.0      # downtown: a blue collection box along a main street every this along each side
@@ -127,7 +133,97 @@ def _row(group, q, z, yaw, h, rank=0.0):
             round(float(h), 2), round(float(rank), 3)]
 
 
-def driveway_rows(drives, walks, box, z_at, to_ll, us=True, town=True, spots=None, static_cars=False, car_dz=None):
+class _Segs:
+    """The segments of build_tile's lines [(centreline (k, 2+), half width, class, urban)]."""
+
+    def __init__(self, lines, classes=None):
+        a, b, h, c, u = [], [], [], [], []
+        for ln in lines or ():
+            if classes is not None and (len(ln) < 3 or ln[2] not in classes):
+                continue
+            p = np.asarray(ln[0], np.float64)[:, :2]
+            if len(p) < 2:
+                continue
+            a.append(p[:-1])
+            b.append(p[1:])
+            h += [float(ln[1])] * (len(p) - 1)
+            c += [ln[2] if len(ln) > 2 else None] * (len(p) - 1)
+            u += [ln[3] if len(ln) > 3 else None] * (len(p) - 1)
+        self.A = np.concatenate(a) if a else np.zeros((0, 2))
+        self.B = np.concatenate(b) if b else np.zeros((0, 2))
+        self.H, self.cls, self.urban = np.array(h), c, u
+        self.D = self.B - self.A
+        self.L2 = np.maximum((self.D * self.D).sum(1), 1e-12)
+
+    def __len__(self):
+        return len(self.A)
+
+    def nearest(self, q):
+        """(k, distance to the segment's edge, the point on it, how far q is past the segment's ends) for point q."""
+        q = np.asarray(q, np.float64)
+        t = ((q - self.A) * self.D).sum(1) / self.L2
+        tc = np.clip(t, 0.0, 1.0)
+        near = self.A + tc[:, None] * self.D
+        dist = np.hypot(*(q - near).T)
+        k = int(np.argmin(dist - self.H))
+        dk, rk = self.D[k], q - self.A[k]
+        perp = abs(float(dk[0] * rk[1] - dk[1] * rk[0])) / math.sqrt(self.L2[k])
+        return k, float(dist[k] - self.H[k]), near[k], float(dist[k] - perp)
+
+    def road_at(self, q):
+        """(class, urban, off its end) of the road a driveway's mouth q meets (None, None, False with no lines)."""
+        if not len(self):
+            return None, None, False
+        k, _, _, past = self.nearest(q)
+        return self.cls[k], self.urban[k], past > OFF_END_M
+
+    def clear(self, Q, margin):
+        """Which points Q (n, 2) are at least margin off every carriageway."""
+        Q = np.asarray(Q, np.float64).reshape(-1, 2)
+        ok = np.ones(len(Q), bool)
+        if not len(self) or not len(Q):
+            return ok
+        for i, q in enumerate(Q):
+            t = np.clip(((q - self.A) * self.D).sum(1) / self.L2, 0.0, 1.0)
+            near = self.A + t[:, None] * self.D
+            ok[i] = bool((np.hypot(*(q - near).T) - self.H >= margin).all())
+        return ok
+
+
+ROAD_CLEAR_M = 0.35         # m every street-life prop keeps off any carriageway (a dead end's, a crossing street's)
+
+
+def off_roads(rows, lines, margin=ROAD_CLEAR_M):
+    """rows (props) without those standing on a carriageway of lines (build_tile's)."""
+    if not rows:
+        return rows
+    ok = _Segs(lines).clear([(r[1], r[2]) for r in rows], margin)
+    return [r for r, k in zip(rows, ok) if k]
+
+
+def out_of(rows, rings, margin=0.6):
+    """rows without those inside a building or within margin of its wall (rings: footprints in the anchor frame)."""
+    if not rows or not rings:
+        return rows
+    from polygon import Path
+    P = np.array([(r[1], r[2]) for r in rows], np.float64)
+    bad = np.zeros(len(P), bool)
+    for ring in rings:
+        ring = np.asarray(ring, np.float64)
+        if len(ring) < 3:
+            continue
+        lo, hi = ring.min(0) - margin, ring.max(0) + margin
+        near = (P[:, 0] >= lo[0]) & (P[:, 0] <= hi[0]) & (P[:, 1] >= lo[1]) & (P[:, 1] <= hi[1])
+        if not near.any():
+            continue
+        path = Path(ring)
+        for dx, dy in ((0, 0), (margin, 0), (-margin, 0), (0, margin), (0, -margin)):
+            bad[near] |= path.contains_points(P[near] + np.array([dx, dy]))
+    return [r for r, b in zip(rows, bad) if not b]
+
+
+def driveway_rows(drives, walks, box, z_at, to_ll, us=True, town=True, spots=None, static_cars=False, car_dz=None,
+                  lines=None):
     """Rows of the driveways' mailboxes and carts and the subdivisions' cluster boxes. drives: buildings.doors'
     driveway chunks of the tile's houses ("n": points from the house's front to the road's edge); walks: the tile's
     sidewalk runs (dicts with pts, w); box: the tile (x0, y0, x1, y1); z_at(xy (k, 2)) -> the drawn ground's heights;
@@ -135,9 +231,12 @@ def driveway_rows(drives, walks, box, z_at, to_ll, us=True, town=True, spots=Non
     US towns have them); town: a suburb or town tile (buildings.coverage under POLES_COVERAGE), not a dense core.
     spots (a list) gets parking.py's spot rows [x, y, z, heading, 1] for the stock parked cars on the drives (one or two,
     from the garage door out, nosing in; kind 1: no street tracking), static_cars: drivecar rows instead (car_dz: model ->
-    m its shape's origin stands above the ground)."""
+    m its shape's origin stands above the ground). lines: build_tile's [(centreline, half width, class, urban)]: the road
+    each drive meets (an alley's get carts but no mail; a country road's always a mailbox; none past a dead end)."""
     x0, y0, x1, y1 = box
     wp, wh = _walk_index(walks)
+    segs = _Segs(lines)
+    drive_info = []                 # (k, lat, lon, p1, u, s, half_w, outer, road class, urban, off the end)
     car_dz = car_dz or {}
     places = []                     # (q (2,), group, yaw, height, rank, dz)
     spot_at = []                    # (q (2,), heading)
@@ -188,24 +287,43 @@ def driveway_rows(drives, walks, box, z_at, to_ll, us=True, town=True, spots=Non
                 room -= ln + CAR_GAP_M
         if not us:
             continue
+        cls, urban, off_end = segs.road_at(p1)
+        if off_end:
+            continue
+        cell = (math.floor(lat / CBU_CELL_DEG), math.floor(lon / CBU_CELL_DEG))
+        drive_info.append((k, cell, p1, u, s, half_w, outer, cls, urban))
+    # a subdivision's density: the town-street drives within CBU_NEAR_M of each
+    town_drive = np.array([bool(town) and urban is not False and cls not in NO_MAIL_CLASSES
+                           for _, _, _, _, _, _, _, cls, urban in drive_info], bool)
+    M = np.array([d[2] for d in drive_info], np.float64).reshape(-1, 2)
+    dense = np.zeros(len(drive_info), bool)
+    if town_drive.any():
+        T = M[town_drive]
+        near = (np.hypot(M[:, None, 0] - T[None, :, 0], M[:, None, 1] - T[None, :, 1]) < CBU_NEAR_M).sum(1)
+        dense = town_drive & (near >= CBU_MIN_HOUSES)
+    for (k, cell, p1, u, s, half_w, outer, cls, urban), dn in zip(drive_info, dense):
         side = 1.0 if _h01(k, "mside") < 0.5 else -1.0
-        if outer is None:
+        out = (outer + 0.6) if outer is not None else 1.0
+        if cls in NO_MAIL_CLASSES:
+            pass                                    # an alley: the mail comes to the front
+        elif dn:
+            # a subdivision: a cluster box for the cell, at one of its drives' ends behind the curb (or sidewalk)
+            q = p1 + u * out + s * side * (half_w + 1.6)
+            cbu_cand.setdefault(cell, []).append((_h01(k, "cbu"), q, _yaw(-u[0], -u[1])))
+        elif outer is None or urban is False:
             # a curbside mailbox beside the drive, its door to the road
             q = p1 + u * MAILBOX_IN_M + s * side * (half_w + MAILBOX_SIDE_M)
             places.append((q, G_MAILBOX, _yaw(-u[0], -u[1]), MAILBOX_H, _h01(k, "mb"), 0.0))
-        elif town:
-            cell = (math.floor(lat / CBU_CELL_DEG), math.floor(lon / CBU_CELL_DEG))
-            q = p1 + u * (outer + 0.6) + s * side * (half_w + 1.6)
-            cbu_cand.setdefault(cell, []).append((_h01(k, "cbu"), q, _yaw(-u[0], -u[1])))
         if _h01(k, "cart") < CART_SHARE:
             # the trash and recycling carts at the end of the drive, on its side away from the mailbox
             for j, g in enumerate((G_CART_TRASH, G_CART_RECYCLE)):
                 q = p1 + u * 0.7 - s * side * (half_w - 0.45 - 0.75 * j)
                 places.append((q, g, _yaw(-u[0], -u[1]) + 8.0 * (_h01(k, j, "cy") - 0.5), CART_H, 0.0, 0.0))
     for cell, cand in cbu_cand.items():
-        if len(cand) >= CBU_MIN_HOUSES:
-            _, q, yaw = min(cand, key=lambda c: c[0])
-            places.append((q, G_CBU, yaw, CBU_H, 0.0, 0.0))
+        if len(cand) < CBU_CELL_MIN:                # (its houses' box is in the next cell)
+            continue
+        _, q, yaw = min(cand, key=lambda c: c[0])
+        places.append((q, G_CBU, yaw, CBU_H, 0.0, 0.0))
     if spot_at:
         S = np.array([q for q, _ in spot_at], np.float64)
         Z = np.asarray(z_at(S), np.float64)
@@ -285,6 +403,7 @@ def bus_stop_rows(stops, lines, box, z_at, left_hand=False):
     H = np.array([s[2] for s in segs])
     D = B - A
     L2 = np.maximum((D * D).sum(1), 1e-12)
+    every = _Segs(lines)
     places = []
     for x, y, shelter, bench in stops:
         if not (x0 <= x < x1 and y0 <= y < y1):
@@ -303,6 +422,14 @@ def bus_stop_rows(stops, lines, box, z_at, left_hand=False):
         p = near[k] + out_n * (H[k] + BUS_CURB_M)
         # the traffic on this side drives along d on the right (side -1) in right-hand countries
         flow = d if (side < 0) != bool(left_hand) else -d
+        # a stop mapped at a junction: the sign moved along the curb off the crossing street's carriageway
+        for shift in BUS_SHIFTS_M:
+            pp = p + flow * shift
+            if every.clear(pp[None], 0.5)[0]:
+                p = pp
+                break
+        else:
+            continue
         # (the stock sign's plate stands out from its pole along its local +x, faces along y: +x to the road shows it
         # to the traffic both ways; the shelter, 3.9 m along its y, its open side +x to the road)
         places.append((p, G_BUS_SIGN, _yaw(-out_n[0], -out_n[1]), BUS_SIGN_H))
@@ -383,11 +510,13 @@ def clear_of(rows, props, r=CLEAR_M):
 BUS_STOP_CLEAR_M = 12.0     # m of curb kept free of parked cars each side of a bus stop's sign (a bus stop zone: 60-80 ft)
 
 
-def tile_rows(frame, md, keys, drives, walks, lines, box, ground, us, town, left_hand=False, props=(), spots=None):
+def tile_rows(frame, md, keys, drives, walks, lines, box, ground, us, town, left_hand=False, props=(), spots=None,
+              blockers=()):
     """The driveway and bus stop rows of a road tile (driveway_rows, bus_stop_rows), clear of the tile's props. frame:
     the anchor frame; md, keys: the map data and the tile's cells (the mapped bus stops); drives: the houses' driveway
     chunks (buildings.doors'); ground(x (n,), y (n,)) -> the drawn ground (NaN off the block: left out); spots (a list)
-    gets the driveways' parking spots."""
+    gets the driveways' parking spots; blockers: the tile's building footprints in the anchor frame (nothing in or
+    against them)."""
     def z_at(xy):
         xy = np.asarray(xy, np.float64).reshape(-1, 2)
         return np.asarray(ground(xy[:, 0], xy[:, 1]), np.float64)
@@ -395,8 +524,8 @@ def tile_rows(frame, md, keys, drives, walks, lines, box, ground, us, town, left
     def to_ll(xy):
         la, lo, _ = frame.enu_to_geodetic(xy[:, 0], xy[:, 1], 0.0)
         return np.asarray(la, np.float64).reshape(-1), np.asarray(lo, np.float64).reshape(-1)
-    rows = driveway_rows(drives, walks, box, z_at, to_ll, us=us, town=town, spots=spots)
+    rows = driveway_rows(drives, walks, box, z_at, to_ll, us=us, town=town, spots=spots, lines=lines)
     if md is not None and lines:
         rows += bus_stop_rows(bus_stops_for(md, frame, keys), lines, box, z_at, left_hand)
     rows = [r for r in rows if math.isfinite(r[3])]
-    return clear_of(rows, props)
+    return out_of(off_roads(clear_of(rows, props), lines), blockers)

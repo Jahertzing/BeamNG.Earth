@@ -59,7 +59,9 @@ def build(md, frame, tiles, urban, widths, on):
         if streetlife.ENABLED:
             props.extend(streetlife.tile_rows(frame, md, roads.cells_of_tile(frame, tx, ty, margin=0.0), drives, walks,
                                               lines, (x0, y0, x1, y1), lambda x, y: np.zeros(np.shape(x)), us=True,
-                                              town=bool(town), props=props, spots=park))
+                                              town=bool(town), props=props, spots=park,
+                                              blockers=[buildings.drawn_ring(spec) + np.array([x0, y0])
+                                                        for spec, *_ in items]))
         drives.extend(buildings.garage_drives(items, lines, x0, y0))
         park = parking.clear_of(park, props, drives)
         park = parking.tile_lot_spots(frame, tx, ty, md, zero, items, park)
@@ -112,7 +114,7 @@ def main():
     ap.add_argument("--out", default="C:/beamng-earth/streetlife/out" if os.name == "nt" else "/tmp/streetlife")
     ap.add_argument("--at", default=None, help="lat,lon of one place (else PLACES)")
     ap.add_argument("--name", default="place")
-    ap.add_argument("--half", type=float, default=200.0, help="m from the place to the picture's edge")
+    ap.add_argument("--half", type=float, default=380.0, help="m from the place to the picture's edge")
     ap.add_argument("--cache-dir", default=os.path.expanduser("~/.cache/beamng-earth"))
     a = ap.parse_args()
     import geodesy
@@ -129,7 +131,7 @@ def main():
     os.makedirs(a.out, exist_ok=True)
     for name, (lat, lon) in places.items():
         frame = geodesy.EnuFrame(lat, lon)
-        r = int(math.ceil(a.half / roads.TILE))
+        r = max(1, int(math.ceil(a.half / roads.TILE)))
         tiles = [(tx, ty) for tx in range(-r, r) for ty in range(-r, r)]
         build(md, frame, tiles, sf.urban, widths, False)        # (warm: the cells once)
         off = build(md, frame, tiles, sf.urban, widths, False)

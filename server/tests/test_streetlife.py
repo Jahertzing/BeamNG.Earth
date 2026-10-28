@@ -40,9 +40,14 @@ def sidewalk():
     return [{"fid": "s", "pts": np.array([(-50.0, 105.6, 0.0), (400.0, 105.6, 0.0)]), "side": 1, "w": 1.5}]
 
 
+def street_line(urban=True, cls="residential", x=(-100.0, 500.0)):
+    """The east-west street the drives meet: its north edge at y 104."""
+    return [(np.array([(x[0], 100.0), (x[1], 100.0)]), 4.0, cls, urban)]
+
+
 class DrivewayTest(unittest.TestCase):
-    def test_no_sidewalk_a_mailbox_at_every_drive(self):
-        rows = sl.driveway_rows(drives_along(), [], BOX, flat, ll(), us=True, town=True)
+    def test_country_road_a_mailbox_at_every_drive(self):
+        rows = sl.driveway_rows(drives_along(), [], BOX, flat, ll(), us=True, town=True, lines=street_line(urban=False))
         mb = [r for r in rows if r[0] == sl.G_MAILBOX]
         self.assertEqual(len(mb), 12)
         for r in mb:        # beside the drive, just in from the road's edge, its door (+x) to the road (-y): yaw 270
@@ -52,13 +57,32 @@ class DrivewayTest(unittest.TestCase):
             self.assertAlmostEqual(dx, 1.6 + sl.MAILBOX_SIDE_M, places=2)
         self.assertFalse([r for r in rows if r[0] == sl.G_CBU])
 
+    def test_sparse_town_street_mailboxes_dense_one_a_cluster_box(self):
+        sparse = sl.driveway_rows(drives_along(4, gap=40.0), [], BOX, flat, ll(), lines=street_line())
+        self.assertEqual(len([r for r in sparse if r[0] == sl.G_MAILBOX]), 4)
+        dense = sl.driveway_rows(drives_along(20, gap=8.0), [], BOX, flat, ll(), lines=street_line())
+        self.assertFalse([r for r in dense if r[0] == sl.G_MAILBOX])
+        self.assertTrue(1 <= len([r for r in dense if r[0] == sl.G_CBU]) <= 2)
+
     def test_sidewalk_streets_get_a_cluster_box_not_mailboxes(self):
-        rows = sl.driveway_rows(drives_along(), sidewalk(), BOX, flat, ll(), us=True, town=True)
+        rows = sl.driveway_rows(drives_along(20, gap=8.0), sidewalk(), BOX, flat, ll(), us=True, town=True,
+                                lines=street_line())
         self.assertFalse([r for r in rows if r[0] == sl.G_MAILBOX])
         cbu = [r for r in rows if r[0] == sl.G_CBU]
-        self.assertTrue(1 <= len(cbu) <= 3, cbu)
+        self.assertTrue(1 <= len(cbu) <= 2, cbu)
         for r in cbu:       # behind the sidewalk (its outer edge 106.35)
             self.assertGreater(r[2], 106.35)
+
+    def test_an_alley_gets_no_mail(self):
+        rows = sl.driveway_rows(drives_along(20, gap=8.0), [], BOX, flat, ll(), lines=street_line(cls="service"))
+        self.assertFalse([r for r in rows if r[0] in (sl.G_MAILBOX, sl.G_CBU)])
+
+    def test_nothing_at_the_curb_past_a_dead_end(self):
+        rows = sl.driveway_rows(drives_along(4, gap=40.0), [], BOX, flat, ll(),
+                                lines=street_line(urban=False, x=(-100.0, 60.0)))
+        xs = sorted(r[1] for r in rows if r[0] == sl.G_MAILBOX)
+        self.assertEqual(len(xs), 2)            # (the drives at x 20 and 60; 100 and 140 are past the road's end)
+        self.assertTrue(all(x < 65.0 for x in xs))
 
     def test_outside_the_us_no_mailboxes_or_carts(self):
         rows = sl.driveway_rows(drives_along(), [], BOX, flat, ll(), us=False, town=True)
@@ -155,6 +179,18 @@ class DowntownTest(unittest.TestCase):
 
 
 class ClearTest(unittest.TestCase):
+    def test_off_roads_and_out_of_buildings(self):
+        rows = [[sl.G_MAILBOX, x, y, 0, 0, 1, 1.25, 0] for x, y in ((10.0, 101.0), (10.0, 104.6), (10.0, 120.0))]
+        self.assertEqual([r[2] for r in sl.off_roads(rows, street_line())], [104.6, 120.0])
+        ring = np.array([(0.0, 115.0), (20.0, 115.0), (20.0, 130.0), (0.0, 130.0)])
+        self.assertEqual([r[2] for r in sl.out_of(rows, [ring])], [101.0, 104.6])
+
+    def test_a_bus_stop_at_a_junction_moves_off_the_crossing_street(self):
+        lines = street_line(cls="secondary") + [(np.array([(100.0, 0.0), (100.0, 250.0)]), 5.0, "secondary", True)]
+        rows = sl.bus_stop_rows([(101.0, 106.0, False, False)], lines, BOX, flat)
+        self.assertEqual(len(rows), 1)
+        self.assertTrue(sl._Segs(lines).clear([(rows[0][1], rows[0][2])], 0.5)[0])
+
     def test_clear_of_props(self):
         rows = [[sl.G_MAILBOX, 10.0, 10.0, 0, 0, 1, 1.25, 0], [sl.G_MAILBOX, 20.0, 10.0, 0, 0, 1, 1.25, 0]]
         props = [["hydrant", 10.5, 10.2, 0, 0, 1, 0.9, 0]]
