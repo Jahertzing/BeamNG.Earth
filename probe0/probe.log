@@ -1,0 +1,185 @@
+﻿i25_e470: 2 deck parts, levels [1.0], 0.2 km of deck, 7 s; failures none
+C:\beamng-earth\BeamNG.Earth\.venv\Scripts\python.exe : bridge clearance below 6.0 m target: 
+[(('14b745f6-9570-4fbb-afd1-f98747bd4ca1', 0), np.float64(1.57)), (('14b745f6-9570-4fbb-afd1-f98747bd4ca1', 0), 
+np.float64(1.33)), (('14b745f6-9570-4fbb-afd1-f98747bd4ca1', 0), np.float64(3.72))]; abutment/grade or map constraints 
+prevent full headroom
+At line:1 char:420
++ ... | Out-Null; C:\beamng-earth\BeamNG.Earth\.venv\Scripts\python.exe too ...
++                 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (bridge clearanc...t full headroom:String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+bridge clearance below 6.0 m target: [(('56fbc4ea-0655-4630-9fc0-7b2111b5ecb7', 3), np.float64(5.56))]; abutment/grade 
+or map constraints prevent full headroom
+i25_us36_i270: 51 deck parts, levels [1.0, 2.0], 4.0 km of deck, 23 s; failures {'kink': 7, 'grade': 2, 'stack': 2, 'under': 20, 'step': 6}
+bridge clearance below 6.0 m target: [(('105cb21e-2cbe-4543-a721-b90182d434de', 0), np.float64(4.14)), 
+(('c11472e0-858a-4e92-9aed-c4d1624b8944', 0), np.float64(4.75)), (('105cb21e-2cbe-4543-a721-b90182d434de', 0), 
+np.float64(5.82))]; abutment/grade or map constraints prevent full headroom
+bridge clearance below 6.0 m target: [(('2b3f964f-fbfc-40ed-8b2e-850b850fcd0c', 1), np.float64(2.12)), 
+(('2b3f964f-fbfc-40ed-8b2e-850b850fcd0c', 1), np.float64(5.84)), (('2b3f964f-fbfc-40ed-8b2e-850b850fcd0c', 1), 
+np.float64(5.68))]; abutment/grade or map constraints prevent full headroom
+bridge clearance below 6.0 m target: [(('22ab7208-35e0-40ad-8e4b-376aca51aae5', 0), np.float64(5.64)), 
+(('9962db41-b3ab-4cfb-8ebd-2e6c50680422', 0), np.float64(5.78))]; abutment/grade or map constraints prevent full 
+headroom
+bridge clearance below 6.0 m target: [(('2b3f964f-fbfc-40ed-8b2e-850b850fcd0c', 0), np.float64(4.81)), 
+(('f3a6b89d-78ff-49bc-8ccf-4950d3fb881f', 0), np.float64(5.07)), (('2b3f964f-fbfc-40ed-8b2e-850b850fcd0c', 0), 
+np.float64(4.75))]; abutment/grade or map constraints prevent full headroom
+bridge clearance below 6.0 m target: [(('3fca1721-9b5a-4a7b-b61b-ca82b897f25c', 0), np.float64(0.19))]; abutment/grade 
+or map constraints prevent full headroom
+bridge clearance below 6.0 m target: [(('48ea9833-666a-4a46-b3bd-66ce9ae9c6d2', 0), np.float64(0.14))]; abutment/grade 
+or map constraints prevent full headroom
+bridge clearance below 6.0 m target: [(('7cd51fd2-053b-4aa2-8c2f-4e8e4b460f1b', 0), np.float64(4.75))]; abutment/grade 
+or map constraints prevent full headroom
+bridge clearance below 6.0 m target: [(('7cd51fd2-053b-4aa2-8c2f-4e8e4b460f1b', 1), np.float64(-0.58))]; 
+abutment/grade or map constraints prevent full headroom
+bridge clearance below 6.0 m target: [(('7f1d194f-e9e8-448f-af33-0cc94e14b480', 0), np.float64(4.05))]; abutment/grade 
+or map constraints prevent full headroom
+bridge clearance below 6.0 m target: [(('d94b3932-7e6e-48bc-a699-d8f8efdebdcb', 3), np.float64(-0.69)), 
+(('da4ad3e6-12aa-4912-96cc-95f60a319c4b', 0), np.float64(-0.22))]; abutment/grade or map constraints prevent full 
+headroom
+    kink   39.82370,-104.98209  14b745f6 grade change 9.2 % in 4 m
+    kink   39.80932,-104.98330  4581afec grade change 6.0 % in 4 m
+    kink   39.82349,-104.98298  523a9116 grade change 5.9 % in 4 m
+    kink   39.82363,-104.98380  632dcf3c grade change 7.6 % in 4 m
+    kink   39.82361,-104.98206  8a371716 grade change 4.1 % in 4 m
+    grade  39.82357,-104.98324  d3c5bbc9 grade 8.6 %
+    kink   39.82357,-104.98366  d3c5bbc9 grade change 10.1 % in 4 m
+    grade  39.82354,-104.98289  d4c5f88d grade 7.5 %
+    kink   39.82361,-104.98225  d4c5f88d grade change 4.3 % in 4 m
+    stack  39.82363,-104.98343  632dcf3c L1 / d3c5bbc9 L1 overlap 1.11 m apart
+    stack  39.82360,-104.98244  d4c5f88d L1 / d6a90d41 L1 overlap 1.14 m apart
+    under  39.82359,-104.98263  d4c5f88d L1 5.88 m over 025aed56 motorway
+    under  39.82362,-104.98263  d6a90d41 L1 4.61 m over 025aed56 motorway
+    under  39.82363,-104.98329  632dcf3c L1 4.81 m over 315dd712 motorway link
+    under  39.82357,-104.98329  d3c5bbc9 L1 6.04 m over 315dd712 motorway link
+    under  39.82363,-104.98347  632dcf3c L1 6.36 m over 5f0693a7 motorway link
+    under  39.82357,-104.98348  d3c5bbc9 L1 7.56 m over 5f0693a7 motorway link
+    under  39.82359,-104.98263  d4c5f88d L1 5.88 m over 025aed56 motorway
+    under  39.82362,-104.98263  d6a90d41 L1 4.61 m over 025aed56 motorway
+    under  39.82363,-104.98329  632dcf3c L1 4.81 m over 315dd712 motorway link
+    under  39.82357,-104.98329  d3c5bbc9 L1 6.04 m over 315dd712 motorway link
+    under  39.82363,-104.98347  632dcf3c L1 6.36 m over 5f0693a7 motorway link
+    under  39.82357,-104.98348  d3c5bbc9 L1 7.56 m over 5f0693a7 motorway link
+    under  39.82369,-104.98285  14b745f6 L1 3.77 m over 656668f9 motorway
+    under  39.82356,-104.98286  d4c5f88d L1 4.42 m over 656668f9 motorway
+    under  39.82370,-104.98234  14b745f6 L1 7.04 m over 94e8c35c motorway link
+    under  39.82360,-104.98236  d4c5f88d L1 7.80 m over 94e8c35c motorway link
+    under  39.82362,-104.98236  d6a90d41 L1 6.70 m over 94e8c35c motorway link
+    under  39.82356,-104.98286  d4c5f88d L1 4.40 m over c4e64402 motorway
+    under  39.82363,-104.98317  632dcf3c L1 4.19 m over f80f622a motorway North Valley Highway
+    under  39.82357,-104.98317  d3c5bbc9 L1 5.12 m over f80f622a motorway North Valley Highway
+    step   39.82361,-104.98185  2c9ef15b/8a371716 joint 0.80 m
+    step   39.82361,-104.98185  2c9ef15b/f3413aa0 joint 0.80 m
+    step   39.82361,-104.98185  6949506d/8a371716 joint 0.80 m
+    step   39.82361,-104.98185  6949506d/f3413aa0 joint 0.80 m
+    step   39.82361,-104.98171  97c6d7b3/c52bba0c joint 0.75 m
+    step   39.82361,-104.98171  c52bba0c/f3413aa0 joint 0.75 m
+      x 8a865a27 L4 1591.1 over 1befd1f4 L1 1579.2: 11.84 m at (113, 47)
+      x 8a865a27 L4 1592.2 over 2b3f964f L1 1583.8: 8.42 m at (94, -13)
+      x 8a865a27 L4 1592.2 over 3b84f80b L3 1583.2: 8.96 m at (103, 4)
+mousetrap_i70: 27 deck parts, levels [1.0, 2.0, 3.0, 4.0], 4.8 km of deck, 12 s; failures {'grade': 4, 'kink': 13, 'stack': 1, 'under': 4}
+bridge clearance below 6.0 m target: [(('37eb7b37-690e-44f7-8744-86fb53b48728', 0), np.float64(4.36)), 
+(('df6fd3d0-63f6-42be-bc29-06994bfc9118', 0), np.float64(5.79)), (('f6d5d610-ca4f-4197-9ce7-11a2bc13680d', 0), 
+np.float64(4.0))]; abutment/grade or map constraints prevent full headroom
+bridge clearance below 6.0 m target: [(('3b92a367-787f-421b-81ee-d6b5a0ee13ef', 0), np.float64(3.73)), 
+(('3b92a367-787f-421b-81ee-d6b5a0ee13ef', 0), np.float64(2.43)), (('3b92a367-787f-421b-81ee-d6b5a0ee13ef', 0), 
+np.float64(-1.82))]; abutment/grade or map constraints prevent full headroom
+bridge clearance below 6.0 m target: [(('69db1af2-3baf-40ce-babc-f68c1f09215b', 0), np.float64(5.32))]; abutment/grade 
+or map constraints prevent full headroom
+    grade  39.77952,-104.98592  192163ed grade 10.8 %
+    kink   39.77952,-104.98597  192163ed grade change 6.5 % in 4 m
+    grade  39.77972,-104.98598  2b3f964f grade 15.0 %
+    kink   39.77972,-104.98598  2b3f964f grade change 4.3 % in 4 m
+    grade  39.77988,-104.98558  3b84f80b grade 15.0 %
+    kink   39.77989,-104.98591  3b84f80b grade change 4.8 % in 4 m
+    kink   39.78403,-104.98899  3fca1721 grade change 11.2 % in 4 m
+    kink   39.78382,-104.98977  48ea9833 grade change 7.6 % in 4 m
+    grade  39.77960,-104.98593  4e486f21 grade 19.5 %
+    kink   39.77960,-104.98602  4e486f21 grade change 6.6 % in 4 m
+    kink   39.78134,-104.98918  7cd51fd2 grade change 7.4 % in 4 m
+    kink   39.78400,-104.98918  7cd51fd2 grade change 11.6 % in 4 m
+    kink   39.78410,-104.99572  7f1d194f grade change 5.1 % in 4 m
+    kink   39.77956,-104.99092  8a865a27 grade change 6.1 % in 4 m
+    kink   39.78132,-104.98938  d94b3932 grade change 4.6 % in 4 m
+    kink   39.78398,-104.98938  d94b3932 grade change 9.7 % in 4 m
+    kink   39.78389,-104.98956  da4ad3e6 grade change 10.2 % in 4 m
+    stack  39.77990,-104.98839  2b3f964f L1 / 8a865a27 L4 overlap 7.97 m apart
+    under  39.77986,-104.98807  2b3f964f L1 5.52 m over 1befd1f4 motorway link
+    under  39.78002,-104.98804  3b84f80b L3 3.95 m over 1befd1f4 motorway link
+    under  39.78140,-104.98918  7cd51fd2 L1 7.79 m over 1befd1f4 motorway link
+    under  39.77973,-104.99121  8a865a27 L4 5.91 m over 52c69d38 motorway link
+i25_6th_ave: 8 deck parts, levels [1.0], 1.8 km of deck, 16 s; failures {'grade': 1, 'kink': 2, 'stack': 1, 'under': 4}
+    grade  39.72550,-105.00693  69db1af2 grade 11.0 %
+    kink   39.72550,-105.00688  69db1af2 grade change 5.9 % in 4 m
+    kink   39.72562,-105.00587  69db1af2 grade change 4.3 % in 4 m
+    stack  39.72567,-105.00560  37eb7b37 L1 / 69db1af2 L1 overlap 0.84 m apart
+    under  39.72858,-105.00428  3b92a367 L1 7.13 m over 14279796 service
+    under  39.72865,-105.00406  3b92a367 L1 5.83 m over 3802392c residential Navajo Street
+    under  39.72567,-105.00578  37eb7b37 L1 7.55 m over a00c7957 tertiary North Seminole Road
+    under  39.72578,-105.00585  f6d5d610 L1 7.33 m over a00c7957 tertiary North Seminole Road
+i25_i225: 9 deck parts, levels [1.0, 2.0, 4.0], 1.1 km of deck, 15 s; failures none
+bridge clearance below 6.0 m target: [(('0bf61132-aabc-4e71-a0a0-502208a53a40', 0), np.float64(-2.4)), 
+(('0bf61132-aabc-4e71-a0a0-502208a53a40', 0), np.float64(-0.36)), (('0bf61132-aabc-4e71-a0a0-502208a53a40', 0), 
+np.float64(3.58))]; abutment/grade or map constraints prevent full headroom
+bridge clearance below 6.0 m target: [(('17a40c62-3a8b-4a51-a1d7-a59cc885a6c4', 0), np.float64(-2.01))]; 
+abutment/grade or map constraints prevent full headroom
+bridge clearance below 6.0 m target: [(('42400b0a-c10f-4d80-8f69-a951e1d4a31b', 0), np.float64(4.64))]; abutment/grade 
+or map constraints prevent full headroom
+bridge clearance below 6.0 m target: [(('68ec9854-9bf1-4f83-922b-2a9a363cae41', 0), np.float64(5.0))]; abutment/grade 
+or map constraints prevent full headroom
+bridge clearance below 6.0 m target: [(('c1f92041-152c-43e9-ba49-f43d324667c1', 0), np.float64(4.66)), 
+(('c1f92041-152c-43e9-ba49-f43d324667c1', 0), np.float64(5.07))]; abutment/grade or map constraints prevent full 
+headroom
+bridge clearance below 6.0 m target: [(('e7940763-ad54-491c-9936-53d22ea13f91', 0), np.float64(5.18)), 
+(('e7940763-ad54-491c-9936-53d22ea13f91', 0), np.float64(5.3))]; abutment/grade or map constraints prevent full 
+headroom
+      x 21f8104a L1 1792.9 over 0bf61132 L1 1784.5: 8.35 m at (-140, 270)
+      x 21f8104a L1 1792.9 over 0bf61132 L1 1784.5: 8.35 m at (-140, 270)
+      x 26c0570e L1 1793.8 over 0bf61132 L1 1787.8: 6.02 m at (-178, 231)
+      x d41604c5 L1 1793.8 over 0bf61132 L1 1787.8: 6.02 m at (-178, 231)
+      x d41604c5 L1 1793.8 over 0bf61132 L1 1787.8: 6.02 m at (-178, 231)
+      x 21f8104a L1 1792.9 over 17a40c62 L1 1784.3: 8.55 m at (-151, 282)
+      x 21f8104a L1 1792.9 over 17a40c62 L1 1784.3: 8.55 m at (-151, 282)
+      x 26c0570e L1 1794.2 over 17a40c62 L1 1785.4: 8.87 m at (-191, 244)
+      x 26c0570e L1 1794.2 over 17a40c62 L1 1785.4: 8.87 m at (-191, 244)
+      x 21f8104a L1 1792.8 over 39a60fc2 L1 1784.3: 8.56 m at (-162, 294)
+      x 21f8104a L1 1792.8 over 39a60fc2 L1 1784.3: 8.56 m at (-162, 294)
+      x 26c0570e L1 1794.3 over 39a60fc2 L1 1785.8: 8.48 m at (-203, 256)
+      x 26c0570e L1 1794.3 over 39a60fc2 L1 1785.8: 8.48 m at (-203, 256)
+      x 0125eda6 L2 1802.7 over 357838d2 L1 1794.1: 8.65 m at (267, -717)
+      x 48db423e L3 1811.1 over 0125eda6 L2 1802.7: 8.39 m at (254, -733)
+      x 0125eda6 L2 1802.7 over 8280dea0 L1 1794.2: 8.46 m at (251, -737)
+      x df2eb101 L1 1811.1 over 0125eda6 L2 1802.7: 8.35 m at (269, -714)
+      x 0125eda6 L2 1802.8 over e8285332 L1 1793.9: 8.94 m at (276, -703)
+      x 48db423e L3 1811.0 over 357838d2 L1 1794.3: 16.71 m at (271, -749)
+      x df2eb101 L1 1811.1 over 357838d2 L1 1794.0: 17.05 m at (266, -712)
+      x fe20bf9a L2 1802.7 over 357838d2 L1 1794.3: 8.41 m at (270, -742)
+      x 48db423e L3 1811.1 over 8280dea0 L1 1794.2: 16.90 m at (250, -730)
+      x 48db423e L3 1811.0 over e8285332 L1 1794.4: 16.66 m at (280, -758)
+      x 48db423e L3 1811.1 over fe20bf9a L2 1802.7: 8.38 m at (267, -745)
+      x fe20bf9a L2 1802.7 over 8280dea0 L1 1794.3: 8.34 m at (254, -763)
+      x df2eb101 L1 1811.1 over e8285332 L1 1794.1: 16.97 m at (277, -722)
+      x df2eb101 L1 1811.1 over fe20bf9a L2 1802.7: 8.37 m at (284, -727)
+      x fe20bf9a L2 1802.7 over e8285332 L1 1794.2: 8.49 m at (278, -733)
+i25_c470_e470: 32 deck parts, levels [1.0, 2.0, 3.0], 3.1 km of deck, 29 s; failures {'kink': 7, 'cross': 3, 'order': 2, 'under': 9}
+    kink   39.56432,-104.87555  17a40c62 grade change 9.0 % in 4 m
+    kink   39.55832,-104.88078  3820557d grade change 5.1 % in 4 m
+    kink   39.55625,-104.87359  68ec9854 grade change 6.5 % in 4 m
+    kink   39.55636,-104.87675  c1f92041 grade change 5.3 % in 4 m
+    kink   39.55840,-104.88077  c1f92041 grade change 4.6 % in 4 m
+    kink   39.55807,-104.87024  0125eda6 grade change 4.3 % in 4 m
+    kink   39.55849,-104.87177  e7940763 grade change 6.7 % in 4 m
+    cross  39.56408,-104.87557  26c0570e L1 over 0bf61132 L1: 6.02 m
+    cross  39.56408,-104.87557  d41604c5 L1 over 0bf61132 L1: 6.02 m
+    cross  39.56408,-104.87557  d41604c5 L1 over 0bf61132 L1: 6.02 m
+    order  39.55557,-104.87037  df2eb101 L1 over L2 0125eda6
+    order  39.55545,-104.87020  df2eb101 L1 over L2 fe20bf9a
+    under  39.55613,-104.87614  c1f92041 L1 8.06 m over 6f22f76c motorway link
+    under  39.55856,-104.88108  42400b0a L1 8.04 m over 7f3885b8 secondary South Yosemite Street
+    under  39.56435,-104.87550  17a40c62 L1 1.39 m over 95e34584 service
+    under  39.56397,-104.87571  0bf61132 L1 3.04 m over f1fae4cf service
+    under  39.56388,-104.87560  0bf61132 L1 6.92 m over f1fae4cf service
+    under  39.56432,-104.87527  0bf61132 L1 0.85 m over fb829208 service
+    under  39.55613,-104.87614  c1f92041 L1 8.06 m over 6f22f76c motorway link
+    under  39.56435,-104.87550  17a40c62 L1 1.39 m over 95e34584 service
+    under  39.56432,-104.87527  0bf61132 L1 0.85 m over fb829208 service

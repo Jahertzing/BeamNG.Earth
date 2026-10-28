@@ -1,0 +1,617 @@
+[
+ {
+  "place": "i25_e470",
+  "parts": 2,
+  "levels": [
+   1.0
+  ],
+  "failures": {},
+  "list": []
+ },
+ {
+  "place": "i25_us36_i270",
+  "parts": 51,
+  "levels": [
+   1.0,
+   2.0
+  ],
+  "failures": {
+   "kink": 7,
+   "grade": 2,
+   "stack": 2,
+   "under": 20,
+   "step": 6
+  },
+  "list": [
+   [
+    "kink",
+    702.9,
+    799.9,
+    "14b745f6 grade change 9.2 % in 4 m"
+   ],
+   [
+    "kink",
+    599.1,
+    -796.7,
+    "4581afec grade change 6.0 % in 4 m"
+   ],
+   [
+    "kink",
+    626.8,
+    775.8,
+    "523a9116 grade change 5.9 % in 4 m"
+   ],
+   [
+    "kink",
+    556.3,
+    791.7,
+    "632dcf3c grade change 7.6 % in 4 m"
+   ],
+   [
+    "kink",
+    705.5,
+    789.6,
+    "8a371716 grade change 4.1 % in 4 m"
+   ],
+   [
+    "grade",
+    604.3,
+    785.0,
+    "d3c5bbc9 grade 8.6 %"
+   ],
+   [
+    "kink",
+    568.3,
+    784.9,
+    "d3c5bbc9 grade change 10.1 % in 4 m"
+   ],
+   [
+    "grade",
+    634.5,
+    781.6,
+    "d4c5f88d grade 7.5 %"
+   ],
+   [
+    "kink",
+    689.3,
+    789.0,
+    "d4c5f88d grade change 4.3 % in 4 m"
+   ],
+   [
+    "stack",
+    588.3,
+    791.7,
+    "632dcf3c L1 / d3c5bbc9 L1 overlap 1.11 m apart"
+   ],
+   [
+    "stack",
+    673.3,
+    788.2,
+    "d4c5f88d L1 / d6a90d41 L1 overlap 1.14 m apart"
+   ],
+   [
+    "under",
+    656.3,
+    787.4,
+    "d4c5f88d L1 5.88 m over 025aed56 motorway"
+   ],
+   [
+    "under",
+    656.7,
+    790.8,
+    "d6a90d41 L1 4.61 m over 025aed56 motorway"
+   ],
+   [
+    "under",
+    600.5,
+    791.7,
+    "632dcf3c L1 4.81 m over 315dd712 motorway link"
+   ],
+   [
+    "under",
+    599.8,
+    785.0,
+    "d3c5bbc9 L1 6.04 m over 315dd712 motorway link"
+   ],
+   [
+    "under",
+    584.8,
+    791.7,
+    "632dcf3c L1 6.36 m over 5f0693a7 motorway link"
+   ],
+   [
+    "under",
+    583.9,
+    785.0,
+    "d3c5bbc9 L1 7.56 m over 5f0693a7 motorway link"
+   ],
+   [
+    "under",
+    656.3,
+    787.4,
+    "d4c5f88d L1 5.88 m over 025aed56 motorway"
+   ],
+   [
+    "under",
+    656.7,
+    790.8,
+    "d6a90d41 L1 4.61 m over 025aed56 motorway"
+   ],
+   [
+    "under",
+    600.5,
+    791.7,
+    "632dcf3c L1 4.81 m over 315dd712 motorway link"
+   ],
+   [
+    "under",
+    599.8,
+    785.0,
+    "d3c5bbc9 L1 6.04 m over 315dd712 motorway link"
+   ],
+   [
+    "under",
+    584.8,
+    791.7,
+    "632dcf3c L1 6.36 m over 5f0693a7 motorway link"
+   ],
+   [
+    "under",
+    583.9,
+    785.0,
+    "d3c5bbc9 L1 7.56 m over 5f0693a7 motorway link"
+   ],
+   [
+    "under",
+    637.4,
+    798.4,
+    "14b745f6 L1 3.77 m over 656668f9 motorway"
+   ],
+   [
+    "under",
+    637.2,
+    783.7,
+    "d4c5f88d L1 4.42 m over 656668f9 motorway"
+   ],
+   [
+    "under",
+    681.7,
+    800.0,
+    "14b745f6 L1 7.04 m over 94e8c35c motorway link"
+   ],
+   [
+    "under",
+    679.6,
+    788.5,
+    "d4c5f88d L1 7.80 m over 94e8c35c motorway link"
+   ],
+   [
+    "under",
+    679.9,
+    790.2,
+    "d6a90d41 L1 6.70 m over 94e8c35c motorway link"
+   ],
+   [
+    "under",
+    636.9,
+    783.6,
+    "d4c5f88d L1 4.40 m over c4e64402 motorway"
+   ],
+   [
+    "under",
+    610.3,
+    791.7,
+    "632dcf3c L1 4.19 m over f80f622a motorway North Valley Highway"
+   ],
+   [
+    "under",
+    610.0,
+    784.7,
+    "d3c5bbc9 L1 5.12 m over f80f622a motorway North Valley Highway"
+   ],
+   [
+    "step",
+    723.1,
+    789.5,
+    "2c9ef15b/8a371716 joint 0.80 m"
+   ],
+   [
+    "step",
+    723.1,
+    789.5,
+    "2c9ef15b/f3413aa0 joint 0.80 m"
+   ],
+   [
+    "step",
+    723.1,
+    789.5,
+    "6949506d/8a371716 joint 0.80 m"
+   ],
+   [
+    "step",
+    723.1,
+    789.5,
+    "6949506d/f3413aa0 joint 0.80 m"
+   ],
+   [
+    "step",
+    735.4,
+    789.2,
+    "97c6d7b3/c52bba0c joint 0.75 m"
+   ],
+   [
+    "step",
+    735.4,
+    789.2,
+    "c52bba0c/f3413aa0 joint 0.75 m"
+   ]
+  ]
+ },
+ {
+  "place": "mousetrap_i70",
+  "parts": 27,
+  "levels": [
+   1.0,
+   2.0,
+   3.0,
+   4.0
+  ],
+  "failures": {
+   "grade": 4,
+   "kink": 13,
+   "stack": 1,
+   "under": 4
+  },
+  "list": [
+   [
+    "grade",
+    297.8,
+    -52.9,
+    "192163ed grade 10.8 %"
+   ],
+   [
+    "kink",
+    293.8,
+    -53.2,
+    "192163ed grade change 6.5 % in 4 m"
+   ],
+   [
+    "grade",
+    293.3,
+    -31.5,
+    "2b3f964f grade 15.0 %"
+   ],
+   [
+    "kink",
+    293.3,
+    -31.5,
+    "2b3f964f grade change 4.3 % in 4 m"
+   ],
+   [
+    "grade",
+    327.3,
+    -13.3,
+    "3b84f80b grade 15.0 %"
+   ],
+   [
+    "kink",
+    299.3,
+    -12.5,
+    "3b84f80b grade change 4.8 % in 4 m"
+   ],
+   [
+    "kink",
+    35.2,
+    447.6,
+    "3fca1721 grade change 11.2 % in 4 m"
+   ],
+   [
+    "kink",
+    -31.8,
+    424.1,
+    "48ea9833 grade change 7.6 % in 4 m"
+   ],
+   [
+    "grade",
+    297.1,
+    -44.4,
+    "4e486f21 grade 19.5 %"
+   ],
+   [
+    "kink",
+    289.1,
+    -44.3,
+    "4e486f21 grade change 6.6 % in 4 m"
+   ],
+   [
+    "kink",
+    18.5,
+    148.3,
+    "7cd51fd2 grade change 7.4 % in 4 m"
+   ],
+   [
+    "kink",
+    18.7,
+    443.8,
+    "7cd51fd2 grade change 11.6 % in 4 m"
+   ],
+   [
+    "kink",
+    -541.1,
+    455.2,
+    "7f1d194f grade change 5.1 % in 4 m"
+   ],
+   [
+    "kink",
+    -130.5,
+    -49.0,
+    "8a865a27 grade change 6.1 % in 4 m"
+   ],
+   [
+    "kink",
+    1.3,
+    146.1,
+    "d94b3932 grade change 4.6 % in 4 m"
+   ],
+   [
+    "kink",
+    1.9,
+    441.4,
+    "d94b3932 grade change 9.7 % in 4 m"
+   ],
+   [
+    "kink",
+    -14.0,
+    431.9,
+    "da4ad3e6 grade change 10.2 % in 4 m"
+   ],
+   [
+    "stack",
+    86.5,
+    -11.4,
+    "2b3f964f L1 / 8a865a27 L4 overlap 7.97 m apart"
+   ],
+   [
+    "under",
+    114.0,
+    -15.5,
+    "2b3f964f L1 5.52 m over 1befd1f4 motorway link"
+   ],
+   [
+    "under",
+    116.4,
+    2.2,
+    "3b84f80b L3 3.95 m over 1befd1f4 motorway link"
+   ],
+   [
+    "under",
+    18.6,
+    155.3,
+    "7cd51fd2 L1 7.79 m over 1befd1f4 motorway link"
+   ],
+   [
+    "under",
+    -155.3,
+    -30.2,
+    "8a865a27 L4 5.91 m over 52c69d38 motorway link"
+   ]
+  ]
+ },
+ {
+  "place": "i25_6th_ave",
+  "parts": 8,
+  "levels": [
+   1.0
+  ],
+  "failures": {
+   "grade": 1,
+   "kink": 2,
+   "stack": 1,
+   "under": 4
+  },
+  "list": [
+   [
+    "grade",
+    -550.9,
+    -11.1,
+    "69db1af2 grade 11.0 %"
+   ],
+   [
+    "kink",
+    -547.0,
+    -10.6,
+    "69db1af2 grade change 5.9 % in 4 m"
+   ],
+   [
+    "kink",
+    -460.7,
+    2.7,
+    "69db1af2 grade change 4.3 % in 4 m"
+   ],
+   [
+    "stack",
+    -437.2,
+    7.5,
+    "37eb7b37 L1 / 69db1af2 L1 overlap 0.84 m apart"
+   ],
+   [
+    "under",
+    -324.0,
+    331.4,
+    "3b92a367 L1 7.13 m over 14279796 service"
+   ],
+   [
+    "under",
+    -305.2,
+    338.7,
+    "3b92a367 L1 5.83 m over 3802392c residential Navajo Street"
+   ],
+   [
+    "under",
+    -453.0,
+    7.7,
+    "37eb7b37 L1 7.55 m over a00c7957 tertiary North Seminole Road"
+   ],
+   [
+    "under",
+    -458.9,
+    20.1,
+    "f6d5d610 L1 7.33 m over a00c7957 tertiary North Seminole Road"
+   ]
+  ]
+ },
+ {
+  "place": "i25_i225",
+  "parts": 9,
+  "levels": [
+   1.0,
+   2.0,
+   4.0
+  ],
+  "failures": {},
+  "list": []
+ },
+ {
+  "place": "i25_c470_e470",
+  "parts": 32,
+  "levels": [
+   1.0,
+   2.0,
+   3.0
+  ],
+  "failures": {
+   "kink": 7,
+   "cross": 3,
+   "order": 2,
+   "under": 9
+  },
+  "list": [
+   [
+    "kink",
+    -176.2,
+    257.6,
+    "17a40c62 grade change 9.0 % in 4 m"
+   ],
+   [
+    "kink",
+    -625.9,
+    -408.7,
+    "3820557d grade change 5.1 % in 4 m"
+   ],
+   [
+    "kink",
+    -7.6,
+    -638.8,
+    "68ec9854 grade change 6.5 % in 4 m"
+   ],
+   [
+    "kink",
+    -279.6,
+    -625.9,
+    "c1f92041 grade change 5.3 % in 4 m"
+   ],
+   [
+    "kink",
+    -624.6,
+    -399.6,
+    "c1f92041 grade change 4.6 % in 4 m"
+   ],
+   [
+    "kink",
+    279.8,
+    -436.5,
+    "0125eda6 grade change 4.3 % in 4 m"
+   ],
+   [
+    "kink",
+    149.0,
+    -389.8,
+    "e7940763 grade change 6.7 % in 4 m"
+   ],
+   [
+    "cross",
+    -178.0,
+    230.8,
+    "26c0570e L1 over 0bf61132 L1: 6.02 m"
+   ],
+   [
+    "cross",
+    -178.0,
+    230.8,
+    "d41604c5 L1 over 0bf61132 L1: 6.02 m"
+   ],
+   [
+    "cross",
+    -178.0,
+    230.8,
+    "d41604c5 L1 over 0bf61132 L1: 6.02 m"
+   ],
+   [
+    "order",
+    268.9,
+    -714.4,
+    "df2eb101 L1 over L2 0125eda6"
+   ],
+   [
+    "order",
+    283.8,
+    -727.3,
+    "df2eb101 L1 over L2 fe20bf9a"
+   ],
+   [
+    "under",
+    -226.7,
+    -651.7,
+    "c1f92041 L1 8.06 m over 6f22f76c motorway link"
+   ],
+   [
+    "under",
+    -651.7,
+    -382.3,
+    "42400b0a L1 8.04 m over 7f3885b8 secondary South Yosemite Street"
+   ],
+   [
+    "under",
+    -172.2,
+    261.4,
+    "17a40c62 L1 1.39 m over 95e34584 service"
+   ],
+   [
+    "under",
+    -190.3,
+    218.8,
+    "0bf61132 L1 3.04 m over f1fae4cf service"
+   ],
+   [
+    "under",
+    -180.1,
+    208.7,
+    "0bf61132 L1 6.92 m over f1fae4cf service"
+   ],
+   [
+    "under",
+    -152.1,
+    257.4,
+    "0bf61132 L1 0.85 m over fb829208 service"
+   ],
+   [
+    "under",
+    -226.7,
+    -651.7,
+    "c1f92041 L1 8.06 m over 6f22f76c motorway link"
+   ],
+   [
+    "under",
+    -172.2,
+    261.4,
+    "17a40c62 L1 1.39 m over 95e34584 service"
+   ],
+   [
+    "under",
+    -152.1,
+    257.4,
+    "0bf61132 L1 0.85 m over fb829208 service"
+   ]
+  ]
+ }
+]
