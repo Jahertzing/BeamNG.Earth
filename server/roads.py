@@ -6512,6 +6512,7 @@ def write_tile(out_dir, vfs_dir, aid, tx, ty, chunks, walks=None, road_mesh=None
     if signs:                       # guidesigns.tile: the signs (render-only), their posts' lean collision mesh
         import cdae
         import guidesigns
+        import terrainpatch
         x0, y0, _, _ = tile_bbox(tx, ty)
         if signs.get("mesh") is not None:
             P, T, UV, C, M = signs["mesh"]
@@ -6522,7 +6523,9 @@ def write_tile(out_dir, vfs_dir, aid, tx, ty, chunks, walks=None, road_mesh=None
         if signs.get("col") is not None:
             P, T, aabbs = signs["col"]
             shape = f"signcol_{aid}_{tx}_{ty}.cdae"
-            cdae.write(os.path.join(out_dir, shape), P, T, collision_only=True)
+            # (a level material without a ground type, as terrainpatch's: cdae's default "bngEarthDae" has none, an
+            # engine error line for every sign collider loaded, 591 in six minutes downtown, 2026-10-28)
+            cdae.write(os.path.join(out_dir, shape), P, T, collision_only=True, material=terrainpatch.MATERIAL)
             data["signcol"] = {"shape": f"{vfs_dir}/{shape}", "pos": [x0, y0, 0.0]}
             data.setdefault("colliders", {})["signcol"] = aabbs
         if signs.get("props"):
