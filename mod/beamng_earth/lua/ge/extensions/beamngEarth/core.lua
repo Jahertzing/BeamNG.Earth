@@ -320,9 +320,10 @@ end
 -- The anchor of a rebase at the player's position (lat, lon): on its grid like a teleport's (geodesy.snapAnchor; the
 -- server's revisit cache keys on it: a road driven again finds what was built along it), with the player's spot in
 -- that frame. -> lat, lon, dx, dy
+M.PIN_SHARE = 0.45 -- a baked route's anchor pins a teleport or rebase within this share of the rebase distance
 local function rebaseAnchor(lat, lon)
   if not M.SNAP_TELEPORTS then return lat, lon, 0, 0 end
-  local pLat, pLon, px, py = require('beamngEarth/routepins').pin(lat, lon)    -- a baked route's anchor
+  local pLat, pLon, px, py = require('beamngEarth/routepins').pin(lat, lon, M.PIN_SHARE * rebase.distance)
   if pLat then return pLat, pLon, px, py end
   local sLat, sLon = geodesy.snapAnchor(lat, lon)
   local dx, dy = geodesy.newAnchor(sLat, sLon):geodeticToEnu(lat, lon, 0)
@@ -2232,7 +2233,7 @@ teleportTo = function(lat, lon, name, kind)
   elseif M.SNAP_TELEPORTS then
     -- the anchor on its grid (geodesy.snapAnchor), the car at its real spot in that frame: the server's revisit cache
     -- keeps what it built per anchor, so a place visited again (a game started where it was left) loads from it
-    local sLat, sLon = require('beamngEarth/routepins').pin(lat, lon)     -- (a baked route's anchor first)
+    local sLat, sLon = require('beamngEarth/routepins').pin(lat, lon, M.PIN_SHARE * rebase.distance)
     if not sLat then sLat, sLon = geodesy.snapAnchor(lat, lon) end
     if sLat ~= lat or sLon ~= lon then
       local x, y = geodesy.newAnchor(sLat, sLon):geodeticToEnu(lat, lon, 0)

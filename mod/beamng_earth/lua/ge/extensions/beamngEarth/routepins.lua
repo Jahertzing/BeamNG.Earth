@@ -33,10 +33,12 @@ function M.load()
   return anchors, pinM
 end
 
--- The route anchor nearest to (lat, lon) within the pin distance: its lat, lon, and the player's spot (dx, dy) in
--- its frame; nil when there is none.
-function M.pin(lat, lon)
+-- The route anchor nearest to (lat, lon) within the pin distance (and within maxM if given: core passes under half
+-- its rebase distance, so a rebase never lands on the anchor it leaves when the setting is shorter than the bake's
+-- plan); its lat, lon, and the player's spot (dx, dy) in its frame; nil when there is none.
+function M.pin(lat, lon, maxM)
   local anchors, pinM = M.load()
+  if maxM then pinM = math.min(pinM, maxM) end
   if pinM <= 0 or #anchors == 0 then return nil end
   local best, bx, by, bd
   for _, a in ipairs(anchors) do
