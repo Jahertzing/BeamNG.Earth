@@ -42,6 +42,9 @@ ROOF_UV_M = 6.0             # m per repeat of the roof textures
 SIDING_UV_M = 3.0           # m per repeat of the plain wall textures (sheds, garages)
 PITCH = {"gabled": 32.0, "hipped": 26.0}     # degrees
 EAVE_M = 0.35               # m a pitched roof overhangs its walls
+BOX_FILL = 0.8              # a pitched roof on the oriented box: footprints filling this share of their box at least
+SKEL_MIN_FILL = 0.5         # a skeleton roof (skeleton_of) on footprints filling this share of their box at least
+FLATTENED_MAX_M = 12.0      # m: a mapped height up to this on a pitched roof drawn flat is taken down to the roof's mean
 CORNICE_OUT_M = 0.28        # a flat roof's cornice: how far it stands out, its depth below and above the eave
 CORNICE_DOWN_M = 0.45
 CORNICE_UP_M = 0.2
@@ -516,10 +519,18 @@ def plan(ring, attrs, neighbours=0, lat=None, lon=None, look=None, town=False, d
                 roof = "gabled" if seed < 1.0 - style.hipped else "hipped"
         else:
             roof = "flat"
-    # pitched roofs only on near-rectangular footprints (a church's nave keeps its gable beside a tower or an apse)
-    if roof != "flat" and (box_fill < (0.6 if church else 0.8) or hw < 2.0
-                           or hw > (18.0 if barn else 20.0 if church else 14.0)):
-        roof = "flat"
+    # pitched roofs on near-rectangular footprints (the oriented box's roof; a church's nave keeps its gable beside a
+    # tower or an apse), and on any other outline the straight skeleton roofs (skeleton_of: an L, a T, a tract
+    # house's bays and bump-outs). Before the skeleton roofs a footprint under BOX_FILL of its box was flat, and with
+    # a mapped height (DRCOG's and OSM's are the roof's top) all of it went to the walls: a third of Frederick's
+    # houses came out flat-topped boxes a storey too tall (fix/house-heights, 2026-10-28; Jeff's report)
+    skel = None
+    wide = hw < 2.0 or hw > (18.0 if barn else 20.0 if church else 14.0)
+    if roof != "flat" and not church and not wide and box_fill >= SKEL_MIN_FILL:
+        skel = skeleton_of(ring, roof)
+    flattened = False
+    if roof != "flat" and not skel and (box_fill < (0.6 if church else BOX_FILL) or wide):
+        roof, flattened = "flat", True
     # a city tower's ground floor is shops or a lobby (Midtown, 2026-10-14: most towers have no class, and their
     # curtain wall came down to the pavement)
     tall = (nf or (h or 0) / FLOOR_M) >= TOWER_SHOP_FLOORS
@@ -532,10 +543,17 @@ def plan(ring, attrs, neighbours=0, lat=None, lon=None, look=None, town=False, d
         if west_town and roof == "flat" and nf == 1 and area >= 80 and not (shed or barn):
             h += FALSE_FRONT_M                      # a main-street shop's tall parapet
     else:
+        tp = math.tan(math.radians(style.pitch or PITCH.get(roof, PITCH["hipped"])))
         if attrs.get("roof_height") and np.isfinite(attrs["roof_height"]) and roof != "flat":
             h = max(2.5, h - float(attrs["roof_height"]))
         elif roof != "flat":
-            h = max(2.5, h - hw * math.tan(math.radians(style.pitch or PITCH[roof])))
+            # the mapped height is the ridge's: the walls stop the drawn roof's rise under it (a skeleton roof's
+            # ridge is its outline's innermost point, lower than the oriented box's half width on an L or a T)
+            h = max(2.5, h - (skeleton_rise(skel, style.pitch or PITCH[roof]) if skel else hw * tp))
+        elif flattened and h <= FLATTENED_MAX_M:
+            # a pitched roof the outline cannot carry, drawn flat: at the mapped roof's mean height (its eave plus
+            # half the rise over the footprint's mean half width), not its ridge
+            h = max(2.5, h - 0.5 * hw * box_fill * tp)
         if nf is None:
             # a church: one tall storey (Cluj's St. Michael's, 25 m, came out as three 8 m floors)
             nf = 1 if church else max(1, int(round(h / floor_h)))
@@ -663,7 +681,7 @@ def plan(ring, attrs, neighbours=0, lat=None, lon=None, look=None, town=False, d
     return Spec(ring=ring, floors=nf, floor_h=floor_h, height=h, roof=roof, roof_mat=roof_mat, facade=facade,
                 band=band, shop=shop and not shed and nf >= 1, plain=plain, seed=seed, min_h=0.0, wall=wall,
                 windows=windows, steeple=church and area < 2500, porch=porch, cls=cls,
-                deck=garage and roof == "flat", pitch=style.pitch)
+                deck=garage and roof == "flat", pitch=style.pitch, skel=skel if roof != "flat" else None)
 
 
 class Mesh:
@@ -922,20 +940,34 @@ def roof_skeleton(spec):
     if got is not None:
         return got or None
     got = False
-    ring = np.asarray(spec.ring, np.float64)
-    if spec.roof in ("gabled", "hipped") and spec.cls not in ("pyramid",) and not spec.steeple \
-            and spec.cls not in CHURCH_CLASSES and len(ring) >= 4 and not _box_like(ring):
-        import roofskel
-        eaves = None if roofskel.degenerate(ring.tolist()) else roofskel.offset_ring(ring.tolist(), EAVE_M)
-        sk = roofskel.skeleton(eaves) if eaves is not None else None
-        if sk is not None:
-            nodes, nt, faces = sk
-            gables = []
-            if spec.roof == "gabled":
-                nodes, nt, faces, gables = roofskel.gable(eaves, nodes, nt, faces)
-            got = (eaves, nodes, nt, faces, gables)
+    if spec.cls not in ("pyramid",) and not spec.steeple and spec.cls not in CHURCH_CLASSES:
+        got = skeleton_of(spec.ring, spec.roof)
     spec.skel = got
     return got or None
+
+
+def skeleton_of(ring, roof):
+    """roof_skeleton's roof of a footprint (local ring (n, 2), counter-clockwise) under a roof kind: the tuple, or
+    False (none: not pitched, near its own box, degenerate, or the skeleton failed). Pure."""
+    ring = np.asarray(ring, np.float64)
+    if roof not in ("gabled", "hipped") or len(ring) < 4 or _box_like(ring):
+        return False
+    import roofskel
+    eaves = None if roofskel.degenerate(ring.tolist()) else roofskel.offset_ring(ring.tolist(), EAVE_M)
+    sk = roofskel.skeleton(eaves) if eaves is not None else None
+    if sk is None:
+        return False
+    nodes, nt, faces = sk
+    gables = []
+    if roof == "gabled":
+        nodes, nt, faces, gables = roofskel.gable(eaves, nodes, nt, faces)
+    return (eaves, nodes, nt, faces, gables)
+
+
+def skeleton_rise(sk, pitch):
+    """How far a skeleton roof's ridge stands over its walls' eave (m) at pitch (degrees): its innermost node's
+    distance in from the eaves (EAVE_M out from the walls) up the slope, less the overhang's drop."""
+    return max(0.0, (max(sk[2]) - EAVE_M) * math.tan(math.radians(pitch)))
 
 
 def _box_like(ring):
