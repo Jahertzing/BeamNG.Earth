@@ -522,6 +522,9 @@ local function finishRebase()
   nightlights.transform(xf)
   gasstations.transform(xf)
   sea.transform(xf, msg.anchorId)
+  -- the AI road graph too, into the map again now: the new anchor's own comes later (navgraph.lua)
+  do local okN, errN = pcall(navgraph.transform, xf, msg.anchorId)
+    if not okN then log('W', 'beamngEarth', 'navgraph rebase: ' .. tostring(errN)) end end
   -- a resync with a restarted server keeps the previous session's tiles the same way (st.sessionId
   -- is the new session's): they go once the new session's tiles cover them
   farfield.switchAnchor(msg.anchorId, true, { cx = tr.cx, cy = tr.cy }, st.sessionId)
