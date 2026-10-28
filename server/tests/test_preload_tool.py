@@ -292,6 +292,12 @@ class PlanTest(unittest.TestCase):
         reg = preload.disc_region(39.0, -106.0, 2.0)       # no county's box here
         cov = preload.probe_coverage(NoNet(), tmp.name, reg, [imagery.SOURCES["co_naip2023"]])
         self.assertEqual(cov, {})
+        # a town's small box (Vail: its cache draws nothing at the probe's scale): not probed, every parent asked
+        vail = preload.disc_region(39.640, -106.374, 2.0)
+        self.assertLess(preload.box_tiles(imagery.SOURCES["co_vail"]), preload.PROBE_MIN_TILES)
+        self.assertEqual(preload.probe_coverage(NoNet(), tmp.name, vail, [imagery.SOURCES["co_vail"]]), {})
+        self.assertTrue(any(cs[0].name == "co_vail" for _, _, cs in preload.plan_exports(vail, self.chain)))
+        self.assertGreaterEqual(preload.box_tiles(imagery.SOURCES["co_frederick"]), preload.PROBE_MIN_TILES)
         self.assertTrue(preload.fallthrough(imagery.SOURCES["co_naip2023"]))
         self.assertTrue(preload.fallthrough(imagery.SOURCES["naip"]))
         self.assertFalse(preload.fallthrough(imagery.SOURCES["co_larimer"]))

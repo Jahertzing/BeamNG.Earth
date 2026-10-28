@@ -139,7 +139,8 @@ REGIONAL = {
                    "La Plata County, CO 2025 aerial imagery", (36.98, -108.34, 37.66, -107.46), "export", False, 18,
                    "grey"),
     # The Town of Vail's May 2018 colour flight (cached MapServer, 2 cm cache levels), the valley from West Vail to East
-    # Vail (white past it); ~0.7 s a 1024 px export (2026-10-28). Older than NAIP 2023 but ~10x finer
+    # Vail (white past it); 0.7-14 s a 1024 px export (2026-10-28). Older than NAIP 2023 but ~10x finer. It draws
+    # nothing coarser than its cache (minScale 1:36,000), so the pre-load asks its box without a coverage probe
     "co_vail": ("https://gis.vailgov.com/arcgis/rest/services/Imagery/AerialImagery_2018_Color_cached/MapServer/export?"
                 + ARCGIS_EXPORT, "Town of Vail, CO 2018 aerial imagery", (39.60, -106.46, 39.66, -106.26), "export",
                 False, 18),
