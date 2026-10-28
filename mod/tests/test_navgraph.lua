@@ -325,6 +325,25 @@ do
   T.check(not N.dueInstall(8, 10, true), 'dueInstall: sent 2 s ago: not again yet')
   T.check(N.dueInstall(10 - N.INSTALL_S, 10, true), 'dueInstall: INSTALL_S since: again')
 end
+-- a car put ahead is pushed to speed gently, not in the stock boost's 0.25 s (12 g at 70 mph: smoke, dust, sideways)
+do
+  T.check(math.abs(N.pushTime(26) - 26 / N.PUSH_ACCEL) < 1e-9, 'pushTime: 26 m/s at PUSH_ACCEL')
+  T.check(N.pushTime(2) == N.PUSH_S[1] and N.pushTime(80) == N.PUSH_S[2], 'pushTime: within PUSH_S')
+  T.check(26 / N.pushTime(26) <= 0.5 * 9.81, 'pushTime: under half a g, the tyres keep rolling')
+  local lua = N.pushLua(26)
+  T.check(lua:find('thrusters.applyVelocity(obj:getDirectionVector() * 26.00, 6.50)', 1, true), 'pushLua: ' .. lua)
+  -- every boost a car gets is stretched, the stock respawn's 0.25 s too (gentleLua, once per car)
+  local got = {}
+  _G.thrusters = { applyVelocity = function(vel, dt) got[#got + 1] = dt end }
+  local function v(x) return { length = function() return x end } end
+  assert(loadstring(N.gentleLua()))()
+  assert(loadstring(N.gentleLua()))()          -- (sent again every INSTALL_S: wrapped once)
+  thrusters.applyVelocity(v(13.9), 0.25)
+  thrusters.applyVelocity(v(2), 0.1)
+  T.check(#got == 2 and math.abs(got[1] - 13.9 / N.PUSH_ACCEL) < 1e-6 and got[2] == N.PUSH_S[1],
+    'gentleLua: 14 m/s in ' .. tostring(got[1]) .. ' s, 2 m/s in ' .. tostring(got[2]) .. ' s')
+  _G.thrusters = nil
+end
 -- how near a cut a car is respawned: fresh cars far off, unless this module put them ahead along the player's way
 do
   T.check(N.cutReach(1, 10, nil) == N.CUT_FRESH_M, 'cutReach: a fresh car (the stock respawn): CUT_FRESH_M')

@@ -118,6 +118,15 @@ local function along(line, q)
   return nil
 end
 
+-- Pure: is a car at p (x, y) on the motorway's own lanes at merge m (within its half width, the up or down line)? The
+-- game's road search can give a car in the motorway's right lane near the gore the ramp's edge (both run the same way
+-- there, and the search weighs the heading), and such a car was capped to merge: hard braking at 75 mph.
+function M.onMainline(m, p)
+  local _, off = along(m.up, p)
+  if not off then _, off = along(m.down, p) end
+  return off ~= nil and off <= m.halfWidth
+end
+
 -- Pure: the vehicles on the motorway around merge m: { d = m before the merge point (negative: past it), v = m/s }.
 -- vehicles: { id, pos = {x, y}, vel = {x, y} }; the car itself (self id) left out.
 function M.mainline(m, vehicles, self)
@@ -203,7 +212,7 @@ function M.update(ids, nodes, capped, find, skip)
         local e = nodes[a] and nodes[a].links[b]
         if e and e.oneWay and e.outNode == a then a, b = b, a end
         local m = M.findMerge(nodes, a, b, c.p)
-        if m then
+        if m and not M.onMainline(m, c.p) then
           local edge = nodes[a].links[b]
           cap = M.choose(m.d, sp, edge and edge.speedLimit, M.mainline(m, vehicles, id))
         end
