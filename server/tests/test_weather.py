@@ -318,7 +318,7 @@ class ModMappingTest(unittest.TestCase):
         self.assertGreaterEqual(b["coverage"], 1.5)                    # overcast: the top of the curve
         self.assertEqual(b["cirrusCoverage"], 1)
         self.assertAlmostEqual(b["cloudAboveKm"], 2.967, places=6)
-        self.assertAlmostEqual(b["fogSigma"], 3.912 / 36300, places=12)
+        self.assertAlmostEqual(b["fogSigma"], 3.912 / 200000, places=12)  # 36.3 km, no fog code: clear air
         self.assertAlmostEqual(b["tempC"], 20.71, places=6)
         # an east wind (98 deg) blows west: -x, slightly north (+y)
         self.assertAlmostEqual(b["windDirX"], -math.sin(math.radians(98)), places=6)
