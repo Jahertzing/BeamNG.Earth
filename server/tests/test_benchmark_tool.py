@@ -4,6 +4,8 @@ views, the fixed time), the readiness and safety rules, a whole run against a fa
 the order of the restore and that it happens on every failure path), the compare metrics (against a
 brute-force SSIM) and report, and the GE chunk under luajit (mod/tests/test_benchmark.lua). Nothing
 here talks to the game or the network."""
+import contextlib
+import io
 import json
 import math
 import os
@@ -1005,6 +1007,40 @@ class LuaChunkTest(unittest.TestCase):
                            text=True, timeout=60)
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
         self.assertIn("0 failed", r.stdout)
+
+class CliTest(unittest.TestCase):
+    """The command line reaches the run (2026-10-28: --hide-hud was parsed but main() built the options without it;
+    RunTest.test_hide_hud set options(hide_hud=True) directly and never saw it)."""
+
+    def test_every_run_flag_reaches_the_options(self):
+        got = {}
+
+        def fake_run(game, places, out, opts, clock=None, log=None, meta=None):
+            got["opts"], got["places"] = opts, places
+            return {"places": [], "restore": {"ok": True}}
+        saved = bm.run, bm.Game, bm.git_info, bm.signal.signal
+        bm.run, bm.Game, bm.git_info = fake_run, lambda: None, lambda: {}
+        bm.signal.signal = lambda *a: None
+        tmp = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, tmp)
+        try:
+            argv = ["run", "--label", "cli", "--out", os.path.join(tmp, "run"), "--places", "fells_point",
+                    "--force", "--timeout", "7", "--view-timeout", "8", "--home-timeout", "9", "--settle", "0.5",
+                    "--fps-seconds", "0.25", "--poll", "0.2", "--no-exact", "--wait-backlog", "--png",
+                    "--server-log", "x.log", "--region-quiet", "3", "--weather", "keep", "--hide-hud"]
+            with contextlib.redirect_stdout(io.StringIO()):
+                self.assertEqual(bm.main(argv), 0)
+        finally:
+            bm.run, bm.Game, bm.git_info, bm.signal.signal = saved
+        o = vars(got["opts"])
+        want = dict(force=True, timeout=7.0, view_timeout=8.0, home_timeout=9.0, settle=0.5, fps_seconds=0.25,
+                    poll=0.2, exact=False, backlog=True, png=True, server_log="x.log", region_quiet=3.0,
+                    weather="keep", hide_hud=True)
+        self.assertEqual(set(o), set(vars(bm.options())), "the options main() builds are options()' own")
+        self.assertEqual(set(want), set(o), "a run option without a flag in this test (add it here)")
+        for k, v in want.items():
+            self.assertEqual(o[k], v, f"--{k.replace('_', '-')} did not reach the run")
+        self.assertEqual([p["id"] for p in got["places"]], ["fells_point"])
 
 
 if __name__ == "__main__":
