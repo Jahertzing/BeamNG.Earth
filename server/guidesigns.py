@@ -82,7 +82,8 @@ BILLBOARD_CLEAR_M = 350.0       # m kept from a sign gantry
 BILLBOARD_ADS = 23              # West Coast USA's dragbillboard_sign01 .. 23 (trees.lua bbad01 ..)
 STREET_CLASSES = {"trunk", "primary", "secondary", "tertiary", "residential", "unclassified", "living_street"}
 STREET_MAJOR = {"trunk", "primary", "secondary", "tertiary"}
-BLADE_CAP = (0.15, 0.10)        # a street name blade's capitals: major streets (6"), the rest (4")
+BLADE_CAP = (0.20, 0.15)        # a street name blade's capitals: major streets (8", the MUTCD's over 40 mph), the
+                                # rest (6"; 4" in town reads at ~15 m on a screen: the user, 2026-10-28)
 BLADE_TOP_M = 3.15              # m from the ground to the post's top (the lower blade's bottom: MUTCD 7 ft + the stop
                                 # or yield sign under it on the same corner elsewhere)
 STREET_CLEAR_M = 1.3            # m from the corner's two carriageway edges to the post (the sidewalk's corner)
@@ -1607,8 +1608,8 @@ def street_signs(mesh, col, roads, box, names, ground=None, avoid=(), left_hand=
 
 MAST_ARM = ((0.3, 4.75), (3.7, 6.0), (6.0, 6.1))  # the stock boom's (s_trafficlight_boom_sn) mast arm: its
                                 # underside's height over the foot (m) at m out from the pole (rising to 3.7 m out)
-MAST_SIGN_AT = (1.5, 4.95)      # m out along the arm where a sign may hang (its overhead head from 5.1 m)
-MAST_CAP = 0.20                 # its lettering (8")
+MAST_SIGN_AT = (0.9, 4.95)      # m out along the arm where a sign may hang (its overhead head from 5.1 m)
+MAST_CAP = (0.30, 0.22)         # its lettering: the MUTCD's overhead 12" capitals, smaller for a long name
 MAST_ARM_AXIS = -1.0            # the arm reaches along the boom's local x this way (-1: over the road from the kerb)
 
 
@@ -1651,12 +1652,18 @@ def mast_arm_signs(mesh, roads, box, names, booms, left_hand=False):
         if not cross:
             continue
         cross.sort(key=lambda c: (c[2][1].cls not in STREET_MAJOR, -c[0], c[1]))
-        face, (W, H) = blade_face(cross[0][1], MAST_CAP)
-        if W > MAST_SIGN_AT[1] - MAST_SIGN_AT[0]:
+        span = MAST_SIGN_AT[1] - MAST_SIGN_AT[0]
+        cap = MAST_CAP[0]
+        face, (W, H) = blade_face(cross[0][1], cap)
+        if W > span:                # (a long name: smaller letters, down to MAST_CAP[1])
+            cap = max(MAST_CAP[1], cap * span / W * 0.98)
+            face, (W, H) = blade_face(cross[0][1], cap)
+        if W > span:
             continue                # (too long a name for the arm's free span)
         out = MAST_SIGN_AT[1] - W / 2                           # (as far out as the head lets: the level part)
         mid = np.array([x, y]) + R * (MAST_ARM_AXIS * out)
-        zb = z + _arm_z(out - W / 2) - 0.04 - H                 # (its top under the arm's lowest point over it)
+        zb = z + _arm_z(out) + 0.06 - H                         # (level, its top at the arm over its middle: on a
+        #                                                         rising arm, a bracket at either end)
         o = mid - trav * 0.18                                   # (in front of the arm: the heads' side, the drivers')
         draw_face(mesh, face, (o[0], o[1], zb), _v3(R), -_v3(trav))
         for u in (-W * 0.3, W * 0.3):                          # (its two hangers up to the arm)

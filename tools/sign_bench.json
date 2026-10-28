@@ -1,0 +1,27 @@
+{
+ "version": 1,
+ "about": "Sign legibility views (tools/probe_look.py --set tools/sign_bench.json --variants tools/sign_variants.json): street name blades and mast arm signs at downtown Denver signals, a guide sign gantry on I-25, from a driver's eye at 15-80 m",
+ "defaults": {
+  "date": "2026-10-20",
+  "hour": 11.0,
+  "weather": "clear",
+  "views": [
+   {"name": "d15", "agl": 1.2, "pitch": 2, "fov": 60, "back": 15},
+   {"name": "d30", "agl": 1.2, "pitch": 1, "fov": 60, "back": 30},
+   {"name": "d50", "agl": 1.2, "pitch": 0, "fov": 60, "back": 50},
+   {"name": "d80", "agl": 1.2, "pitch": 0, "fov": 60, "back": 80}
+  ]
+ },
+ "places": [
+  {"id": "sg_colfax_broadway", "name": "E Colfax Ave eastbound at Broadway (signals, mast arms, corner blades)",
+   "lat": 39.74021, "lon": -104.98735, "heading": 90, "group": "look", "tags": ["colorado"]},
+  {"id": "sg_colfax_lincoln", "name": "E Colfax Ave westbound at Lincoln St",
+   "lat": 39.74021, "lon": -104.98558, "heading": 270, "group": "look", "tags": ["colorado"]},
+  {"id": "sg_speer_colfax", "name": "Speer Blvd at Colfax / 14th, southbound approach",
+   "lat": 39.74043, "lon": -104.99512, "heading": 160, "group": "look", "tags": ["colorado"]},
+  {"id": "sg_i25_gantry", "name": "I-25 southbound north of the Broadway exit: guide sign gantry",
+   "lat": 39.7090, "lon": -104.9905, "heading": 180, "group": "look", "tags": ["colorado"],
+   "views": [{"name": "d120", "agl": 1.2, "pitch": 2, "fov": 60, "back": 120},
+             {"name": "d250", "agl": 1.2, "pitch": 1, "fov": 60, "back": 250}]}
+ ]
+}
