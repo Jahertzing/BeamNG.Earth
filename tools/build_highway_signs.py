@@ -155,7 +155,7 @@ def main():
     if a.check:
         with gzip.open(path, "rt", encoding="utf-8") as f:
             d = json.load(f)
-        print(f"{path}: {len(d['ways'])} ways, {len(d['junctions'])} junctions, OSM {d['stamp']}: {summary(d)}")
+        print(f"{path}: {len(d['ways'])} ways, {len(d['junctions'])} junctions, OSM {d.get('stamp', '?')}: {summary(d)}")
         if a.exits:
             list_exits(d, a.exits)
         return
