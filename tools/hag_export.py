@@ -42,8 +42,8 @@ def main():
         items = lid.items(k.bounds())
         print("items", items[:3])
         t = mapcells.CellKey(lidarheights.ZOOM, k.x * 4 + 1, k.y * 4 + 1)
-        url = (f"{lidarheights.TILES}/{t.z}/{t.x}/{t.y}@1x?collection={decklidar.DSM_COLLECTION}&item={items[0][0]}"
-               f"&assets=data&format=npy")
+        url = (f"{lidarheights.TILES}/{t.z}/{t.x}/{t.y}@1x.npy?collection={decklidar.DSM_COLLECTION}"
+               f"&item={items[0][0]}&assets=data")
         body = lid.fetcher.get(url).body
         arr = np.load(io.BytesIO(body), allow_pickle=False)
         print("npy", arr.shape, arr.dtype, [float(np.nanmin(b)) for b in arr.reshape(-1, 256, 256)],

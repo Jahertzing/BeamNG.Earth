@@ -77,7 +77,8 @@ class Dsm:
         """The DSM of one tile: float32 (256, 256), NaN where it has no pixel."""
         import io
         import lidarheights
-        url = f"{lidarheights.TILES}/{z}/{x}/{y}@1x?collection={DSM_COLLECTION}&item={item}&assets=data&format=npy"
+        # (the format as the path's extension: a format= parameter is ignored and the answer is a JPEG)
+        url = f"{lidarheights.TILES}/{z}/{x}/{y}@1x.npy?collection={DSM_COLLECTION}&item={item}&assets=data"
         a = np.load(io.BytesIO(self.fetcher.get(url, kind=kind).body), allow_pickle=False)
         return npy_tile(a)
 
