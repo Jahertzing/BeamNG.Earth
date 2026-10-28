@@ -113,7 +113,8 @@ MODES = ("auto", "game", "alone")
 CPU_SAMPLE_S = 2.0          # --profile: the server tree's CPU sampled this often
 SPLIT_OVERLAP_M = 1000.0    # --split: each stretch reaches this far into its neighbours
 SPLIT_STEP_M = 50.0         # ... its line sampled this often along the route
-SERVER_GB = 6.0             # a server with its workers, about (16.5 GB for two with the OS, 2026-10-28): caps --jobs
+SERVER_GB = 6.5             # a server tree's private memory, about: measured 7.3 GB with 3 far + 4 road workers (the
+                            # server 1.5 GB, each worker 0.5-1.1 GB), ~6.5 with 1 + 1 (2026-10-28 14:15): caps --jobs
 LEG_PART_RE = re.compile(r"^(.*)_(\d+)of(\d+)$")
 WORKER_CPU_RE = re.compile(r"worker (\d+) cpu: (.*)")        # blockworker's debug line
 JOB_RE = re.compile(r"(\w+) (\d+) jobs ([\d.]+) s")
@@ -846,18 +847,20 @@ def stretch(route, i, n, overlap=SPLIT_OVERLAP_M, step=SPLIT_STEP_M):
 
 
 def jobs_for(wanted, n_legs, ram_gb=None):
-    """The servers to run at once: wanted, at most one per leg and SERVER_GB each within the machine's RAM (psutil;
-    unknown: wanted). Returns (jobs, note or None)."""
+    """The servers to run at once: wanted, at most one per leg and SERVER_GB each within 90% of the memory available
+    now (psutil virtual_memory().available: the OS and whatever else runs are already taken off; unknown: wanted).
+    Returns (jobs, note or None)."""
     jobs = max(1, min(int(wanted), max(1, n_legs)))
     if ram_gb is None:
         try:
             import psutil
-            ram_gb = psutil.virtual_memory().total / 2 ** 30
+            ram_gb = psutil.virtual_memory().available / 2 ** 30
         except ImportError:
             return jobs, None
-    cap = max(1, int(ram_gb * 0.8 / SERVER_GB))
+    cap = max(1, int(ram_gb * 0.9 / SERVER_GB))
     if jobs > cap:
-        return cap, f"--jobs {jobs} needs about {jobs * SERVER_GB:.0f} GB; {ram_gb:.0f} GB here: {cap} jobs"
+        return cap, (f"--jobs {jobs} needs about {jobs * SERVER_GB:.0f} GB of memory; {ram_gb:.0f} GB available: "
+                     f"{cap} jobs")
     return jobs, None
 
 

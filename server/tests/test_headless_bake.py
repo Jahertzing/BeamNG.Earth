@@ -126,9 +126,9 @@ class LegsTest(unittest.TestCase):
         self.assertIs(hb.stretch(route, 0, 1), route)
         self.assertEqual(hb.jobs_for(8, 4, ram_gb=64.0), (4, None), "at most one per leg")
         self.assertEqual(hb.jobs_for(8, 16, ram_gb=64.0), (8, None))
-        jobs, note = hb.jobs_for(12, 16, ram_gb=32.0)
-        self.assertEqual(jobs, 4)
-        self.assertIn("4 jobs", note)
+        jobs, note = hb.jobs_for(12, 16, ram_gb=42.0)      # (the PC with the game closed: 63.6 GB, ~21 GB in use)
+        self.assertEqual(jobs, 5)
+        self.assertIn("5 jobs", note)
         self.assertEqual(hb.jobs_for(1, 0, ram_gb=1.0), (1, None))
 
     def test_a_childs_command_carries_the_options(self):
