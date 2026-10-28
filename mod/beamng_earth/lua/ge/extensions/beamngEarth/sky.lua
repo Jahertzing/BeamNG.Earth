@@ -443,6 +443,8 @@ function M.onDeactivateBigMapCallback()
   timer = RESYNC_S -- its time back is the time it opened: re-sync once it is done
 end
 
+local celestialAt = -1e9     -- (ensureCelestial's last look; declared before onLevel, which resets it)
+
 local function onLevel()
   clock, graceUntil, bigMapUntil, mission, pending = 0, M.GRACE_S, 0, false, nil
   celestialAt = -1e9
@@ -466,7 +468,6 @@ end
 -- one. Loaded here when missing, looked at every CELESTIAL_CHECK_S.
 M.CELESTIAL_CHECK_S = 5.0
 M.celestialLoads = 0
-local celestialAt = -1e9
 local function ensureCelestial()
   if rawget(_G, 'core_celestial') or type(extensions) ~= 'table' or type(extensions.load) ~= 'function' then return end
   M.celestialLoads = M.celestialLoads + 1
