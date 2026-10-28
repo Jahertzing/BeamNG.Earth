@@ -22,6 +22,12 @@ What changed in each release of BeamNG.Earth, newest first.
   `world/bake/`. `tools/world.py` shows what is installed (`status`), moves an existing cache's pre-loaded files over
   (`migrate`, a dry run unless `--apply`), backs it up or exports it to another drive (`backup`, `export`, `import`)
   and spot-checks it (`verify`).
+- **Faster route bake**: `tools/headless_bake.py` drives at 80 m/s between waits (the car stands wherever the
+  server has not finished, so the old 27 m/s only stretched the empty stretches: 58 of a route's minutes), finds
+  whether the game is running (`--mode auto`) and, when it is not, gives its server the machine's share of far
+  workers and road processes at below-normal priority instead of one of each at idle; `--jobs 2` bakes the routes
+  at once on a server each. Each leg's summary says where its seconds went (moving, ground, road tiles, far
+  tiles).
 
 ## 1.7.0 beta (2026-10-27)
 

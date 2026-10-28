@@ -9,6 +9,7 @@ import tempfile
 import threading
 import time
 import unittest
+import unittest.mock
 
 import numpy as np
 
@@ -50,6 +51,89 @@ class ServerCommandTest(unittest.TestCase):
             hb.server_command("/u", hb.GAME_PORT, "/c")
         with self.assertRaises(SystemExit):
             hb.main(["--connect", str(hb.GAME_PORT)])
+
+    def test_alone_the_machines_share_below_normal(self):
+        with tempfile.TemporaryDirectory() as user:
+            far, road = hb.alone_workers()
+            cmd = hb.server_command(user, 0, "/c", win=True, mode="alone")
+            self.assertEqual(cmd[cmd.index("--workers") + 1], str(far))
+            self.assertEqual(cmd[cmd.index("--road-processes") + 1], str(road))
+            for a, b in zip(hb.QUIET[::2], hb.QUIET[1::2]):
+                self.assertEqual(cmd[cmd.index(a) + 1], b, "never the game's cores, no map tiles")
+            self.assertEqual(cmd[-2:], ["--nice", "0"], "Windows: the class is start_server's (below normal)")
+            self.assertEqual(hb.server_command(user, 0, "/c", win=False, mode="alone")[-2:], ["--nice", "10"])
+            cmd = hb.server_command(user, 0, "/c", win=True, mode="alone", workers=3, road_processes=2)
+            self.assertEqual(cmd[cmd.index("--workers") + 1], "3", "--jobs: the workers divided")
+            self.assertEqual(cmd[cmd.index("--road-processes") + 1], "2")
+            cmd = hb.server_command(user, 0, "/c", win=True, mode="game", workers=2)
+            self.assertEqual(cmd[cmd.index("--workers") + 1], "2", "--workers given: over the throttle's")
+            self.assertEqual(cmd[cmd.index("--road-processes") + 1], "1", "... the rest stays the throttle's")
+            self.assertEqual(cmd[-2:], ["--nice", "0"])
+        with self.assertRaises(ValueError):
+            hb.server_command("/u", 0, "/c", mode="auto")
+
+    def test_the_machines_share(self):
+        self.assertEqual(hb.alone_workers(24), (6, 4), "the 12-core PC: a far worker per 4 CPUs, a road process per 6")
+        self.assertEqual(hb.alone_workers(24, jobs=2), (3, 2))
+        self.assertEqual(hb.alone_workers(24, jobs=8), (1, 1), "at least one each")
+        self.assertEqual(hb.alone_workers(64), hb.ALONE_MAX)
+        self.assertEqual(hb.alone_workers(2), (1, 1))
+
+    def test_auto_is_alone_unless_the_game_runs(self):
+        self.assertEqual(hb.resolve_mode("game"), "game")
+        self.assertEqual(hb.resolve_mode("alone"), "alone")
+        with self.assertRaises(ValueError):
+            hb.resolve_mode("fast")
+        with unittest.mock.patch.object(hb, "game_running", return_value=True):
+            self.assertEqual(hb.resolve_mode("auto"), "game")
+        with unittest.mock.patch.object(hb, "game_running", return_value=False):
+            self.assertEqual(hb.resolve_mode("auto"), "alone")
+        self.assertIn(hb.game_running(), (True, False), "this machine: told either way, never raises")
+
+
+class LegsTest(unittest.TestCase):
+    def test_legs_shared_out(self):
+        legs = hb.legs_of(["i25", "downtown"], True)
+        self.assertEqual(legs, [("i25", False), ("i25", True), ("downtown", False), ("downtown", True)])
+        self.assertEqual(hb.legs_of(["i25"], False), [("i25", False)])
+        self.assertEqual([hb.leg_label(*lg) for lg in legs], ["i25", "i25_back", "downtown", "downtown_back"])
+        self.assertEqual(hb.parse_legs("i25,downtown_back, i25_back"), [("i25", False), ("downtown", True),
+                                                                        ("i25", True)])
+        self.assertEqual(hb.share_out(legs, 2), [[("i25", False), ("downtown", False)],
+                                                 [("i25", True), ("downtown", True)]])
+        self.assertEqual(hb.share_out(legs, 1), [legs])
+        self.assertEqual(len(hb.share_out(legs[:1], 3)), 1, "no empty jobs")
+
+    def test_a_childs_command_carries_the_options(self):
+        a = argparse.Namespace(speed=80.0, roads_q=1, backlog_q=4, edge_m=160.0, max_wait=180.0, ground_wait=20.0,
+                               cache_dir="/c", world_dir=None, user_dir="/u", rebase_m=None)
+        cmd = hb.child_command(a, [("i25", False), ("downtown", True)], "/out/x", "alone", 3, 2)
+        self.assertEqual(cmd[:2], [sys.executable, os.path.abspath(hb.__file__)])
+        self.assertIn("--child", cmd)
+        self.assertEqual(cmd[cmd.index("--legs") + 1], "i25,downtown_back")
+        self.assertEqual(cmd[cmd.index("--out") + 1], "/out/x")
+        self.assertEqual(cmd[cmd.index("--mode") + 1], "alone")
+        self.assertEqual(cmd[cmd.index("--workers") + 1:cmd.index("--workers") + 4], ["3", "--road-processes", "2"])
+        self.assertEqual(cmd[cmd.index("--speed") + 1], "80.0")
+        self.assertEqual(cmd[cmd.index("--cache-dir") + 1], "/c")
+        self.assertEqual(cmd[cmd.index("--user-dir") + 1], "/u")
+        self.assertNotIn("--world-dir", cmd)
+        self.assertNotIn("--rebase-m", cmd)
+
+    def test_where_the_time_went(self):
+        self.assertEqual(hb.cause_of(["anchor request pending (teleport)"]), "anchor")
+        self.assertEqual(hb.cause_of(["terrain block (128, 0) not ready, 100 m from the edge", "far tiles 1/9"]),
+                         "block")
+        self.assertEqual(hb.cause_of(["ground not final", "road tiles 0/36"]), "ground", "the first reason's")
+        self.assertEqual(hb.cause_of(["road tiles 0/36"]), "roads")
+        self.assertEqual(hb.cause_of(["far tiles 3/400"]), "far")
+        s = {"seconds_by": {"moving": 1055.2, "anchor": 2.0, "block": 0.0, "ground": 29.0, "roads": 180.0,
+                            "far": 211.0}}
+        self.assertEqual(hb.by_text(s), "moving 1055 s, far 211 s, roads 180 s, ground 29 s, anchor 2 s")
+        self.assertEqual(hb.by_text({}), "moving 0 s")
+        self.assertTrue(hb.leg_report("i25", dict(s, km=28.7, route_km=93.2, seconds=1476.0, rebases=2, prepares=40,
+                                                  waits={"count": 9, "seconds": 420.0, "gave_up": 0}))
+                        .startswith("i25: 28.7 of 93.2 km in 1476 s (moving 1055 s, far 211 s"))
 
 
 class RulesTest(unittest.TestCase):
@@ -199,6 +283,12 @@ class DriveTest(unittest.TestCase):
         self.assertGreater(s["prepares"], 0, "terrain-follow asked for blocks")
         self.assertGreaterEqual(s["waits"]["count"], 1, "stood while the roads loaded")
         self.assertEqual(s["waits"]["gave_up"], 0)
+        by = s["seconds_by"]
+        self.assertEqual(set(by), set(hb.CAUSES))
+        self.assertAlmostEqual(sum(by.values()), s["seconds"], delta=1.0, msg="every second has a cause")
+        self.assertGreater(by["moving"], 0.0)
+        self.assertGreater(by["roads"] + by["anchor"], 0.0, "the stand-in's roads take LOAD_S after each anchor")
+        self.assertEqual(s["speed"], 250.0)
         poses = [m for m in srv.got if m["type"] == "pose"]
         self.assertTrue(poses)
         self.assertEqual(poses[-1]["held"], [poses[-1]["anchorId"]])
@@ -249,6 +339,77 @@ class ServerProcessTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             with self.assertRaises(RuntimeError):
                 hb.start_server([sys.executable, "-c", "raise SystemExit(3)"], os.path.join(d, "s.log"), timeout=20)
+
+
+class CommandTest(unittest.TestCase):
+    """main against a stand-in server: the plan read, the legs driven, the run in the manifest with each leg's
+    seconds by cause; --jobs children (child_command patched to a script that writes their summaries) waited for and
+    read back."""
+
+    def plan(self, d, line, dist):
+        anchors, order = rb.plan_anchors({"t": line}, dist, both_ways=False)
+        bd = os.path.join(d, "world", "bake")
+        os.makedirs(bd)
+        rb.write_json(os.path.join(bd, "anchors.json"),
+                      {"version": 1, "pinM": dist * rb.PIN_SHARE, "rebaseDistance": dist, "anchors": anchors,
+                       "routes": {"t": {"name": "test", "anchors": order["t"], "km": 2.4}}})
+        rb.write_json(os.path.join(bd, "routes.json"), {"t": [list(p) for p in line]})
+        return bd
+
+    def args(self, d):
+        return ["--world-dir", os.path.join(d, "world"), "--cache-dir", os.path.join(d, "cache"),
+                "--user-dir", os.path.join(d, "user"), "--out", os.path.join(d, "out")]
+
+    def test_a_run_against_a_server(self):
+        line = [(40.0, -105.0), (40.0 + 2400 * DEG_N, -105.0)]
+        with tempfile.TemporaryDirectory() as d:
+            bd = self.plan(d, line, 900.0)
+            srv = StandIn()
+            self.addCleanup(srv.close)
+            rc = hb.main(["--connect", str(srv.port), "--rebase-m", "900", "--speed", "250", "--max-wait", "20",
+                          "--mode", "game", "--jobs", "2"] + self.args(d))
+            self.assertEqual(rc, 0)
+            man = rb.read_json(os.path.join(bd, rb.MANIFEST))
+            run = man["runs"][-1]
+            self.assertTrue(run["complete"])
+            self.assertEqual((run["driver"], run["mode"], run["speed"], run["jobs"]), ("headless", "game", 250.0, 1),
+                             "--connect: one job, whatever --jobs says")
+            self.assertEqual([lg["route"] for lg in run["legs"]], ["t"])
+            s = run["legs"][0]["summary"]
+            self.assertTrue(s["complete"])
+            self.assertIn("seconds_by", s)
+            out = os.listdir(os.path.join(d, "out"))
+            self.assertEqual(len(out), 1, "one stamped run folder")
+            self.assertTrue(os.path.exists(os.path.join(d, "out", out[0], "t", "summary.json")))
+            self.assertTrue(os.path.exists(os.path.join(d, "out", out[0], "t", "samples.jsonl")))
+
+    def test_jobs_children_read_back(self):
+        line = [(40.0, -105.0), (40.0 + 2400 * DEG_N, -105.0)]
+        with tempfile.TemporaryDirectory() as d:
+            bd = self.plan(d, line, 900.0)
+            cmds = []
+
+            def fake_child(a, legs, out, mode, workers, road_processes):
+                cmds.append((legs, mode, workers, road_processes))
+                script = ("import json, os, sys\n"
+                          "for leg in sys.argv[2].split(','):\n"
+                          "    os.makedirs(os.path.join(sys.argv[1], leg), exist_ok=True)\n"
+                          "    s = {'seconds': 5.0, 'km': 2.4, 'route_km': 2.4, 'complete': leg != 't_back',\n"
+                          "         'rebases': 1, 'prepares': 2, 'seconds_by': {'moving': 5.0},\n"
+                          "         'waits': {'count': 0, 'seconds': 0.0, 'gave_up': 0}}\n"
+                          "    json.dump(s, open(os.path.join(sys.argv[1], leg, 'summary.json'), 'w'))\n")
+                return [sys.executable, "-c", script, out, ",".join(hb.leg_label(*lg) for lg in legs)]
+            with unittest.mock.patch.object(hb, "child_command", fake_child):
+                rc = hb.main(["--rebase-m", "900", "--mode", "alone", "--jobs", "2", "--both-ways"] + self.args(d))
+            self.assertEqual(rc, 1, "a leg that did not finish (t_back) fails the run")
+            self.assertEqual([lg for lg, _, _, _ in cmds], [[("t", False)], [("t", True)]], "a job per leg")
+            far, road = hb.alone_workers(jobs=2)
+            self.assertEqual({(m, w, r) for _, m, w, r in cmds}, {("alone", far, road)}, "the workers divided")
+            run = rb.read_json(os.path.join(bd, rb.MANIFEST))["runs"][-1]
+            self.assertFalse(run["complete"])
+            self.assertEqual(run["jobs"], 2)
+            self.assertEqual([(lg["route"], lg["back"], lg["rc"], lg["summary"]["complete"]) for lg in run["legs"]],
+                             [("t", False, 0, True), ("t", True, 0, False)])
 
 
 if __name__ == "__main__":
