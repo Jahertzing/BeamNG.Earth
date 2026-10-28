@@ -94,8 +94,9 @@ class Lidar:
     def tile(self, item, z, x, y, kind="demand"):
         """The HAG of one tile (uint8 (256, 256), HAG_STEP_M steps)."""
         from PIL import Image
-        url = (f"{TILES}/{z}/{x}/{y}@1x?collection={COLLECTION}&item={item}&assets=data&format=png"
-               f"&rescale=0,{HAG_MAX_M}")
+        # (the format as the path's extension: the tile service ignores a format= parameter and answered JPEG, its
+        # heights blurred by the compression, 2026-10-28; mosaics cached before stay as they were read)
+        url = f"{TILES}/{z}/{x}/{y}@1x.png?collection={COLLECTION}&item={item}&assets=data&rescale=0,{HAG_MAX_M}"
         im = Image.open(io.BytesIO(self.fetcher.get(url, kind=kind).body))
         a = np.asarray(im.convert("L"), np.uint8)
         if a.shape != (256, 256):

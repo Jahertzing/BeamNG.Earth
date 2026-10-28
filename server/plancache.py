@@ -56,6 +56,15 @@ def start_run(cache_dir):
     os.environ[RUN_ENV] = f"{os.getpid()}_{int(time.time())}"
 
 
+def lidar_tag(grader):
+    """The signature's lidar part: 'l<version>' when the grader follows the lidar (decklidar.VERSION: its rules
+    changed, the plans made by the old ones are not used), else ''."""
+    if getattr(grader, "surface", None) is None:
+        return ""
+    import decklidar
+    return f"l{decklidar.VERSION}"
+
+
 def for_grader(cache_dir, grader, widths, wet):
     """The PlanCache of a grading.Grader (its anchor frame; settings that change plans in the signature), or None
     outside a server run. Complete plans are kept in the revisit cache too (persist): a place's next visit (a game
@@ -66,7 +75,8 @@ def for_grader(cache_dir, grader, widths, wet):
     f = grader.frame
     md = getattr(grader, "md", None)
     pc = PlanCache(os.path.join(cache_dir, "plans", run), f.lat0, f.lon0,
-                   f"w{int(widths is not None)}s{int(wet is not None)}")
+                   f"w{int(widths is not None)}s{int(wet is not None)}"
+                   f"{lidar_tag(grader)}")
     pc.persist = (cache_dir, (round(float(f.lat0), 7), round(float(f.lon0), 7), pc.signature,
                               md.versions() if md is not None and hasattr(md, "versions") else None))
     return pc
