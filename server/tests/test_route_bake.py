@@ -45,18 +45,25 @@ class AnchorTest(unittest.TestCase):
             pts = os.path.join(d, "pts.json")
             with open(pts, "w") as f:
                 json.dump({"i25": I25, "downtown": DOWNTOWN}, f)
-            args = ["--cache-dir", os.path.join(d, "cache"), "--user-dir", os.path.join(d, "user")]
+            args = ["--cache-dir", os.path.join(d, "cache"), "--world-dir", os.path.join(d, "world"),
+                    "--user-dir", os.path.join(d, "user")]
             self.assertEqual(rb.main(["plan", "--points", pts, "--rebase-m", "15000"] + args), 0)
             with open(os.path.join(d, "user", *rb.MOD_FILE)) as f:
                 mod = json.load(f)
-            with open(os.path.join(d, "cache", "bake", "anchors.json")) as f:
+            with open(os.path.join(d, "world", "bake", "anchors.json")) as f:     # (the world folder's: kept)
                 server = json.load(f)
             self.assertEqual(mod, server)
             self.assertEqual(mod["pinM"], 15000 * rb.PIN_SHARE)
             self.assertEqual(set(mod["routes"]), {"i25", "downtown"})
+            import cache
             import revisit
-            self.assertEqual(revisit.pinned_anchors(os.path.join(d, "cache")),
-                             {(round(a[0], 7), round(a[1], 7)) for a in mod["anchors"]})
+            self.assertFalse(os.path.exists(os.path.join(d, "cache", "bake")))
+            cache.set_world(os.path.join(d, "world"), os.path.join(d, "cache"), env=False)    # (the server's)
+            try:
+                self.assertEqual(revisit.pinned_anchors(os.path.join(d, "cache")),
+                                 {(round(a[0], 7), round(a[1], 7)) for a in mod["anchors"]})
+            finally:
+                cache.set_world(None, None, env=False)
 
 
 if __name__ == "__main__":
