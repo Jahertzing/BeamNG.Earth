@@ -166,6 +166,8 @@ def traffic_summary(path):
         # (navgraph.lua keepRouteLua: each car's route kept or dropped at a new map)
         "routes_kept": (nav[-1].get("routesKept") or 0) - (nav[0].get("routesKept") or 0),
         "routes_dropped": (nav[-1].get("routesDropped") or 0) - (nav[0].get("routesDropped") or 0),
+        # (mergeassist.lua: ramp cars given a speed cap to merge into a gap)
+        "merge_assists": (nav[-1].get("mergeAssists") or 0) - (nav[0].get("mergeAssists") or 0),
         "nav_apply_ms_last": nav[-1].get("applyMs"),
         "guard_max_ms": max((n.get("guardMaxMs") or 0) for n in nav),
     }
