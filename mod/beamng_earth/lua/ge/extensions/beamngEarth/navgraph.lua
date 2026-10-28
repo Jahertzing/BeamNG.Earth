@@ -690,21 +690,51 @@ function M.takeChoice(o)
   return M.choice
 end
 
+-- The game's own traffic amount here: the setting's (gameplay_traffic.getIdealSpawnAmount without its subtraction) less
+-- the player's other cars. The stock subtraction counts every active vehicle that is not flagged parked, and parked
+-- cars still spawning are not flagged yet: at a dense spot on I-25 (16 of them) the amount was -9 and no traffic came
+-- (2026-10-28, a level started at the player's last spot).
+local function ownAmount(gt)
+  local okB, base = pcall(gt.getIdealSpawnAmount, nil, false)
+  local okV, vs = pcall(function() return require('beamngEarth/collisionfoci').vehicles() end)
+  return M.autoAmount(okB and tonumber(base) or nil, okV and vs or {}, playerId())
+end
+
+-- Pure: base (the setting's amount; nil unknown) less the 'player' vehicles (collisionfoci.vehicles) other than me.
+function M.autoAmount(base, vehicles, me)
+  if not base then return nil end
+  local others = 0
+  for _, v in ipairs(vehicles) do
+    if v.kind == 'player' and v.id ~= me then others = others + 1 end
+  end
+  return math.max(0, base - others)
+end
+
+-- Set up n traffic cars, plus the setting's extra pooled ones (as the stock automatic amount does).
+local function setupCars(gt, n, police)
+  local st = rawget(_G, 'settings')
+  local extra = st and st.getValue and st.getValue('trafficExtraVehicles') and math.max(0, tonumber(st.getValue('trafficExtraAmount')) or 0) or 0
+  local ok, err = pcall(gt.setupTraffic, n + extra, { police = police, activeAmount = n })
+  if not ok then log('W', 'beamngEarth', 'navgraph: setupTraffic: ' .. tostring(err)) end
+end
+
 local function startTraffic()
   started = true
   M.restoreChoice()       -- freeroam's own spawn time has passed
   local c = M.choice
   local gt = c.traffic and trafficSystem() or nil
   if gt and gt.getState() ~= 'on' then
+    local auto = ownAmount(gt)
     local amount = c.trafficAmount ~= 0 and c.trafficAmount or -1
-    if c.mode then
-      local okA, auto = pcall(gt.getIdealSpawnAmount, nil, true)
-      amount = M.modeAmount(c.mode, okA and tonumber(auto) or nil)
-      log('I', 'beamngEarth', string.format('AI traffic %s: %s cars (the game\'s own amount here: %s)', c.mode,
-        amount < 0 and 'the game\'s' or tostring(amount), tostring(okA and auto or '?')))
-    end
-    if amount ~= 0 then
-      local ok, err = pcall(gt.setupTraffic, amount, { police = c.police })
+    if c.mode then amount = M.modeAmount(c.mode, auto) end
+    if amount < 0 then amount = auto or -1 end
+    log('I', 'beamngEarth', string.format('AI traffic %s: %s cars (the game\'s own amount here: %s)', tostring(c.mode or 'chosen'),
+      amount < 0 and 'the game\'s' or tostring(amount), tostring(auto or '?')))
+    if amount > 0 then
+      setupCars(gt, amount, c.police)
+      watch = { untilT = os.clock() + M.WATCH_S, seenOn = false, done = false }
+    elseif amount < 0 then
+      local ok, err = pcall(gt.setupTraffic, -1, { police = c.police })
       if not ok then log('W', 'beamngEarth', 'navgraph: setupTraffic: ' .. tostring(err)) end
       watch = { untilT = os.clock() + M.WATCH_S, seenOn = false, done = false }
     end
@@ -725,13 +755,9 @@ local function restartTraffic()
       gone = gone + 1
     end
   end
-  local okA, auto = pcall(gt.getIdealSpawnAmount, nil, false)
-  local n = M.restartAmount(M.choice, okA and auto or nil)
+  local n = M.restartAmount(M.choice, ownAmount(gt))
   log('W', 'beamngEarth', string.format('navgraph: the traffic went off on its own: %d dropped cars deleted, %d set up again', gone, n))
-  if n > 0 then
-    local ok, err = pcall(gt.setupTraffic, n, { police = M.choice.police })
-    if not ok then log('W', 'beamngEarth', 'navgraph: setupTraffic: ' .. tostring(err)) end
-  end
+  if n > 0 then setupCars(gt, n, M.choice.police) end
 end
 
 -- The player teleported: the traffic cars go inactive (no physics: their old positions have no ground) and come

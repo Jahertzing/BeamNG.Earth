@@ -228,4 +228,12 @@ do
   T.check(N.restartAmount({ traffic = false, mode = 'normal' }, 7) == 0 and N.restartAmount({ traffic = true, mode = 'off' }, 7) == 0,
     'restartAmount: no traffic chosen: none')
 end
+-- the game's own amount here: the setting's less the player's other cars only (not the parked cars still spawning)
+do
+  local vs = { { id = 1, kind = 'player' }, { id = 2, kind = 'parked' }, { id = 3, kind = 'parked' }, { id = 4, kind = 'traffic' },
+    { id = 5, kind = 'player' } }
+  T.check(N.autoAmount(7, vs, 1) == 6, 'autoAmount: less the player\'s other car, not the parked or traffic ones')
+  T.check(N.autoAmount(1, vs, 1) == 0 and N.autoAmount(nil, vs, 1) == nil, 'autoAmount: never below 0; unknown: nil')
+  T.check(N.modeAmount('normal', N.autoAmount(7, {}, 1)) == -1, 'normal: the caller then sets up the own amount explicitly')
+end
 T.done('test_navgraph')
