@@ -85,7 +85,23 @@ do
     for _, src in pairs(gc.SOURCES) do if p == src.items then return table.concat(lines, '\n') end end
     return realRead and realRead(p)
   end
-  T.check(gc.ensure() == true, 'ensure makes the objects')
+  -- the grass materials the tint acts on (stock factors), the shrubs' not
+  local mLong = createObject('Material')
+  mLong:setField('baseColorFactor', 0, '0.9 0.95 0.8 1')
+  mLong:registerObject('m_long_grass_distant')
+  local mShrub = createObject('Material')
+  mShrub:registerObject('m_shrubs_near')
+  gc.TEX_LINEAR = { m_long_grass_distant = { 0.1, 0.2, 0.05 }, m_shrubs_near = { 0.1, 0.1, 0.1 } }
+  T.check(gc.ensure() == true, 'ensure makes the objects ' .. tostring(gc.status().error))
+  T.check(gc.setTint({ 140, 120, 80 }) == 1, 'tint: the grass material set')
+  local bcf = tostring(mLong.fields.baseColorFactor)
+  T.check(bcf ~= '0.9 0.95 0.8 1' and mShrub.fields.baseColorFactor == nil, 'tint: grass tinted, shrubs not (' .. bcf .. ')')
+  T.check(gc.setTint({ 141, 120, 80 }) == 0, 'tint: a tiny change is not applied (a material reload each)')
+  T.check(gc.setTint(nil) == 0 and gc.status().tint[1] == 141, 'tint: none in the message keeps the last')
+  gc.setTintEnabled(false)
+  T.check(mLong.fields.baseColorFactor == '0.9000 0.9500 0.8000 1.0000', 'tint off: the stock factor back')
+  gc.setTintEnabled(true)
+  T.check(tostring(mLong.fields.baseColorFactor) ~= '0.9000 0.9500 0.8000 1.0000', 'tint on again: applied at once')
   local o = scenetree.findObject(gc.PREFIX .. gc.DEFS[1].src)
   T.check(o and o.fields.useNewPlacement == '1' and o.fields.useNewPlacementGpu == '0', 'CPU placement over the stock GPU setting')
   T.check(o.fields.layer == gc.DEFS[1].layer and o.canSave == false, 'on our layer, not saved')
@@ -130,7 +146,7 @@ do
   local nNormal = tonumber(scenetree.findObject(long).fields.maxElements)
   T.check(gc.setReach('far') == true and gc.status().reach == 'far', 'reach far')
   local oFar = scenetree.findObject(long)
-  T.check(oFar.fields.radius == '200' and oFar.fields.dissolveRadius == '150', 'far reach: long grass to 200 m')
+  T.check(oFar.fields.radius == '200' and oFar.fields.dissolveRadius == '100', 'far reach: long grass to 200 m, fading from 100 m')
   T.check(tonumber(oFar.fields.maxElements) > nNormal, 'far reach: more elements (' .. nNormal .. ' -> ' .. oFar.fields.maxElements .. ')')
   T.check(gc.setReach('near') == true and scenetree.findObject(long).fields.radius == '70'
     and scenetree.findObject(long).fields.dissolveRadius == '45', 'near reach: the old 70 m long grass')
@@ -200,6 +216,37 @@ do
     'a reach a definition lacks is its normal one; its fields kept')
   local _, k1 = gc.reachFor({ share = 1 }, 'far')
   T.check(k1 == 1, 'no reach: stock radius, factor 1')
+end
+
+-- the soft edge and the ground's colour (the user, 2026-10-28: the grass "just abruptly stops so close by")
+do
+  local gc = require('beamngEarth/groundcover')
+  -- past 'near' the fade starts at FADE_SHARE of the radius at the latest
+  for _, d in ipairs(gc.DEFS) do
+    for _, r in ipairs({ 'normal', 'far', 'max' }) do
+      local f = gc.reachFor(d, r)
+      T.check(f.dissolveRadius <= f.radius * gc.FADE_SHARE + 1e-9, (d.name or d.src) .. ' ' .. r .. ': a long fade')
+    end
+    local fn = gc.reachFor(d, 'near')
+    local r = d.reach.near
+    T.check(fn.dissolveRadius == r[2], (d.name or d.src) .. ': near keeps its old tuning')
+  end
+  -- tintFactor: strength 1 gives the photo's colour, 0 the stock one; bounded
+  local function seen(f, tex) return { f[1] * tex[1], f[2] * tex[2], f[3] * tex[3] } end
+  local tex, orig = { 0.10, 0.20, 0.05 }, { 1, 1, 1, 1 }
+  local f = gc.tintFactor(orig, tex, { 140, 120, 80 }, 1, 1)
+  local v = seen(f, tex)
+  local function lin(c) c = c / 255; return c <= 0.04045 and c / 12.92 or ((c + 0.055) / 1.055) ^ 2.4 end
+  T.check(math.abs(v[1] - lin(140)) < 1e-6 and math.abs(v[2] - lin(120)) < 1e-6 and math.abs(v[3] - lin(80)) < 1e-6,
+    'tint 1: the photo colour')
+  local f0 = gc.tintFactor({ 0.9, 0.8, 0.7, 1 }, tex, { 140, 120, 80 }, 0, 1)
+  T.check(math.abs(f0[1] - 0.9) < 1e-9 and math.abs(f0[2] - 0.8) < 1e-9 and f0[4] == 1, 'tint 0: the stock factor')
+  local fh = gc.tintFactor(orig, tex, { 140, 120, 80 }, 0.5, 1)
+  T.check(fh[1] > 1 and fh[1] < f[1] and fh[2] < 1 and fh[2] > f[2], 'tint 0.5: between')
+  local fb = gc.tintFactor(orig, { 0.001, 0.9, 0.9 }, { 255, 0, 0 }, 1, 1)
+  T.check(fb[1] == gc.TINT_RANGE[2] and fb[2] == gc.TINT_RANGE[1], 'bounded')
+  local f2 = gc.tintFactor(orig, tex, { 140, 120, 80 }, 1, 2)
+  T.check(math.abs(f2[2] / f[2] - 2) < 1e-6, 'brightness on top')
 end
 
 T.done('test_surface_layers')

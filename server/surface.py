@@ -857,6 +857,52 @@ def photo_lawns(out_dir, ter_name, mask_names_, rgb):
     return k
 
 
+# The 3D grass's colour (the user, 2026-10-28: the grass "just abruptly stops so close by"): the stock grass is
+# Hirochi's bright green, on a photo that is tan prairie half the year, so where it ends the edge is a line of colour.
+# Open-world games give each blade the ground's colour (Ghost of Tsushima: the terrain albedo at the blade's root);
+# GroundCover cannot sample the ground, so the mod tints the grass materials to the mean photo colour of the block's
+# grassy samples near its centre (where the player is: the block follows within 260 m), groundcover.lua setTint.
+TINT_CENTRE = 0.6           # share of the block's edge the mean is taken over (its middle)
+TINT_MIN_SHARE = 0.02       # fewer grassy samples than this share of that square: no tint (keep the last)
+
+
+def grass_tint(out_dir, ter_name, rgb):
+    """Detail mode: the mean ground photo colour (sRGB 0-255, [r, g, b]) under the block's grass layers (GRASS and
+    LAWN, else DUSTY: the scrub's grass) in the middle TINT_CENTRE of the block (rgb (px, px, 3), row 0 = north, the
+    block's footprint), or None (too few grassy samples)."""
+    lay = _ter_global_layers(os.path.join(out_dir, ter_name))
+    n = lay.shape[0]
+    px = rgb.shape[0]
+    rows = np.clip(((n - 1 - np.arange(n)) + 0.5) * px / n, 0, px - 1).astype(np.int64)
+    cols = np.clip((np.arange(n) + 0.5) * px / n, 0, px - 1).astype(np.int64)
+    m = int(n * (1 - TINT_CENTRE) / 2)
+    lay = lay[m:n - m, m:n - m]
+    c = np.asarray(rgb)[rows[m:n - m, None], cols[None, m:n - m]].astype(np.float64)
+    need = TINT_MIN_SHARE * lay.size
+    for sel in ((lay == GRASS) | (lay == LAWN), lay == DUSTY):
+        if sel.sum() >= need:
+            return [round(float(v), 1) for v in c[sel].mean(0)]
+    return None
+
+
+def _ter_global_layers(path):
+    """A .ter's layer map (n, n) in MATERIALS indices (row 0 = south; holes TER_HOLE)."""
+    with open(path, "rb") as f:
+        data = f.read()
+    n = struct.unpack_from("<I", data, 1)[0]
+    off = 5 + 2 * n * n
+    lay = np.frombuffer(data[off:off + n * n], np.uint8).reshape(n, n)
+    o = off + n * n + 4
+    names = []
+    for _ in range(struct.unpack_from("<I", data, off + n * n)[0]):
+        names.append(bytes(data[o + 1:o + 1 + data[o]]).decode())
+        o += 1 + data[o]
+    order = [m for m, _ in MATERIALS]
+    to_glob = np.full(256, heightmap.TER_HOLE, np.uint8)
+    to_glob[:len(names)] = [order.index(m) if m in order else DIRT for m in names]
+    return to_glob[lay]
+
+
 def used_materials(idx):
     """The MATERIALS indices a block's .ter lists: those its samples use (holes aside), plus what photo_lawns may
     turn them into (LAWN -> DIRT, SNOW -> LOOSE), in MATERIALS order. Each distinct material a .ter lists costs

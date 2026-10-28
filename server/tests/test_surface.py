@@ -53,6 +53,26 @@ class ClassifyTest(unittest.TestCase):
         grass = np.full((2, 2), 30, np.uint8)
         self.assertTrue((sf.classify(grass, np.zeros((2, 2)), 2.0, np.full((2, 2), 39.3), np.full((2, 2), -76.6)) == sf.GRASS).all())
 
+    def test_grass_tint_is_the_photo_under_the_grass(self):
+        """The 3D grass's colour (groundcover.lua setTint): the mean photo colour of the grassy samples in the middle of
+        the block; none with too few of them."""
+        import tempfile
+        n = 32
+        idx = np.full((n, n), sf.DIRT, np.uint8)
+        idx[:, : n // 2] = sf.GRASS                 # grass west
+        rgb = np.zeros((64, 64, 3), np.uint8)
+        rgb[:, :32] = (150, 130, 90)                # tan prairie under it
+        rgb[:, 32:] = (90, 90, 90)
+        with tempfile.TemporaryDirectory() as d:
+            sf.write_ter(d, "b.ter", np.zeros((n, n), np.uint16), idx)
+            self.assertEqual(sf.grass_tint(d, "b.ter", rgb), [150.0, 130.0, 90.0])
+            idx[:] = sf.DUSTY
+            idx[:, n // 2:] = sf.DIRT
+            sf.write_ter(d, "c.ter", np.zeros((n, n), np.uint16), idx)
+            self.assertEqual(sf.grass_tint(d, "c.ter", rgb), [150.0, 130.0, 90.0], "scrub: its grass")
+            sf.write_ter(d, "e.ter", np.zeros((n, n), np.uint16), np.full((n, n), sf.DIRT, np.uint8))
+            self.assertIsNone(sf.grass_tint(d, "e.ter", rgb), "no grass: none")
+
     def test_photo_lawns_only_where_the_photo_is_green(self):
         import tempfile
         n = 16

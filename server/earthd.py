@@ -1924,6 +1924,10 @@ class Server:
                     surfacemod.photo_lawns(self.out_dir, info["ter"], info["layers"], photo[0])
                 except Exception as e:
                     log.info("photo lawns %s: %s", (anchor.id, cx, cy), e)
+                try:                # the 3D grass's colour (groundcover.lua setTint)
+                    info["grassTint"] = surfacemod.grass_tint(self.out_dir, info["ter"], photo[0])
+                except Exception as e:
+                    log.info("grass tint %s: %s", (anchor.id, cx, cy), e)
         info["seconds"] = time.perf_counter() - t0
         info["zoom"] = anchor.hm_zoom
         return info
@@ -3659,6 +3663,8 @@ class Connection:
         if info.get("base"):        # detail mode: the base photo over the block's world size
             out["base"] = f"{self.s.vfs_dir}/{info['base']}"
             out["baseSize"] = self.s.layout.block * heightmap.SQUARE
+        if info.get("grassTint"):   # detail mode: the photo's colour under the grass (groundcover.lua setTint)
+            out["grassTint"] = info["grassTint"]
         if info.get("ter"):         # the same block as the engine's terrain file (swapped in, no import)
             out["ter"] = f"{self.s.vfs_dir}/{info['ter']}"
         return out
