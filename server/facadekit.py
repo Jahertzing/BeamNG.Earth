@@ -82,9 +82,10 @@ SHOP_REVEAL_UV = (100 / 1024, 110 / 1024, 1.0 - 760 / 1024, 1.0 - 742 / 1024)   
 # Curtain walls' aluminium (fins()): the metal sheet's office bands (buildings.BAND_OFFICE: 5 bays, BAND_OFFICE2: 4)
 # have their thick mullions on the bay edges (measured: band 0's 15 px wide centred on k * 204.8, band 1's on k * 256)
 FINS = True                         # False: the curtain walls flat as before
-FIN_W, FIN_D = 0.07, 0.12           # m: a fin's width, how far it stands out
+FIN_W, FIN_D = 0.10, 0.25           # m: a fin's width, how far it stands out (7 x 12 cm hardly read from the street,
+                                    # 2026-10-28's shots)
 FIN_END_M = 0.3                     # m: no fin this close to a wall's corner
-LEDGE_H, LEDGE_D = 0.2, 0.08        # m: a floor line's spandrel ledge, its height and depth
+LEDGE_H, LEDGE_D = 0.2, 0.15        # m: a floor line's spandrel ledge, its height and depth
 OFFICE_BANDS = ((0, 5), (1, 4))
 FIN_UV = (202 / 1024, 208 / 1024, 1.0 - 230 / 1024, 1.0 - 20 / 1024)   # band 0's bay-edge mullion (unlit at night)
 # House fronts (2026-10-28, Frederick's suburban streets): the pitched roofs' overhang closed (a soffit and a fascia:
@@ -101,6 +102,9 @@ VENEER = True                       # False: no stone fronts
 VENEER_SHARE = {"us_west": 0.4, "us_plains": 0.3, "us_south": 0.25, "us_east": 0.2}   # of the region's pitched houses
 VENEER_H = (0.9, 1.2)               # m over the floors' base (hashed), but under the front windows' sills
 VENEER_OUT = 0.04                   # m it stands out from the wall
+VENEER_UV_M = (1.8, 0.9)            # m of wall per repeat of the stone texture (t_stone_brick_irregular: 12 courses):
+                                    # long thin stones in ~7.5 cm courses, ledgestone (at the walls' 3 m it read as
+                                    # big ashlar blocks, 2026-10-28's shots)
 VENEER_TINTS = (0, 1, 3, 4)         # buildings.WALL_TINTS[STONE]: limestone, honey, grey, warm grey
 VENEER_CLEAR_M = 0.05               # m kept from a door's, garage door's or window's trims
 VENEER_PIER_M = 1.4                 # m: a garage door's stone pier at most this wide
@@ -916,15 +920,27 @@ def gutters(m, spec, ring, gmin, z_eave, mat_idx, er=None):
         return
     ps = porch_span(spec, ring) if spec.door and spec.door[0] == f else None
     hw_ = DOWNSPOUT_W / 2
-    z_top = ze - FASCIA_H - 0.02                        # just under the soffit at the eave edge
-    z_el = z_top - DOWNSPOUT_W
-    wg = B.EAVE_M + GUTTER_D / 2
+    # one offset from the wall up into the gutter (a straight sloped tube; three boxes read as a zigzag from below,
+    # 2026-10-28's shots): its top under the fascia's bottom edge and the soffit, reaching the gutter's bottom
+    w1 = B.EAVE_M + GUTTER_D / 2 + hw_
+    k = (zg0 - (ze - FASCIA_H - 0.005)) / max(w1 - B.EAVE_M - 0.005, 0.02)
+    za = zg0 - k * w1                                   # the tube's top at the wall
+    T = DOWNSPOUT_W                                     # (its height)
+    N = _out3(n)
+
+    def p(s, w, z):
+        q = a + d * s + n * w
+        return float(q[0]), float(q[1]), float(z)
     for s in (DOWNSPOUT_IN, L - DOWNSPOUT_IN):
         if ps is not None and ps[0] - hw_ < s < ps[1] + hw_:
             continue
-        _box_faces(m, a, d, n, s - hw_, s + hw_, 0.0, DOWNSPOUT_W, gmin - 0.1, z_el, mat, "flr")    # down the wall
-        _box_faces(m, a, d, n, s - hw_, s + hw_, 0.0, wg + hw_, z_el, z_top, mat, "flrtu")         # out under it
-        _box_faces(m, a, d, n, s - hw_, s + hw_, wg - hw_, wg + hw_, z_top, zg0, mat, "fblr")      # up to the gutter
+        s0, s1 = s - hw_, s + hw_
+        _box_faces(m, a, d, n, s0, s1, 0.0, DOWNSPOUT_W, gmin - 0.1, za - T / 2, mat, "flr")    # down the wall
+        for sx, want in ((s0, -_out3(d)), (s1, _out3(d))):
+            _oq(m, [p(sx, 0.0, za - T), p(sx, w1, zg0 - T), p(sx, w1, zg0), p(sx, 0.0, za)], _PLAIN, mat, want)
+        _oq(m, [p(s0, 0.0, za), p(s1, 0.0, za), p(s1, w1, zg0), p(s0, w1, zg0)], _PLAIN, mat, _UP)
+        _oq(m, [p(s0, 0.0, za - T), p(s1, 0.0, za - T), p(s1, w1, zg0 - T), p(s0, w1, zg0 - T)], _PLAIN, mat, _DOWN)
+        _oq(m, [p(s0, w1, zg0 - T), p(s1, w1, zg0 - T), p(s1, w1, zg0), p(s0, w1, zg0)], _PLAIN, mat, N)
 
 
 def _unit(x):
@@ -986,7 +1002,7 @@ def veneer(m, spec, ring, gmin, z_eave, mat_idx):
     pier_top = min(base + spec.floor_h, z_eave - 0.3)
     if top - base < 0.3:
         top = None
-    su = B.SIDING_UV_M
+    uu, uv_ = VENEER_UV_M
     z0 = gmin - 0.3
     pieces = []
     spans = [(0.0, L)]
@@ -1003,7 +1019,7 @@ def veneer(m, spec, ring, gmin, z_eave, mat_idx):
         spans = nxt
     for (s0, s1), z1 in ([(sp, top) for sp in spans if sp[1] - sp[0] >= 0.15] if top is not None else []) \
             + [(p, pier_top) for p in piers]:
-        uv = ((s0 / su, z0 / su), (s1 / su, z0 / su), (s1 / su, z1 / su), (s0 / su, z1 / su))
+        uv = ((s0 / uu, z0 / uv_), (s1 / uu, z0 / uv_), (s1 / uu, z1 / uv_), (s0 / uu, z1 / uv_))
         _box_faces(m, a, d, n, s0, s1, 0.0, VENEER_OUT, z0, z1, mat, "flrt", uv)
         pieces.append((z0, z1, s0, s1))
     return pieces
