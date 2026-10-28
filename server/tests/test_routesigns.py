@@ -195,7 +195,7 @@ class Tile(unittest.TestCase):
         out = gs.tile(self.frame, self.roads, box, items=self.items)
         P, T, _, _, M = out["mesh"]
         P = P + np.array([box[0], box[1], 0.0])
-        t = T[M == gs.M_TEXT]
+        t = T[M == gs.M_LETTER]
         self.assertTrue(len(t))
         a = P[t[:, 0]]
         nrm = np.cross(P[t[:, 1]] - a, P[t[:, 2]] - a)
@@ -211,7 +211,7 @@ class Tile(unittest.TestCase):
         out = gs.tile(self.frame, self.roads, box, items=[(it, (x, y))])
         P, T, _, _, M = out["mesh"]
         P = P + np.array([box[0], box[1], 0.0])
-        text = P[np.unique(T[M == gs.M_TEXT])]
+        text = P[np.unique(T[M == gs.M_LETTER])]
         self.assertLess(text[:, 0].max(), -5.0)                        # the southbound side: west
         self.assertGreater(text[:, 2].min(), 1.7)
         self.assertIsNotNone(out["col"])                                # its posts
