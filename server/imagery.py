@@ -935,7 +935,10 @@ class Imagery:
                     for ty in range(int((fy[0] - r_px) // TILE), int((fy[0] + r_px) // TILE) + 1):
                         for tx in range(int((fx[0] - r_px) // TILE), int((fx[0] + r_px) // TILE) + 1):
                             key = (src, z, (tx >> k) << k, (ty >> k) << k)   # one child per parent
-                            if key not in seen and in_bounds(*key):
+                            # (the whole parent against the box: its first child alone left the parents its west or
+                            # north edge cuts through unfetched, and lazy_ready waited for their children inside)
+                            if key not in seen and range_in_bounds(src, z, key[2], key[2] + (1 << k) - 1, key[3],
+                                                                   key[3] + (1 << k) - 1):
                                 seen.add(key)
                                 want.append(key)
         with self._warm_cv:
@@ -1032,8 +1035,13 @@ class Imagery:
         path, miss = self._paths(src, z, x | last, y | last)
         if cachemod.exists(path) or cachemod.exists(miss):
             return True
+        # the coverage of a child inside the source's box (the first one may be outside it: "outside" for the parent)
+        inside = next(((src, z, cx, cy) for cy in range(y, (y | last) + 1) for cx in range(x, (x | last) + 1)
+                       if in_bounds(src, z, cx, cy)), None)
+        if inside is None:
+            return True
         with self._lock:
-            return self._probe_status(key) == "outside"
+            return self._probe_status(inside) == "outside"
 
     def lazy_ready(self, frame, x0, y0, size, px):
         """True when render(frame, x0, y0, size, px) would find every lazy-source tile it can use on disk

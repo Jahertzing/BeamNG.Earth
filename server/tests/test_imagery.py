@@ -17,6 +17,7 @@ import unittest
 from concurrent import futures
 from dataclasses import replace
 from pathlib import Path
+from unittest import mock
 
 import numpy as np
 from PIL import Image
@@ -879,6 +880,40 @@ class ExportImageryTest(unittest.TestCase):
                     break
             time.sleep(0.02)
         self.assertFalse([r for r in self.requests[n:] if r[0] == "md6in"])
+
+    def test_parent_cut_by_the_west_edge_of_a_box(self):
+        """A regional source whose box's west edge cuts through an export parent: the parent is fetched for its children
+        inside (its first child, outside, made warm() skip it and lazy_ready wait for the others for good: the headless
+        bake stood 90 s on "ground not final" at such blocks, 2026-10-28)."""
+        z = 17
+        fx, fy = imagery.mercator_px(np.array([self.LAT]), np.array([self.LON]), z)
+        tx, ty = int(fx[0]) // imagery.TILE, int(fy[0]) // imagery.TILE
+        gx, gy = tx & ~3, ty & ~3
+        west = (gx + 2) / 2 ** z * 360 - 180           # the box starts at the parent's third column
+        cut = replace(imagery.SOURCES["md6in"], bounds=(37.88, west, 39.73, -75.04))
+
+        def serve_export(z_, x, y, size, name):
+            a = np.zeros((size, size, 3), np.uint8) + np.array((70, 100, 80), np.uint8)
+            a[::2, ::2] += 3
+            b = io.BytesIO()
+            Image.fromarray(a).save(b, "JPEG", quality=95)
+            return 200, b.getvalue()
+
+        def serve_xyz(name, z_, x, y):
+            a = np.zeros((256, 256, 3), np.uint8) + np.array((200, 30, 30), np.uint8)
+            a[::2, ::2] += 6
+            return 200, png(a)
+        self.requests = []
+        net = netfetch.Fetcher(transport=ExportTransport(serve_export, serve_xyz, self.requests, by_name=True),
+                               sleep=lambda s: None, policies=FAST)
+        with mock.patch.dict(imagery.SOURCES, {"md6in": cut}):
+            im = self.track(imagery.Imagery(self.tmp.name, ("md6in", "naipusda", "usgs"), fetcher=net, tone=0.0))
+            self.assertFalse(imagery.in_bounds(cut, z, gx, gy) or not imagery.in_bounds(cut, z, gx + 2, gy))
+            self.assertEqual(self.warm(im, [(0.0, 0.0)], radius=300.0), [])
+            self.assertIn(("md6in", z - 2, gx >> 2, gy >> 2), self.requests, "the cut parent fetched")
+            x0 = (gx + 2) / 2 ** z * 360 - 180
+            e, _, _ = self.frame.geodetic_to_enu(self.LAT, x0 + 0.001, 0.0)     # a block inside the box, by its edge
+            self.assertTrue(im.lazy_ready(self.frame, float(e) - 64.0, -64.0, 128.0, 128))
 
     def test_regional_source_never_probed_outside_its_area(self):
         """A regional source's coverage probe is not fetched for a tile outside its bounds (2026-10-15: Vermont,
