@@ -179,7 +179,7 @@ def parts(frame, cells, box, reach=REACH_M, clip=False, worn=None, gauges=None):
     its points was profiled for each cell and tile: _clip); the bridges stay whole (a deck runs between its ends)."""
     cells = list(cells)
     near = (box[0] - reach, box[1] - reach, box[2] + reach, box[3] + reach)
-    seen, out = set(), []
+    seen, out, old_lines = set(), [], set()
     for feats in cells:
         if feats is None or len(feats) == 0 or "subtype" not in feats.attrs:
             continue
@@ -196,6 +196,8 @@ def parts(frame, cells, box, reach=REACH_M, clip=False, worn=None, gauges=None):
                 continue
             c = got[0]
             seen.add(fid)
+            if got[1]:
+                old_lines.add(fid)
             if worn is not None and got[1]:
                 worn[fid] = got[1]
             if gauges is not None:
@@ -216,10 +218,81 @@ def parts(frame, cells, box, reach=REACH_M, clip=False, worn=None, gauges=None):
                     if len(xy) >= 2:
                         out.append((fid, c, kind, xy))
     out.sort(key=lambda p: (p[0], p[2], float(p[3][0, 0]), float(p[3][0, 1])))
+    if old_lines:
+        out = _cut_at_motorways(out, old_lines, motorways(frame, cells, near))
     out = _drop_stubs(out)
     out = _span_underpasses(out, road_underpasses(frame, cells, box, reach))
     return _clip(out, near) if clip else out
 
+
+
+# An old line (disused, abandoned) the map has crossing a motorway or trunk at grade was cut when the road was built:
+# none of its track within MOTORWAY_CUT_M of a carriageway's edge, the median between the two carriageways too (the
+# abandoned Boulder Industrial Lead's rails and ballast lay across I-25 by Erie, CO, in the median and flush in the
+# lanes, and stopped Jeff's car dead, 2026-10-28). A line in use is left to the map (a bridge it lacks is #387's).
+MOTORWAY_CLASSES = ("motorway", "trunk")
+MOTORWAY_CUT_M = 20.0
+CUT_SAMPLE_M = 2.0              # m between the points tested for that
+
+
+def motorways(frame, cells, near):
+    """[(xy (k, 2), half width)] of the motorways' and trunks' ground parts (their links too) meeting the window near,
+    each road at its widest copy across the cells (crossings)."""
+    got = {}
+    for feats in cells:
+        if feats is None or len(feats) == 0:
+            continue
+        specs = roads.road_specs(feats)
+        fb = feats.boxes(frame)
+        for i, sp in enumerate(specs):
+            if sp is None or sp.cls not in MOTORWAY_CLASSES or not _box_hit(fb[i], near):
+                continue
+            fid = str(feats.ids[i])
+            if fid in got:
+                got[fid][1] = max(got[fid][1], sp.width / 2)
+                continue
+            parts_ = []
+            for ring in roads.ground_parts(feats, i):
+                e, n = mapgeom.enu_xy(feats, frame, ring)
+                parts_.append(np.c_[e, n])
+            got[fid] = [parts_, sp.width / 2]
+    return [(xy, hw) for parts_, hw in got.values() for xy in parts_ if len(xy) >= 2]
+
+
+def motorway_mask(xy, lines):
+    """Per point of xy (k, 2): within a motorway's half width + MOTORWAY_CUT_M of its centre line (lines: motorways).
+    Pure."""
+    xy = np.asarray(xy, np.float64).reshape(-1, 2)
+    out = np.zeros(len(xy), bool)
+    for line, hw in lines:
+        reach = hw + MOTORWAY_CUT_M
+        lo, hi = line.min(0) - reach, line.max(0) + reach
+        cand = np.flatnonzero((xy[:, 0] >= lo[0]) & (xy[:, 0] <= hi[0]) & (xy[:, 1] >= lo[1]) & (xy[:, 1] <= hi[1]))
+        if not len(cand):
+            continue
+        q = xy[cand]
+        P, ab = line[:-1], np.diff(line, axis=0)
+        L2 = np.maximum((ab * ab).sum(1), 1e-12)
+        tt = np.clip(((q[:, None, :] - P[None]) * ab[None]).sum(2) / L2[None], 0.0, 1.0)
+        d = np.hypot(*(q[:, None, :] - (P[None] + tt[..., None] * ab[None])).transpose(2, 0, 1)).min(1)
+        out[cand[d < reach]] = True
+    return out
+
+
+def _cut_at_motorways(rails, old_lines, lines):
+    """rails (parts' list) with the old lines' ground parts cut where they cross a motorway at grade (motorway_mask
+    around the crossing: a line beside a motorway that never crosses it keeps its track)."""
+    if not lines:
+        return rails
+    out = []
+    for fid, c, kind, xy in rails:
+        if fid not in old_lines or kind != "ground" or not roads._crossings([xy], [ln for ln, _hw in lines]):
+            out.append((fid, c, kind, xy))
+            continue
+        xy = roads.densify(xy, CUT_SAMPLE_M)         # (a vertex either side of a 60 m road: none near it)
+        for i, j in _runs(motorway_mask(xy, lines)):
+            out.append((fid, c, kind, xy[i:j + 1]))
+    return out
 
 
 # A short road tunnel may be tagged only on the lower road, with no bridge flag on

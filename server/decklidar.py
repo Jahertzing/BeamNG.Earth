@@ -27,8 +27,8 @@ import numpy as np
 log = logging.getLogger("earthd.decklidar")
 
 ON = os.environ.get("BNE_DECK_LIDAR", "on") != "off"
-VERSION = 2             # in the plan caches' signature (plancache.lidar_tag): a change grades the roads again
-                        # (2: lidar_lift's fitted road, abutment checks, same-level crossings free)
+VERSION = 3             # in the plan caches' signature (plancache.lidar_tag): a change grades the roads again
+                        # (2: lidar_lift's fitted road, abutment checks, same-level crossings free; 3: smoothed decks)
 SIDE_SHARE = 0.25       # samples this share of the deck's width either side of its centre line (and on it)
 RUN_N = 5               # stations in the running median (DECK_STEP apart: 16 m)
 SPIKE_UP_M = 1.0        # a station this far over the running median: a vehicle, a gantry, a pole
@@ -41,6 +41,7 @@ MIN_N = 4               # ... and this many
 CROSS_FREE_M = 30.0     # m either way of a crossing with a deck of its own level: not measured (observations)
 HOLD_GAP_M = 20.0       # m: a gap this short is held to the line between its sides (a longer one: free to clear)
 GAP_FILL_M = 80.0       # m: a gap between measured stations this short is filled straight between them
+OBS_SMOOTH_M = 10.0     # m: the measured profile's smoothing (smoothed)
 OBS_TOL_M = 0.3         # m the deck may leave the measurement for its curves and grades
 ABUT_GRADE = 0.08       # a deck climbs off its abutment at most this steeply (abutment_consistent) ...
 ABUT_TOL_M = 1.0        # ... give or take this
@@ -390,6 +391,28 @@ def filled(s, obs, base):
         u = np.clip((s[b + 1:] - s[b]) / END_BLEND_M, 0.0, 1.0)
         z[b + 1:] = base[b + 1:] + (obs[b] - base[b]) * (1.0 - u)
     return z, held
+
+
+def smoothed(s, z, sigma=OBS_SMOOTH_M):
+    """z (at arcs s, about evenly spaced) under a Gaussian of sigma m, its ends kept (point reflection about each end:
+    a straight line stays itself). The measured profile, smoothed before the deck keeps within OBS_TOL_M of it: its
+    noise (0.1-0.3 m station to station) made the decks over the Mousetrap judder at speed, 18 grade reversals on one
+    ramp (Jeff, 2026-10-28). Pure."""
+    z = np.asarray(z, np.float64)
+    s = np.asarray(s, np.float64)
+    n = len(z)
+    if n < 3 or s[-1] <= 0:
+        return z.copy()
+    step = s[-1] / (n - 1)
+    r = int(np.ceil(3 * sigma / step))
+    if r < 1:
+        return z.copy()
+    k = np.exp(-0.5 * (np.arange(-r, r + 1) * step / sigma) ** 2)
+    k /= k.sum()
+    idx = np.arange(1, r + 1)
+    head = 2 * z[0] - z[np.minimum(idx, n - 1)][::-1]
+    tail = 2 * z[-1] - z[np.maximum(n - 1 - idx, 0)]
+    return np.convolve(np.r_[head, z, tail], k, mode="valid")
 
 
 def end_blend(s, z, z0, z1, at_start, at_end):
