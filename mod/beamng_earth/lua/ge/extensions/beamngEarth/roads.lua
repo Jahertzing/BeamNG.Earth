@@ -62,6 +62,13 @@ M.SIDE_PENALTY = 4          -- nextWalk at FAST_MS: m along the path a metre sid
 M.LEAD_MAX_M = 2000         -- ... and what every tile behind the car comes after
 M.URGENT_S = 6
 M.URGENT_GAP_S = 1
+-- ... but not for every collider made near the car (2026-10-28, Jeff's Drive through Denver: 257 rebuilds in 22 min,
+-- ~100 of them under 6 s apart, and one every second for 10+ s after a rebase, each a 15-80 ms frame). The urgent
+-- reach starts at URGENT_MIN_M (150 m plus the tile's half diagonal took in every tile entering COLLIDE_M's 320 m at
+-- town speeds: all urgent), a tile behind a moving car never is, and neither is one where a rebase's ghost of the same
+-- kind still collides (the old frame's copy of the same mesh: solid already).
+M.URGENT_MIN_M = 100
+M.GHOST_COVER_M = 0.75 * 256  -- a ghost tile's centre this close to the new tile's: the same place
 -- What the car drives on comes first (nextWalk): a bridge deck's or a tunnel's collider counts this much nearer than the
 -- rest (on a Steam Deck at 80 mph in Phoenix the import queue grew to 140 behind ~20 ms imports, and an I-10 overpass's
 -- deck turned solid only as the car reached it, behind the sidewalks' and buildings' colliders of the same tiles)
@@ -857,6 +864,10 @@ M.GHOST_MAX_S = 120         -- ghosts left after this long go anyway
 M.GHOST_FAR_M = 960         -- ... and once farther from the player than this (the server's roads DROP_M)
 M.GHOST_FAR_WAIT_S = 2      -- ... from this long after the rebase on
 local ghostSince = nil      -- stopwatch since the last rebase that left ghosts
+local ghostCols = nil       -- { {x, y, what = {kind = true}} } of the rebase's ghost tiles with colliders (M.urgentColliders):
+                            -- kept until the first rebuild after the last ghost went (a deleted collider's collision stays
+                            -- until a rebuild)
+local ghostColsEnd = false
 
 local WHATS = { 'walk', 'road', 'deck', 'bld', 'bld2', 'bld3', 'bld4', 'bldcol', 'walkcol', 'wire', 'tunnel', 'rail', 'sign',
   'signcol' }
@@ -875,9 +886,16 @@ function M.transform(xf, geodesy)
     return { x, y, z, w }
   end
   local any = false
+  ghostCols, ghostColsEnd = ghostCols or {}, false
   for key, t in pairs(tiles) do
     t.q = newQ(t.q or { 0, 0, 0, 1 })
     for _, what in ipairs(WHATS) do moveObj(t[what], t.q) end
+    if t.cx and t.colAt then
+      local x, y = xf:apply(t.cx, t.cy, 0)
+      local kinds = {}
+      for what in pairs(t.colAt) do if t[what] then kinds[what] = true end end
+      if next(kinds) then ghostCols[#ghostCols + 1] = { x = x, y = y, what = kinds } end
+    end
     for _, id in ipairs(t.objs) do deleteQ[#deleteQ + 1] = id end
     t.objs, t.queued, t.cq = {}, 0, nil
     if t.cx then t.cx, t.cy = xf:apply(t.cx, t.cy, 0) end
@@ -987,7 +1005,7 @@ local function releaseGhosts(player)
       else left = true end
     end
   end
-  if not left then ghostSince = nil end
+  if not left then ghostSince, ghostColsEnd = nil, ghostCols ~= nil end
 end
 
 -- Once per frame (core onUpdate): deletions, then creations, within the governor's budget.
@@ -1093,6 +1111,7 @@ function M.update(gov, currentAnchor, player, view)
     be:reloadCollision()
     lastReloadAt, reloads = now(), reloads + 1
     collisionDirty, deletesDirty, sinceReload = false, false, stopwatch.new()
+    if ghostColsEnd then ghostCols, ghostColsEnd = nil, false end
     local ms = now() - t0
     -- out of the frame's budget, not into the meshes' cost estimate (from PR #41: a ~40 ms rebuild in the roadWalk
     -- EMA held the next sidewalk and building meshes back as if each cost that much more)
@@ -1240,18 +1259,32 @@ function M.urgentWalk(q)
   return best
 end
 
--- Is a collider made since the last rebuild one the car reaches soon (its tile within URGENT_S of driving, 150 m at
--- least)? Then the rebuild runs now, not after RELOAD_EVERY_S.
+-- Does a rebase's ghost of this kind still collide at (x, y)?
+local function ghostCovers(x, y, what)
+  if not ghostCols then return false end
+  local r2 = M.GHOST_COVER_M * M.GHOST_COVER_M
+  for _, g in ipairs(ghostCols) do
+    if g.what[what] and (g.x - x) ^ 2 + (g.y - y) ^ 2 <= r2 then return true end
+  end
+  return false
+end
+
+-- Is a collider made since the last rebuild one the car reaches soon (its tile within URGENT_S of driving, URGENT_MIN_M
+-- at least, not behind a moving car, not where a rebase's ghost of it still collides)? Then the rebuild runs now, not
+-- after RELOAD_EVERY_S.
 function M.urgentColliders()
   if #newColliders == 0 then return false end
-  local p = playerNow()
+  local p, dir = playerNow()
   if not p then return true end
-  local reach = math.max(150, lastSpeed * M.URGENT_S) + M.TILE_M * 0.71
+  local reach = math.max(M.URGENT_MIN_M, lastSpeed * M.URGENT_S) + M.TILE_M * 0.71
   for _, c in ipairs(newColliders) do
     local t = tiles[c[2].key]
     if t and t.cx then
       local dx, dy = t.cx - p.x, t.cy - p.y
-      if dx * dx + dy * dy <= reach * reach then return true end
+      if dx * dx + dy * dy <= reach * reach and (not dir or dx * dir.x + dy * dir.y > -M.TILE_M / 2)
+          and not ghostCovers(t.cx, t.cy, c[2].what) then
+        return true
+      end
     end
   end
   return false
@@ -1306,6 +1339,7 @@ function M.collisionRebuilt()
   local removed = noteNewColliders()
   lastReloadAt, reloads = now(), reloads + 1
   collisionDirty, deletesDirty, sinceReload = removed > 0, false, stopwatch.new()
+  if ghostColsEnd then ghostCols, ghostColsEnd = nil, false end
 end
 
 -- Every road removed now (setting off, mod unload).

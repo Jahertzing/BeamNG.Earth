@@ -485,4 +485,55 @@ do
   T.check(not scenetree.findObjectById(far.id) or far.deleted, 'grass cards: dropped')
   roads.reset()
 end
+-- urgent rebuilds (2026-10-28, Jeff's Drive: one every second near the car and for 10+ s after a rebase, each a 15-80 ms
+-- frame): only for a collider the car reaches within URGENT_S (URGENT_MIN_M at least), not behind a moving car, not
+-- where a rebase's ghost of the same kind still collides
+do
+  roads.reset()
+  local keep = { roads.RELOAD_EVERY_S, roads.URGENT_GAP_S, roads.COLLIDE_CHECK_S }
+  roads.RELOAD_EVERY_S, roads.URGENT_GAP_S, roads.COLLIDE_CHECK_S = 1e6, 1e6, 0
+  local g = { tries = 0 }
+  function g:try() return true end
+  function g:charge() end
+  function g:chargeMotion() end
+  local car2 = { pos = vec3(84, 128, 0.5), vel = vec3(0, 0, 0) }
+  function car2:getPosition() return self.pos end
+  function car2:getVelocity() return self.vel end
+  getPlayerVehicle = function() return car2 end
+  local function walkTile(aid, key, what, x)
+    local path = '/t/u_' .. aid .. '_' .. key .. '_' .. what .. '.json'
+    files[path] = string.format('{ chunks = { }, %s = { shape = "/t/%s_%d_%s.cdae", pos = { %d, 0, 0 } } }', what, what, aid, key, x)
+    roads.onTile({ anchorId = aid, key = key, path = path, n = 0 }, aid)
+    roads.update(g, aid); roads.update(g, aid)
+  end
+  -- standing 300 m from the tile's centre: inside COLLIDE_M (made), outside URGENT_MIN_M + the half diagonal
+  walkTile(2, '1_0', 'walk', 256)
+  T.check(roads.status().walks == 1 and not roads.urgentColliders(), 'standing, a tile 300 m off: made, not urgent')
+  roads.collisionRebuilt()
+  car2.pos = vec3(110, 128, 0.5)
+  walkTile(2, '0_1', 'walk', 0)
+  T.check(roads.urgentColliders(), 'a tile 257 m off: urgent')
+  roads.collisionRebuilt()
+  -- moving east at 50 m/s: a tile behind is not urgent, one ahead is
+  car2.pos, car2.vel = vec3(40, 128, 0.5), vec3(50, 0, 0)
+  roads.update(g, 2)
+  walkTile(2, '-1_0', 'walk', -256)
+  T.check(not roads.urgentColliders(), 'moving: a tile 168 m behind, not urgent')
+  walkTile(2, '1_-1', 'walk', 256)
+  T.check(roads.urgentColliders(), 'moving: a tile 429 m ahead, urgent')
+  roads.collisionRebuilt()
+  -- a rebase: the ghosts of the old frame still collide; the new anchor's same meshes are not urgent, other kinds are
+  car2.pos, car2.vel = vec3(110, 128, 0.5), vec3(0, 0, 0)
+  roads.update(g, 2)
+  local same = { apply = function(_, x, y, z) return x, y, z end, beamngQuat = function() return 0, 0, 0, 1 end }
+  roads.transform(same, { quatMul = function(ax, ay, az, aw) return ax, ay, az, aw end })
+  roads.collisionRebuilt()
+  walkTile(3, '0_1', 'walk', 0)
+  T.check(not roads.urgentColliders(), 'after a rebase: the ghost still collides, not urgent')
+  walkTile(3, '1_0', 'deck', 256)
+  T.check(roads.urgentColliders(), 'a deck where the ghost had none: urgent')
+  roads.RELOAD_EVERY_S, roads.URGENT_GAP_S, roads.COLLIDE_CHECK_S = keep[1], keep[2], keep[3]
+  getPlayerVehicle = nil
+  roads.reset()
+end
 T.done('test_roads')
