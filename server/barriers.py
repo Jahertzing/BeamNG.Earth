@@ -22,7 +22,8 @@ next one. Pure given its inputs.
 A barrier is a dict: kind ("jersey", "wbeam", "cable", "noise"), line (k, 2) frame metres, z (k,) its base (the ground
 at the line, a median barrier's the higher carriageway's edge), foot (k,) how far down its face reaches, h m tall,
 face (+1 / -1: the traffic's side, the line's left / right; 0 both), ends ((bool, bool): real ends), fid (its road's
-feature id, or the mapped line's), side (+1 left / -1 right of its road's geometry, 0 a median or a mapped line).
+feature id, or the mapped line's), side (+1 left / -1 right of its road's geometry, 0 a median or a mapped line), mapped
+(OpenStreetMap's).
 """
 import json
 import math
@@ -467,7 +468,7 @@ def tile_barriers(frame, roads, elev, exact, decks=(), mapped=None, parapets=(),
                     hh = {"jersey": JERSEY_H, "wbeam": WBEAM_TOP, "cable": CABLE_POST_H}.get(kind, h or NOISE_H_M)
                     foot = gz[sl] - (POST_DOWN_M if kind == "wbeam" else FOOT_M)
                     raw.append([kind, line, gz[sl], foot, float(hh), face, (True, True), mid_, 0])
-    return _clip_out(raw, exact)
+    return _clip_out(raw, exact, {m[3] for m in mapped})
 
 
 def _left(line):
@@ -494,8 +495,9 @@ def _face_toward(line, built):
     return side
 
 
-def _clip_out(raw, exact):
-    """The barriers' dicts: each line clipped exactly to the tile box (its next tile draws the rest), simplified."""
+def _clip_out(raw, exact, mapped_ids=()):
+    """The barriers' dicts: each line clipped exactly to the tile box (its next tile draws the rest), simplified
+    (mapped: OpenStreetMap's, mapped_ids)."""
     import roads as roadsmod
     x0, y0, x1, y1 = exact
     out = []
@@ -509,7 +511,8 @@ def _clip_out(raw, exact):
             r1 = bool(real[1]) and np.allclose(piece[-1, :2], line[-1])
             piece = roadsmod.simplify(piece, SIMPLIFY_M, SIMPLIFY_Z_M)
             out.append({"kind": kind, "line": piece[:, :2], "z": piece[:, 2], "foot": piece[:, 3], "h": float(h),
-                        "face": int(face), "ends": (r0, r1), "fid": fid, "side": int(side)})
+                        "face": int(face), "ends": (r0, r1), "fid": fid, "side": int(side),
+                        "mapped": fid in mapped_ids})
     out.sort(key=lambda b: (b["kind"], str(b["fid"]), float(b["line"][0, 0]), float(b["line"][0, 1])))
     return out
 
