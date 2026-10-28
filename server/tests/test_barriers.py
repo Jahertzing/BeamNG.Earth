@@ -314,6 +314,21 @@ class NonFiniteGroundTest(unittest.TestCase):
         self.assertTrue(np.isfinite(np.concatenate(P)).all())
 
 
+    def test_non_finite_points_never_reach_elev(self):
+        """A NaN x/y point (a jersey barrier on Jeff's PC, 2026-10-28): NaN ground for it, elev never sees a NaN
+        (airportgrade failed the whole road tile on "latitude nan")."""
+        seen = []
+
+        def strict(la, lo):
+            la, lo = np.asarray(la, np.float64), np.asarray(lo, np.float64)
+            seen.append(bool(np.isfinite(la).all() and np.isfinite(lo).all()))
+            return np.full(la.shape, 10.0)
+        g = barriers._ground_fn(FRAME, strict)(np.array([[0.0, 0.0], [np.nan, 5.0], [10.0, 2.0]]))
+        self.assertTrue(all(seen))
+        self.assertTrue(np.isnan(g[1]))
+        self.assertTrue(np.isfinite(g[[0, 2]]).all())
+
+
 class MappedTest(unittest.TestCase):
     def test_mapped_lines(self):
         f = features([[(0, 10), (100, 10)], [(0, 30), (100, 30)], [(0, 50), (100, 50)], [(0, 70), (100, 70)]],

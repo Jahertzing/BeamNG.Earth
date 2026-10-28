@@ -271,8 +271,15 @@ def _ground_fn(frame, elev):
         P = np.asarray(P, np.float64).reshape(-1, 2)
         if not len(P):
             return np.zeros(0)
-        la, lo, _ = frame.enu_to_geodetic(P[:, 0], P[:, 1], np.zeros(len(P)))
-        return np.asarray(frame.geodetic_to_enu(la, lo, np.asarray(elev(la, lo), np.float64))[2], np.float64)
+        # (a non-finite point: NaN ground, left out by _clip_out; given to elev it failed the whole road tile,
+        # "latitude nan is beyond the Web-Mercator limit" in airportgrade, 2026-10-28)
+        ok = np.isfinite(P).all(axis=1)
+        out = np.full(len(P), np.nan)
+        if ok.any():
+            Q = P[ok]
+            la, lo, _ = frame.enu_to_geodetic(Q[:, 0], Q[:, 1], np.zeros(len(Q)))
+            out[ok] = np.asarray(frame.geodetic_to_enu(la, lo, np.asarray(elev(la, lo), np.float64))[2], np.float64)
+        return out
     return ground
 
 
