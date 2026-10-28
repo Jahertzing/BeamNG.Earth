@@ -401,6 +401,9 @@ function M.stop()
   return 'ok'
 end
 
+-- Is car id driven by the brain now (the merge assist leaves those be)?
+function M.controls(id) return running and cars[id] ~= nil end
+
 function M.status()
   local n = 0
   for _ in pairs(cars) do n = n + 1 end
