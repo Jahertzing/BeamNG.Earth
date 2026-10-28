@@ -968,6 +968,15 @@ three days of testing: dem 741 MB / 7.5k files, imagery 1.4 GB / 35k, deshadow 7
   materials switched to version 1.5 drew the photo washed out). Mean 0.5 grey: the photo's colour stays. A tile built before
   its land cover was cached goes without (no mask rather than a hole). The settings page's "Grass in the distant
   ground" turns it off for the tiles loaded after.
+- The 3D grass's edge (2026-10-28; the user: it "just abruptly stops so close by"). Open-world games hide it by
+  colouring each blade from the ground under it (Ghost of Tsushima), fading it out over a wide band, and filling in
+  past it with cheaper grass. GroundCover cannot read the ground, so in detail mode the server takes the block
+  photo's mean colour under its grass layers (`surface.grass_tint`, middle 60% of the block) into the terrain
+  message (`grassTint`), and `groundcover.lua` sets the stock grass materials' `baseColorFactor` to give their
+  textures (mean linear colour measured offline, `TEX_LINEAR`) that colour (`TINT_STRENGTH`, geometric), only
+  when it moved by more than 3% (each change reloads the material). Past "near", each GroundCover's fade starts
+  at half its radius at the latest (`FADE_SHARE`). The settings page's "Grass takes the ground's colour" turns
+  the tint off.
 - Grass cards to 1 km (2026-10-28, same ask; `server/grasscards.py`, `earthd --grass-cards on`, any near-visual
   mode, with `--surface on`). The flat grass layer gives no height, so between the 3D grass and `SEND_M` (1 km) each road
   tile square of grassy land gets a render-only mesh of crossed cards (one per 3 m cell of a jittered grid hashed

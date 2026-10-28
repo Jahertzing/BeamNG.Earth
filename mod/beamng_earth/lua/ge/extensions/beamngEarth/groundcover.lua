@@ -63,10 +63,11 @@ local LONG = { near = { 70, 45 }, normal = { 120, 80 }, far = { 200, 150 }, max 
 local SHORT = { near = { 50, 30 }, normal = { 60, 42 }, far = { 80, 60 }, max = { 100, 75 } }
 local DRY = { near = { 60, 30 }, normal = { 90, 60 }, far = { 150, 110 }, max = { 220, 160 } }
 local SHRUB = { near = { 100 }, normal = { 150, 110 }, far = { 250, 190 }, max = { 300, 230 } }
+-- tint: the definition's material takes the ground's colour (M.setTint)
 M.DEFS = {
-  { source = 'hirochi', src = 'small_grass_close', layer = 'bngEarthGroundGrass', share = 0.25, reach = SHORT },
-  { source = 'hirochi', src = 'long_grass_distant', layer = 'bngEarthGroundGrass', share = 0.17, reach = LONG },
-  { source = 'wcusa', src = 'grass_dry_1', layer = 'bngEarthGroundGrass', share = 0.05, reach = DRY },
+  { source = 'hirochi', src = 'small_grass_close', layer = 'bngEarthGroundGrass', share = 0.25, reach = SHORT, tint = true },
+  { source = 'hirochi', src = 'long_grass_distant', layer = 'bngEarthGroundGrass', share = 0.17, reach = LONG, tint = true },
+  { source = 'wcusa', src = 'grass_dry_1', layer = 'bngEarthGroundGrass', share = 0.05, reach = DRY, tint = true },
   -- mown town yards: a little short grass, nothing long (server/surface.py LAWN)
   { source = 'hirochi', src = 'small_grass_close', name = 'small_grass_close_lawn', layer = 'bngEarthGroundLawn', share = 0.1,
     reach = SHORT },
@@ -93,6 +94,40 @@ M.density = 1.0
 M.REACH = { near = true, normal = true, far = true, max = true }
 M.REACH_EXP = 1.5
 M.reach = 'normal'
+-- The edge (the user, 2026-10-28: the grass "just abruptly stops so close by"): past dissolveRadius GroundCover
+-- shrinks its elements to nothing at radius. Beyond 'near' the fade starts at FADE_SHARE of the radius at the latest:
+-- a long, soft fade (open-world games thin and shrink their grass over a wide band) instead of a line at the end.
+M.FADE_SHARE = 0.5
+
+-- The grass takes the ground's colour (the same report): open-world games colour each blade from the terrain under
+-- it (Ghost of Tsushima), so where the blades end the ground is the same colour; GroundCover cannot read the ground,
+-- so the grass materials' baseColorFactor is set from the server's mean photo colour under the block's grass
+-- (surface.grass_tint, the terrain message's grassTint; detail mode). TEX_LINEAR: each material's own texture's mean
+-- linear colour over its opaque texels (measured from the stock textures), TINT_STRENGTH how far toward the photo
+-- (1: the photo's colour; geometric), TINT_BRIGHT a brightness on top (lit blades vs the photo's ground).
+M.TINT = true
+M.TINT_STRENGTH = 0.8
+M.TINT_BRIGHT = 1.0
+M.TINT_MIN_CHANGE = 0.03    -- a smaller change is not applied (each costs a material reload)
+M.TINT_RANGE = { 0.2, 8.0 } -- the factor's bounds per channel (the green grass has almost no blue: tan needs ~10x)
+-- material name -> { r, g, b } (linear 0-1), see above: the opaque texels' mean of the full-size base colour map
+-- (opacity >= alphaRef), measured 2026-10-28 from content/.../foliage.zip, before the stock baseColorFactor
+M.TEX_LINEAR = {
+  m_grass_green_short_01 = { 0.1017, 0.1299, 0.0274 },   -- Hirochi small_grass_close (t_grass_green_short_02)
+  m_grass_green_long_01 = { 0.0499, 0.0834, 0.0067 },    -- Hirochi long_grass_distant
+  m_grass_dry_01 = { 0.4781, 0.3919, 0.2020 },           -- West Coast USA grass_dry_1
+}
+local tintMats = {}         -- material name -> its stock baseColorFactor { r, g, b, a }
+local tintRgb = nil         -- the last tint asked for (sRGB 0-255), applied again to new materials
+local tintApplied = {}      -- material name -> the factor last set
+
+local function parseFactor(v)
+  local t = {}
+  for x in tostring(v or ''):gmatch('[-%d%.eE]+') do t[#t + 1] = tonumber(x) end
+  if #t < 3 then return { 1, 1, 1, 1 } end
+  t[4] = t[4] or 1
+  return t
+end
 
 local created = {}        -- object names we made
 local layered = false     -- a block with surface layers was loaded this level (objects can exist)
@@ -164,6 +199,9 @@ function M.reachFor(d, reach)
   if r then
     out.radius = r[1]
     if r[2] then out.dissolveRadius = r[2] end
+    if reach ~= 'near' and M.FADE_SHARE then
+      out.dissolveRadius = math.min(r[2] or r[1], r[1] * M.FADE_SHARE)
+    end
     factor = (r[1] / d.reach.near[1]) ^ M.REACH_EXP
   end
   return out, factor
@@ -197,6 +235,11 @@ function M.ensure()
       local def = defs[d.source][d.src]
       if def then
         local name = M.PREFIX .. (d.name or d.src)
+        local mat = d.tint and (def.material or def.Material)
+        if type(mat) == 'string' and not tintMats[mat] then
+          local mo = scenetree.findObject(mat)
+          if mo then tintMats[mat] = parseFactor(mo:getField('baseColorFactor', 0)) end
+        end
         -- one left by an earlier module instance (a GE Lua reload keeps the level's objects) may
         -- have older fields, e.g. GPU placement: made again from the current definition
         local old = scenetree.findObject(name)
@@ -224,6 +267,78 @@ function M.ensure()
     removeAll()
   end
   return #created > 0
+end
+
+local function srgbToLinear(c)
+  c = c / 255
+  if c <= 0.04045 then return c / 12.92 end
+  return ((c + 0.055) / 1.055) ^ 2.4
+end
+
+-- Pure: the baseColorFactor { r, g, b, a } that gives a material with stock factor `orig` and texture mean `tex`
+-- (linear) the photo's colour `rgb` (sRGB 0-255) at `strength` (0: the stock look, 1: the photo's), times `bright`.
+function M.tintFactor(orig, tex, rgb, strength, bright)
+  local out = {}
+  for i = 1, 3 do
+    local o = tonumber(orig[i]) or 1
+    local seen = math.max(1e-4, (tonumber(tex[i]) or 0) * o)
+    local want = srgbToLinear(tonumber(rgb[i]) or 0) * (bright or 1)
+    local f = o * (math.max(want, 1e-4) / seen) ^ (strength or 1)
+    out[i] = math.min(M.TINT_RANGE[2], math.max(M.TINT_RANGE[1], f))
+  end
+  out[4] = tonumber(orig[4]) or 1
+  return out
+end
+
+local function applyTint()
+  if not tintRgb then return 0 end
+  local n = 0
+  for name, orig in pairs(tintMats) do
+    local tex = M.TEX_LINEAR[name]
+    local m = scenetree.findObject(name)
+    if tex and m then
+      local f = M.TINT and M.tintFactor(orig, tex, tintRgb, M.TINT_STRENGTH, M.TINT_BRIGHT) or orig
+      local last = tintApplied[name]
+      local moved = not last
+      if last then
+        for i = 1, 3 do if math.abs(f[i] - last[i]) > M.TINT_MIN_CHANGE * math.max(last[i], 0.1) then moved = true end end
+      end
+      if moved then
+        m:setField('baseColorFactor', 0, string.format('%.4f %.4f %.4f %.4f', f[1], f[2], f[3], f[4]))
+        pcall(function() m:flush() end)
+        pcall(function() m:reload() end)
+        tintApplied[name] = f
+        n = n + 1
+      end
+    end
+  end
+  return n
+end
+
+-- The photo's colour under the block's grass (sRGB 0-255 { r, g, b }, the terrain message's grassTint), or nil (keep
+-- the last). Returns the number of materials changed.
+function M.setTint(rgb)
+  if type(rgb) == 'table' and #rgb >= 3 then tintRgb = { tonumber(rgb[1]), tonumber(rgb[2]), tonumber(rgb[3]) } end
+  return applyTint()
+end
+
+-- Tint on / off (the settings page): off puts the stock colours back.
+function M.setTintEnabled(on)
+  M.TINT = on and true or false
+  tintApplied = {}
+  if not M.TINT then
+    for name, orig in pairs(tintMats) do
+      local m = scenetree.findObject(name)
+      if m then
+        m:setField('baseColorFactor', 0, string.format('%.4f %.4f %.4f %.4f', orig[1], orig[2], orig[3], orig[4]))
+        pcall(function() m:flush() end)
+        pcall(function() m:reload() end)
+      end
+    end
+    return M.TINT
+  end
+  applyTint()
+  return M.TINT
 end
 
 -- The physics block was just imported or moved (core, same tick): regenerate all the grass before
@@ -271,6 +386,8 @@ end
 -- the same game session found no m_grass_* / wca_groundcover and drew no grass, 2026-10-19).
 function M.reset()
   created = {}
+  tintMats = {}
+  tintApplied = {}
   defsCache = {}
   loadedMaterials = {}
   layered = false
@@ -286,7 +403,11 @@ function M.rebuild()
 end
 
 function M.status()
-  return { enabled = M.enabled, density = M.density, reach = M.reach, objects = #created, materialsLoaded = next(loadedMaterials) ~= nil, error = lastError }
+  local mats = {}
+  for name in pairs(tintMats) do mats[#mats + 1] = name end
+  table.sort(mats)
+  return { enabled = M.enabled, density = M.density, reach = M.reach, objects = #created, materialsLoaded = next(loadedMaterials) ~= nil,
+    error = lastError, tint = M.TINT and tintRgb or nil, tintMaterials = mats }
 end
 
 return M
