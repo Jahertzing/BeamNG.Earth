@@ -11,6 +11,13 @@
 local M = {}
 
 M.EDGE_M = 60           -- graph nodes this far inside the block's ground box only
+-- ... and a ring of road this wide past the block's edge, private (the stock spawner never picks a private road, so no
+-- car is put where there is no ground): with the graph ending at the block's edge, every car driving toward it saw a
+-- dead end within its plan (ai.lua plans max(100 m, its stopping distance at 0.2 g) ahead: 245 m at 70 mph) and braked
+-- for it, then made a three-point turn on I-25 if the respawn did not come first (the bench4 crash 2026-10-28: a van
+-- standing across the southbound lanes). With the ring the road goes on past the edge guard, which respawns a car before
+-- it leaves the ground, and a car only meets a dead end where the server's window ends.
+M.OUTER_M = 300
 M.MIN_GAP_S = 1.0
 -- An apply (or its signals' second step) waits for a light frame (governor roomFor: at most APPLY_ROOM_MS of streaming
 -- and other work spent in it, not a terrain commit's), APPLY_WAIT_FRAMES at most
@@ -120,9 +127,10 @@ end
 -- Pure-ish (needs vec3): the stock map's node table of graph g clipped to box b: {name = {pos, radius,
 -- links = {other = edge}}}, every edge shared by both ends (double-sided) with in/out nodes, positions and radii.
 -- Returns nodes, node count, edge count and the cuts: { x, y } of each kept node with a road to a node left out.
-function M.toNodes(g, b, edgeM, leftHand, yieldEvery)
+-- outerM: the private ring past the box (OUTER_M), its nodes kept and their edges typed 'private'; nil: none.
+function M.toNodes(g, b, edgeM, leftHand, yieldEvery, outerM)
   local nodes, nn, ne = {}, 0, 0
-  local keep = {}
+  local keep, ring = {}, {}
   local steps = 0
   local function step()       -- (in a coroutine: a pause every yieldEvery items, buildNodes)
     if yieldEvery then
@@ -131,7 +139,11 @@ function M.toNodes(g, b, edgeM, leftHand, yieldEvery)
     end
   end
   for name, n in pairs(g.nodes) do
-    if M.inside(b, n[1], n[2], edgeM) then keep[name] = n end
+    if M.inside(b, n[1], n[2], edgeM) then
+      keep[name] = n
+    elseif outerM and M.inside(b, n[1], n[2], -outerM) then
+      keep[name], ring[name] = n, true
+    end
     step()
   end
   local function node(name)
@@ -160,7 +172,8 @@ function M.toNodes(g, b, edgeM, leftHand, yieldEvery)
       if not A.links[bb] then
         local edge = { drivability = e[7], oneWay = e[3] == 1, lanes = M.lanes(e[4], e[5], leftHand),
           speedLimit = e[6], inNode = a, outNode = bb, inPos = A.pos, outPos = B.pos,
-          inRadius = e[8], outRadius = e[8], ramp = e[9] == 1 or nil }
+          inRadius = e[8], outRadius = e[8], ramp = e[9] == 1 or nil,
+          type = (ring[a] or ring[bb]) and 'private' or nil }
         A.links[bb] = edge
         B.links[a] = edge
         ne = ne + 1
@@ -361,7 +374,7 @@ local function apply(b, pre)
   local tN = os.clock()
   local nodes, nn, ne, cl
   if pre then nodes, nn, ne, cl = pre[1], pre[2], pre[3], pre[4]
-  else nodes, nn, ne, cl = M.toNodes(graph, b, M.EDGE_M, M.rules.rightHandDrive) end
+  else nodes, nn, ne, cl = M.toNodes(graph, b, M.EDGE_M, M.rules.rightHandDrive, nil, M.OUTER_M) end
   stats.nodesMs = (os.clock() - tN) * 1000         -- (the parts of an apply's frame: the hitch hunt, 2026-10-23)
   local ts = signalsSystem()
   -- before the reset: its onNavgraphReloaded would place the old instances on the new graph (research §2.8)
@@ -483,7 +496,9 @@ M.AHEAD_TIGHT_M = 90
 M.AHEAD_MARGIN_M = 20
 
 -- Pure: the room (m) a car put ahead of a player moving at psp m/s needs before the block's edge.
+-- (with the private ring the clip's dead ends are past the edge: the edge guard and a margin)
 function M.aheadRoom(psp)
+  if (M.OUTER_M or 0) > 0 then return M.GUARD_M + M.AHEAD_MARGIN_M end
   return M.EDGE_M + M.cutReach(math.huge, M.aheadSpeed(psp), true) + M.AHEAD_MARGIN_M
 end
 
@@ -509,9 +524,13 @@ end
 
 -- Pure: how near a cut a car heading for it is respawned: CUT_FRESH_M while fresh (age s since it appeared), unless
 -- this module put it ahead along the player's way (ahead); else CUT_M or CUT_S seconds at its speed sp.
+-- At least as far as the car's own plan reaches (ai.lua getMinPlanLen: max(100 m, its stopping distance at 0.2 g)) and
+-- PLAN_MARGIN_M more: a dead end it can see it brakes for, and then turns round at.
+M.PLAN_MARGIN_M = 30
 function M.cutReach(age, sp, ahead)
   if age < M.FRESH_S and not ahead then return M.CUT_FRESH_M end
-  return math.max(M.CUT_M, sp * M.CUT_S)
+  local plan = math.max(100, 0.5 * sp * sp / (0.2 * 9.81)) + M.PLAN_MARGIN_M
+  return math.max(M.CUT_M, sp * M.CUT_S, plan)
 end
 
 -- Pure: is a car that has stood still since `since` (nil: moving) at distance d from the player stuck at `now`?
@@ -975,7 +994,7 @@ local function buildNodes(b)
     setRules()
     local g, box, rh = graph, b and { b[1], b[2], b[3], b[4] } or nil, M.rules.rightHandDrive
     prep = { graph = g, box = box, co = coroutine.create(function()
-      return { M.toNodes(g, box, M.EDGE_M, rh, M.PREP_YIELD) }
+      return { M.toNodes(g, box, M.EDGE_M, rh, M.PREP_YIELD, M.OUTER_M) }
     end) }
   end
   if prep.result then return prep.result end
