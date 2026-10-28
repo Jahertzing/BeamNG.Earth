@@ -12,8 +12,14 @@ at +X (the stock cars face -Y), Z up, the tyres' bottom at z 0, centred on the c
 
 Materials: our own names (bne_car_*) on the stock stages and textures (/vehicles/simple_traffic/..., mounted with the
 game's vehicles); the body paint (the stock instanceDiffuse palette, a car's colour at run time) a plain colour, one
-shape per colour; the per-function lamps (lowbeam, signal_L, ...: the jbeam's glowMap names) on the off lamp
-material. Two levels of detail (the stock meshes; a hull of boxes and 8-sided wheels) and a collision box.
+shape per colour (four by default: --colours); the per-function lamps (lowbeam, signal_L, ...: the jbeam's glowMap
+names) on the off lamp material. Three levels of detail and a collision box (the cars no longer collide: harmless):
+  300 px  the stock meshes, only where the car fills the screen (~10-15 m)
+   90 px  the body shell (body, hood, bumpers, trunk / tailgate; the lamps' housings, not their glass), the windows
+          and the wheels, the small parts (mirrors, trims, grille, suspension, badges) left out, the trim faces hidden
+          inside the skin (the cabin, the engine bay, the floor) dropped, then vertex clustering at 6 cm (coarser
+          until under MID_MAX_TRIS): ~10-15k triangles in paint, trim, glass and wheels (4-6 materials)
+   16 px  a hull: a body box, a cabin box and four 8-sided wheels
 
 These are derived from BeamNG's content: built on the player's machine, never committed (.gitignore).
 """
@@ -49,10 +55,11 @@ COLOURS = {
     "darkblue": ((0.03, 0.06, 0.20), 0.7, 0.4),
     "red": ((0.45, 0.03, 0.03), 0.3, 0.4),
 }
+DEFAULT_COLOURS = ("white", "black", "silver", "darkblue")    # (dark grey and red: --colours)
 # a parked config without a livery, the first of these found (else the first that is not one)
 PREFER = ("base", "standard", "stock", "dx", "d15_parked")
 LIVERY = ("taxi", "police", "security", "drivingschool", "turboburger", "fleet", "farm", "_eu_", "ambulance", "beamcom")
-HIGH_PX, LOW_PX = 128, 16
+HIGH_PX, MID_PX, LOW_PX = 300, 90, 16     # (the full stock set only where the car fills 300 px: ~10-15 m)
 MAX_MB = 400.0
 
 
@@ -415,7 +422,7 @@ def car(stock, model):
                 side = np.sign(P2[:, 0]) if not wheelish else \
                     np.full(len(P2), -1.0 if wheelish[0].endswith("R") else 1.0)
                 P2 = P2 + np.c_[side * sx + mx, np.full(len(P2), oy), np.full(len(P2), oz)]
-                pieces.append((mat, P2, N @ R.T, T, bool(wheelish)))
+                pieces.append((mat, P2, N @ R.T, T, bool(wheelish), mesh))
             if wheelish:            # (modelled at the origin: now at its hub)
                 c = t + np.array([(-1.0 if wheelish[0].endswith("R") else 1.0) * sx + mx, oy, oz])
                 wheel_meshes.append(("tyre" if "tire" in mesh else "wheel", c))
@@ -432,12 +439,12 @@ def car(stock, model):
     half_w = float(np.max(np.abs(tp[:, 0])))
     centres = np.array(sorted({tuple(np.round(t, 4)) for t in tyres}))
     ground = float(np.min(centres[:, 2])) - radius
-    allp = np.concatenate([P for _, P, _, _, _ in pieces])
+    allp = np.concatenate([P for _, P, *_ in pieces])
     cx, cy = (allp[:, 0].min() + allp[:, 0].max()) / 2, (allp[:, 1].min() + allp[:, 1].max()) / 2
     # ours: front (stock -Y) to +X: (x, y) -> (-y, x); centred, the tyres' bottom at z 0
     Q = np.array([[0.0, -1.0, 0.0], [1.0, 0.0, 0.0], [0.0, 0.0, 1.0]])
     shift = np.array([cx, cy, ground])
-    out = [(mat, (P - shift) @ Q.T, N @ Q.T, T, w) for mat, P, N, T, w in pieces]
+    out = [(mat, (P - shift) @ Q.T, N @ Q.T, T, w, mesh) for mat, P, N, T, w, mesh in pieces]
     wheels = [((np.array(c) - shift) @ Q.T) for c in centres]
     return dict(pc=pc, pieces=out, wheels=wheels, radius=radius, half_w=half_w, used=used,
                 missing=sorted(set(missing)))
@@ -509,7 +516,7 @@ def high_mesh(c, mats):
     m = Mesh(8)
     P, N, T, tri = [], [], [], {}
     k = 0
-    for mat, Pm, Nm, Tm, _ in c["pieces"]:
+    for mat, Pm, Nm, Tm, *_ in c["pieces"]:
         name = mats(mat)
         if name is None:
             continue
@@ -535,12 +542,172 @@ def dedupe(m):
     return out
 
 
+
+# --- the middle level of detail: the body shell, the windows and the wheels, few materials -------------------------
+
+WINDOWS = re.compile(r"windshield|doorglass|rearglass|backlight|quarterglass|sideglass|windowglass|sunroofglass", re.I)
+SHELL = re.compile(r"_(body|hood|bumper_[fr]|trunk|tailgate|bed|box|cab|roof|fender|door|shell|panel)", re.I)
+# (the ladder frames under the trucks: out, under the body; a van's cargo walls ("wall_main_panel") are its sides: in)
+SMALL = re.compile(r"light|lamp|_dmg|mirror|susp|hub_|hubs_|caliper|disc|badge|trim|spoiler|grille|steer|license|"
+                   r"chmsl|signal|reflector|rack|antenna|exhaust|wiper|handle|flare|step|guard|bullbar|spare|adcarrier|"
+                   r"interior|seat|dash|passenger|character", re.I)
+WHEEL_PARTS = re.compile(r"_(tires|wheels|hubcaps)_", re.I)
+# the lamps' housings (not their glass) close the body's holes where the lamps sit: kept, in the trim material
+LAMPS = re.compile(r"_(head|tail|trunk)lights?(_|$)", re.I)
+MID_CELLS_M = (0.06, 0.065, 0.07, 0.08)    # vertex clustering's cell: the first under MID_MAX_TRIS (the wheels' +1 cm)
+MID_MAX_TRIS = 15000
+
+
+def mid_keep(mesh):
+    """Whether a stock mesh is in the middle level: the shell (not its small parts), the windows, the wheels."""
+    if WINDOWS.search(mesh):
+        return "_dmg" not in mesh
+    if WHEEL_PARTS.search(mesh):
+        return True
+    if LAMPS.search(mesh):
+        return "glass" not in mesh
+    return bool(SHELL.search(mesh)) and not SMALL.search(mesh)
+
+
+def mid_mat(stock, model, s, colour):
+    """The middle level's material for a stock one, None: left out (the lamps: the body has their recesses)."""
+    full = mat_name(stock, model, s, colour)
+    if full is None or full.startswith("bne_car_paint_"):
+        return full
+    if re.search(r"light|lamp|chmsl|signal|badge|reverse|lowbeam|highbeam", s):
+        return None
+    if "glass" in s:
+        return "bne_car_glass"
+    if "wheel" in s or "tire" in s or "tyre" in s:
+        return full                         # (the stock wheel atlases: their uvs)
+    if s == f"traffic_{model}" and full in (f"bne_car_{model}",):
+        return full                         # (the car's own atlas)
+    return "bne_car_main"
+
+
+def mid_mesh(c, mats, cell=MID_CELLS_M[0], wheel_cell=None, inner_m=0.10):
+    """The kept meshes merged, the hidden trim-material triangles left out (the cabin's inside behind the tinted
+    windows, the floor's underside between the wheels), then simplified by vertex clustering (per material: no uv
+    across materials; the wheels' coarser)."""
+    m = Mesh(8)
+    P, N, T, tri = [], [], [], {}
+    k = 0
+    # the outer skin (paint and windows): its half width and top per 5 cm along x, its ends per 10 cm in (y, z)
+    skin = np.concatenate([Pm for mat, Pm, _, _, w, mesh in c["pieces"]
+                           if not w and mid_keep(mesh) and mats(mat) is not None
+                           and (mats(mat).startswith("bne_car_paint_") or mats(mat) == "bne_car_glass")])
+    xs = np.floor(skin[:, 0] / 0.05).astype(np.int64)
+    ymax, zmax = {}, {}
+    for kx, y, z in zip(xs, np.abs(skin[:, 1]), skin[:, 2]):
+        ymax[kx] = max(ymax.get(kx, 0.0), y)
+        zmax[kx] = max(zmax.get(kx, 0.0), z)
+    yz = [tuple(v) for v in np.floor(np.c_[np.abs(skin[:, 1]), skin[:, 2]] / 0.1).astype(np.int64)]
+    xmin, xmax = {}, {}
+    for key, x in zip(yz, skin[:, 0]):
+        xmin[key] = min(xmin.get(key, 9e9), x)
+        xmax[key] = max(xmax.get(key, -9e9), x)
+
+    def hidden(ctr):
+        """Centroids well inside the skin (seen through no paint: the cabin, the engine bay, the floor's underside)."""
+        out = np.zeros(len(ctr), bool)
+        for i, (x, y, z) in enumerate(ctr):
+            kx = int(np.floor(x / 0.05))
+            key = (int(np.floor(abs(y) / 0.1)), int(np.floor(z / 0.1)))
+            out[i] = (abs(y) < ymax.get(kx, 0.0) - inner_m and z < zmax.get(kx, 0.0) - inner_m * 0.6
+                      and x > xmin.get(key, 9e9) + inner_m and x < xmax.get(key, -9e9) - inner_m)
+        return out
+
+    for mat, Pm, Nm, Tm, w, mesh in c["pieces"]:
+        if not mid_keep(mesh):
+            continue
+        name = "bne_car_main" if LAMPS.search(mesh) else mats(mat)
+        if name is None:
+            continue
+        Pm, Nm, Tm = Pm.reshape(-1, 3, 3), Nm.reshape(-1, 3, 3), Tm.reshape(-1, 3, 2)
+        if name == "bne_car_main" and not w:
+            keep = ~hidden(Pm.mean(axis=1))
+            Pm, Nm, Tm = Pm[keep], Nm[keep], Tm[keep]
+        n = len(Pm) * 3
+        if not n:
+            continue
+        P.append(Pm.reshape(-1, 3))
+        N.append(Nm.reshape(-1, 3))
+        T.append(Tm.reshape(-1, 2))
+        tri.setdefault(name, []).extend((k + i, k + i + 1, k + i + 2) for i in range(0, n, 3))
+        k += n
+    m.p, m.n, m.uv = np.concatenate(P), np.concatenate(N), np.concatenate(T)
+    m.tri = tri
+    wheels = {k_ for k_ in tri if "wheel" in k_ or k_ == "bne_car_tyre"}
+    out = cluster(m, cell, {k_: wheel_cell for k_ in wheels} if wheel_cell else {})
+    # (the cells' means lift the tyres' bottoms a little: back on the ground)
+    out.p = np.asarray(out.p, np.float64).copy()
+    for k_ in wheels:
+        idx = np.unique(np.asarray(out.tri.get(k_, []), np.int64).ravel())
+        if len(idx):
+            low = idx[out.p[idx, 2] < c["radius"] * 0.25]
+            out.p[low, 2] -= float(out.p[idx, 2].min())
+    return out
+
+
+def mid_level(c, mats):
+    """The middle level at the finest MID_CELLS_M cell under MID_MAX_TRIS triangles: (Mesh, cell)."""
+    for cell in MID_CELLS_M:
+        m = mid_mesh(c, mats, cell, cell + 0.01)
+        if sum(len(v) for v in m.tri.values()) <= MID_MAX_TRIS:
+            break
+    return m, cell
+
+
+def cluster(m, cell, cells=None):
+    """Vertex clustering: the corners in one grid cell (cells: a material's own cell size) moved to one shared
+    point, the cell's mean over every material (coincident layers, a bumper's paint over its trim, stay coincident:
+    clustered apart they poked through each other); per material one corner a cell (the first's uv, the mean
+    normal); triangles that collapse, and repeats, dropped."""
+    P, N, U = np.asarray(m.p), np.asarray(m.n), np.asarray(m.uv)
+    size = np.full(len(P), float(cell))
+    for mat, tris in m.tri.items():
+        if mat in (cells or {}) and len(tris):
+            size[np.unique(np.asarray(tris).ravel())] = cells[mat]
+    key = np.c_[np.floor(P / size[:, None]).astype(np.int64), np.round(size * 1000).astype(np.int64)]
+    _, cid = np.unique(key, axis=0, return_inverse=True)
+    cid = cid.ravel()
+    centre = np.zeros((cid.max() + 1, 3))
+    np.add.at(centre, cid, P)
+    centre /= np.bincount(cid)[:, None]
+    out = Mesh(m.segs)
+    op, on, ou, otri = [], [], [], {}
+    base = 0
+    for mat, tris in m.tri.items():
+        t = np.asarray(tris, np.int64)
+        if not len(t):
+            continue
+        used = np.unique(t.ravel())
+        _, first, inv = np.unique(cid[used], return_index=True, return_inverse=True)
+        inv = inv.ravel()
+        remap = np.full(len(P), -1, np.int64)
+        remap[used] = inv + base
+        nsum = np.zeros((len(first), 3))
+        np.add.at(nsum, inv, N[used])
+        nsum /= np.maximum(np.linalg.norm(nsum, axis=1, keepdims=True), 1e-9)
+        op.append(centre[cid[used][first]])
+        on.append(nsum)
+        ou.append(U[used][first])
+        r = remap[t]
+        r = r[(r[:, 0] != r[:, 1]) & (r[:, 1] != r[:, 2]) & (r[:, 0] != r[:, 2])]
+        r = np.unique(r, axis=0)         # (repeats; a triangle and its flipped twin both kept)
+        otri[mat] = [tuple(int(i) for i in row) for row in r]
+        base += len(first)
+    out.p, out.n, out.uv = np.concatenate(op), np.concatenate(on), np.concatenate(ou)
+    out.tri = otri
+    return out
+
+
 def hull(c, paint, size):
     """The far level: a body box, a cabin box and four 8-sided wheels."""
     m = Mesh(8)
-    body = np.concatenate([P for _, P, _, _, w in c["pieces"] if not w])
+    body = np.concatenate([P for _, P, _, _, w, *_ in c["pieces"] if not w])
     lo, hi = np.percentile(body, 1, axis=0), np.percentile(body, 99, axis=0)
-    glass = [P for mat, P, _, _, w in c["pieces"] if "glass" in mat and "light" not in mat and not w]   # (windows)
+    glass = [P for mat, P, _, _, w, *_ in c["pieces"] if "glass" in mat and "light" not in mat and not w]   # (windows)
     g = np.concatenate(glass) if glass else np.zeros((0, 3))
     # the belt line: under most of the windows (a few lamp lenses share the glass material)
     gz = float(np.percentile(g[:, 2], 10)) if len(g) else lo[2] + (hi[2] - lo[2]) * 0.55
@@ -566,7 +733,7 @@ def hull(c, paint, size):
 
 
 def collision(c):
-    allp = np.concatenate([P for _, P, _, _, _ in c["pieces"]])
+    allp = np.concatenate([P for _, P, *_ in c["pieces"]])
     lo, hi = np.percentile(allp, 0.5, axis=0), np.percentile(allp, 99.5, axis=0)
     lo[2] = max(lo[2], 0.15)
     m = Mesh(4)
@@ -599,7 +766,7 @@ def main():
     ap.add_argument("--zip", default=None, help="simple_traffic.zip (default: the Steam install's)")
     ap.add_argument("--out", default=OUT)
     ap.add_argument("--models", default=",".join(MODELS))
-    ap.add_argument("--colours", default=",".join(COLOURS))
+    ap.add_argument("--colours", default=",".join(DEFAULT_COLOURS), help=f"of {', '.join(COLOURS)}")
     a = ap.parse_args()
     path = a.zip or steam_zip()
     if not path or not os.path.exists(path):
@@ -629,23 +796,29 @@ def main():
             mats = lambda s, model=model, colour=colour: mat_name(stock, model, s, colour)     # noqa: E731
             hm = high_mesh(c, mats)
             names |= set(hm.tri)
+            mid, cell = mid_level(c, lambda s_, model=model, colour=colour: mid_mat(stock, model, s_, colour))
+            names |= set(mid.tri)
             low = hull(c, f"bne_car_paint_{colour}", LOW_PX)
             names |= set(low.tri)
             name = f"bne_car_{model}_{colour}"
             p = os.path.join(a.out, name + ".dae")
-            write_dae(p, name, [(HIGH_PX, hm), (LOW_PX, low)], collision(c))
+            write_dae(p, name, [(HIGH_PX, hm), (MID_PX, mid), (LOW_PX, low)], collision(c))
             files.append(name + ".dae")
             total += os.path.getsize(p)
             c.setdefault("sizes", []).append(os.path.getsize(p))
             if colour == colours[0]:
                 c["checks"] = check(hm)
                 c["verts"] = (len(hm.p), sum(len(v) for v in hm.tri.values()), len(low.p))
+                c["lods"] = [(px, sum(len(v) for v in m_.tri.values()), len(m_.tri))
+                             for px, m_ in ((HIGH_PX, hm), (MID_PX, mid), (LOW_PX, low))]
+                c["cell"] = cell
         summary[model] = {"length": round(float(hi[0] - lo[0]), 3), "width": round(float(hi[1] - lo[1]), 3),
                           "height": round(float(hi[2] - lo[2]), 3), "config": c["pc"], "colours": colours,
                           "files": files, "wheels": [[round(float(v), 3) for v in w] for w in c["wheels"]],
                           "tyre_radius": round(c["radius"], 3)}
+        lods = " ".join(f"{px}px {t} tris {k} mats;" for px, t, k in c["lods"])
         print(f"{model:10s} {c['pc']:34s} L {hi[0]-lo[0]:.2f} W {hi[1]-lo[1]:.2f} H {hi[2]-lo[2]:.2f} "
-              f"(z {lo[2]:.2f}..{hi[2]:.2f}) verts {c['verts'][0]} tris {c['verts'][1]} low verts {c['verts'][2]} "
+              f"| {lods} mid cell {c['cell'] * 100:.1f} cm | "
               f"file {np.mean(c['sizes'])/1e6:.1f} MB x{len(colours)} | degenerate {c['checks'][0]} "
               f"inward {c['checks'][1]} | not in the dae: {', '.join(c['missing']) or '-'}")
     defs = material_defs(stock, names - set(TYRE))
