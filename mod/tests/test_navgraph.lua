@@ -151,20 +151,37 @@ do
   T.check(x == 0 and dx == 1 and dy == 0 and lo == N.AHEAD_M[1] and hi == N.AHEAD_M[2],
     'aheadSpot: 67 mph east, 600 m of block ahead: the full AHEAD_M: ' .. tostring(lo) .. '-' .. tostring(hi))
   T.check(N.aheadSpot(0, 0, 10, 0, box) == nil, 'aheadSpot: 22 mph: behind the camera as before')
-  -- 400 m of block: the farthest spot leaves the clip's edge and a car's cut reach at its starting speed (the loop)
+  -- with the private ring past the edge (OUTER_M) the farthest spot is the edge guard and a margin
+  T.check(N.aheadRoom(30) == N.GUARD_M + N.AHEAD_MARGIN_M, 'aheadRoom with the ring: the edge guard + margin')
+  -- without it: the farthest spot leaves the clip's edge and a car's cut reach at its starting speed (the loop)
+  local outer = N.OUTER_M
+  N.OUTER_M = 0
   local room = N.aheadRoom(30)
-  T.check(math.abs(room - (N.EDGE_M + 30 * N.AHEAD_PACE * N.CUT_S + N.AHEAD_MARGIN_M)) < 1e-9, 'aheadRoom: ' .. room)
-  local _, _, _, _, lo2, hi2 = N.aheadSpot(200, 0, 30, 0, box)
-  T.check(hi2 == 400 - room and lo2 == N.AHEAD_M[1], 'aheadSpot: 400 m of block: to ' .. tostring(hi2))
+  T.check(math.abs(room - (N.EDGE_M + N.cutReach(math.huge, 30 * N.AHEAD_PACE, true) + N.AHEAD_MARGIN_M)) < 1e-9,
+    'aheadRoom: ' .. room)
+  local _, _, _, _, lo2, hi2 = N.aheadSpot(-100, 0, 30, 0, box)
+  T.check(hi2 == math.min(N.AHEAD_M[2], 700 - room) and lo2 == N.AHEAD_M[1], 'aheadSpot: 700 m of block: to ' .. tostring(hi2))
   -- a car put at the far end is out of its cut reach (the cut nodes stand EDGE_M inside the edge)
-  local cutAt = 400 - N.EDGE_M
-  T.check(cutAt - hi2 > N.cutReach(0, N.aheadSpeed(30), true), 'aheadSpot: the far end is clear of the cut reach')
-  -- 320 m of block (the nearest the block lets the edge come): a tighter spot, then none
-  local _, _, _, _, lo3, hi3 = N.aheadSpot(280, 0, 30, 0, box)
-  T.check(lo3 == N.AHEAD_TIGHT_M and hi3 == 320 - room, 'aheadSpot: 320 m: from AHEAD_TIGHT_M: ' .. tostring(hi3))
+  T.check(700 - N.EDGE_M - hi2 > N.cutReach(0, N.aheadSpeed(30), true), 'aheadSpot: the far end is clear of the cut reach')
   T.check(N.aheadSpot(400, 0, 30, 0, box) == nil, 'aheadSpot: 200 m of block ahead: no room, behind')
-  local _, _, _, _, _, h4 = N.aheadSpot(0, 700, 0, 30, box)
-  T.check(h4 and h4 == 323 - room, 'aheadSpot: north, limited by the box too: ' .. tostring(h4))
+  N.OUTER_M = outer
+  -- with the ring: 320 m of block (the nearest the block lets the edge come) still has room ahead
+  local _, _, _, _, lo4, hi4 = N.aheadSpot(280, 0, 30, 0, box)
+  T.check(lo4 == N.AHEAD_M[1] and hi4 == 320 - N.aheadRoom(30), 'aheadSpot with the ring, 320 m: ' .. tostring(hi4))
+  local _, _, _, _, _, h5 = N.aheadSpot(0, 700, 0, 30, box)
+  T.check(h5 and h5 == 323 - N.aheadRoom(30), 'aheadSpot: north, limited by the box too: ' .. tostring(h5))
+end
+-- the private ring past the block: its nodes kept, its edges private (never a spawn point), the cuts past it
+do
+  local g = { nodes = { a = { 0, 0, 1, 4 }, b = { 300, 0, 1, 4 }, c = { 600, 0, 1, 4 }, d = { 900, 0, 1, 4 } },
+    edges = { { 'a', 'b', 1, 2, 0, 31, 1, 4 }, { 'b', 'c', 1, 2, 0, 31, 1, 4 }, { 'c', 'd', 1, 2, 0, 31, 1, 4 } } }
+  local box = { -500, -500, 500, 500 }
+  local n0, _, _, c0 = N.toNodes(g, box, 60, false)
+  T.check(n0.b and not n0.c and #c0 == 1 and c0[1].name == 'b', 'no ring: the graph ends at b, a cut 300 m in')
+  local n1, _, ne1, c1 = N.toNodes(g, box, 60, false, nil, 300)
+  T.check(n1.c and not n1.d and ne1 == 2, 'ring: c, 100 m past the edge, kept; d, 400 m past, not')
+  T.check(n1.a.links.b.type == nil and n1.b.links.c.type == 'private', 'ring: its edges private, the block ones not')
+  T.check(#c1 == 1 and c1[1].name == 'c', 'ring: the cut is past the edge')
 end
 -- the cut test walks the car's own road on (bench4: the 45-degree cone respawned cars for cut side streets and junctions)
 do
@@ -304,9 +321,10 @@ end
 -- how near a cut a car is respawned: fresh cars far off, unless this module put them ahead along the player's way
 do
   T.check(N.cutReach(1, 10, nil) == N.CUT_FRESH_M, 'cutReach: a fresh car (the stock respawn): CUT_FRESH_M')
-  T.check(N.cutReach(1, 30, true) == 30 * N.CUT_S, 'cutReach: a fresh car we put ahead: its speed\'s reach, not CUT_FRESH_M')
-  T.check(N.cutReach(10, 10, nil) == N.CUT_M, 'cutReach: an older slow car: CUT_M')
-  T.check(N.cutReach(1, 30, true) < N.CUT_FRESH_M, 'cutReach: within the AHEAD_M spots of the far end, so no loop')
+  T.check(math.abs(N.cutReach(1, 30, true) - (0.5 * 900 / (0.2 * 9.81) + N.PLAN_MARGIN_M)) < 1e-9,
+    'cutReach: a fresh car we put ahead: as far as its plan sees at its speed (not CUT_FRESH_M)')
+  T.check(N.cutReach(10, 10, nil) == 100 + N.PLAN_MARGIN_M, 'cutReach: an older slow car: the plan 100 m + margin')
+  T.check(N.cutReach(10, 0, nil) >= N.CUT_M, 'cutReach: never under CUT_M')
 end
 -- a car put ahead starts near the player's speed, not standing
 do
