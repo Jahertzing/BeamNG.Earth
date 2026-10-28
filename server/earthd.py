@@ -96,6 +96,7 @@ import randomplace as randomplacemod  # noqa: E402
 import placepreview as placepreviewmod  # noqa: E402
 import pools as poolsmod  # noqa: E402
 import plancache as plancachemod  # noqa: E402
+import worldvol  # noqa: E402
 import grading as gradingmod  # noqa: E402
 import roadmesh as roadmeshmod  # noqa: E402
 import roadwidth as roadwidthmod  # noqa: E402
@@ -4162,7 +4163,7 @@ class Connection:
             try:
                 def cell_water(key):    # a cell's water lines if its map data is at hand (else built meanwhile)
                     md = sea.md
-                    if not os.path.exists(md.path(mapdatamod._key(key), "water")):
+                    if not md.has(mapdatamod._key(key), "water"):
                         missing[0] = True
                         sea.warm([(key.x, key.y)])
                         return None
@@ -4179,7 +4180,7 @@ class Connection:
                     la1, lo1, _ = frame.enu_to_geodetic(x + r, y + r, 0.0)
                     try:
                         every = mapcells.cells_for_bbox(float(la0), float(lo0), float(la1), float(lo1), max_cells=256)
-                        keys = tuple(key for key in every if os.path.exists(md.path(mapdatamod._key(key), "roads")))
+                        keys = tuple(key for key in every if md.has(mapdatamod._key(key), "roads"))
                         if len(keys) < len(every):
                             missing[0] = True
                         memo = getattr(self, "_river_clear", None)   # (anchor, cells) -> clearance: built once
@@ -4626,6 +4627,9 @@ async def main_async(args):
         radii = {ml: args.near_radii[0], ml + 1: args.near_radii[1]}
     net = netfetch.Fetcher(stats_dir=os.path.join(args.cache_dir, "netstats"), offline=args.offline)
     disk = cachemod.Cache(args.cache_dir, args.cache_cap)
+    log.info("%s", worldvol.summary(cachemod.world_dir()))
+    if cachemod.world_dir():
+        threading.Thread(target=scan_world, args=(cachemod.world_dir(),), daemon=True, name="world-size").start()
     threading.Thread(target=prune_own_caches, args=(args.cache_dir,), daemon=True, name="cache-prune").start()
     # map data (mapdata.py): land cover for the surfaces, roads; one instance shares its cache locks
     mapdata = (mapdatamod.MapData(args.cache_dir, fetcher=net)
@@ -4924,10 +4928,48 @@ def saved_cache_dir():
         return None
 
 
+def default_world_dir():
+    """The world folder (apppaths: the one kept in app.json, else C:/beamng-earth/world, ~/beamng-earth/world)."""
+    try:
+        ap = _app_modules()[0]
+        return ap.saved_world_dir() or ap.default_world_dir()
+    except Exception:
+        return os.path.join(os.path.expanduser("~"), "beamng-earth", "world")
+
+
+_world_info = {}        # the world folder's size and regions, from scan_world (the settings page)
+
+
+def scan_world(world_dir):
+    """The world folder's size, files and installed regions for the settings page (app_paths), once at start (a
+    background walk: only the pre-load, migrate and import change it, with the server closed)."""
+    try:
+        regions = [{"name": r["slug"], "title": str(r["meta"].get("title") or "")[:200], "keys": len(r["tokens"]),
+                    "last": time.strftime("%Y-%m-%d", time.localtime(r["mtime"])) if r["mtime"] else "",
+                    "complete": r["meta"].get("complete") is not False} for r in worldvol.regions(world_dir)]
+        _world_info.update(dir=world_dir, regions=regions)
+        n = b = 0
+        for _, size, _ in worldvol.walk(world_dir):
+            n, b = n + 1, b + size
+        _world_info.update(files=n, bytes=b)
+        log.info("world folder: %.2f GB in %d files, %d regions", b / 1e9, n, len(regions))
+    except Exception as e:          # (the page then shows the folder only)
+        log.warning("world folder not counted: %s: %s", type(e).__name__, e)
+
+
+def world_fields(world_dir):
+    """app_paths' world folder fields: worldDir, worldBytes / worldFiles (-1 while counting), worldRegions."""
+    if not world_dir:
+        return {}
+    w = _world_info if _world_info.get("dir") == world_dir else {}
+    return {"worldDir": world_dir, "worldBytes": int(w.get("bytes", -1)), "worldFiles": int(w.get("files", -1)),
+            "worldRegions": list(w.get("regions", []))}
+
+
 def app_paths_message(cache_dir, result):
     """app_paths for the settings page: the cache folder in use and the one kept for the next start, the BeamMP
-    launcher (the player's choice, else the one found), whether a window is open (picking), and result: the answer to
-    the last choice ({what, ok, text})."""
+    launcher (the player's choice, else the one found), the world folder (its size and installed regions: never
+    cleared), whether a window is open (picking), and result: the answer to the last choice ({what, ok, text})."""
     try:
         ap, bm = _app_modules()
         dd = ap.data_dir()
@@ -4938,6 +4980,7 @@ def app_paths_message(cache_dir, result):
         saved, launcher = cache_dir, ""
     m = {"type": "app_paths", "cacheDir": os.path.abspath(cache_dir), "cacheNext": os.path.abspath(saved),
          "beammp": launcher}
+    m.update(world_fields(cachemod.world_dir()))
     if result:
         m["result"] = result
     return m
@@ -4980,6 +5023,10 @@ def main():
     ap.add_argument("--cache-dir", default=saved_cache_dir() or os.path.join(home, ".cache/beamng-earth"),
                     help="download cache root (DEM tiles go to <cache-dir>/dem/; default: the folder chosen on the "
                          "settings page or with the app's --cache-dir, else .cache/beamng-earth in the home folder)")
+    ap.add_argument("--world-dir", default=default_world_dir(),
+                    help="the world folder: what tools/preload.py fetched, read before the cache and never evicted or "
+                         "cleared (cache.py 'The world folder'; default: the one kept in app.json, else "
+                         "C:/beamng-earth/world on Windows, ~/beamng-earth/world elsewhere; off: none)")
     ap.add_argument("--peers", default=os.environ.get("BNGE_PEERS", ""),
                     help="compute sharing: helpers (HOST[:PORT] ...; peerwork.py serve on them) that build far tiles "
                          "when this server's own workers are busy (default: BNGE_PEERS)")
@@ -5154,6 +5201,9 @@ def main():
                          "never what this session used within the hour, the gravity model or netstats/")
     ap.add_argument("-v", "--verbose", action="store_true")
     args = ap.parse_args()
+    args.cache_dir = os.path.abspath(args.cache_dir)
+    # the world folder read first (before any worker process starts: they take it from the environment)
+    cachemod.set_world(None if args.world_dir.strip().lower() == "off" else args.world_dir, args.cache_dir)
     os.environ["BNE_CDOT"] = "1" if args.cdot == "on" else "0"     # (every process: mapdata.MapData.cdot)
     import laneoverrides        # the player's road lanes (laneoverrides.py): every process reads the same file, and an
     os.environ.setdefault(laneoverrides.ENV_PATH, laneoverrides.path(args.cache_dir))   # edit keys the revisit cache

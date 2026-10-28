@@ -347,6 +347,8 @@ const settingsSchema = [
       { id: "cacheDir", type: "path", what: "cache", name: "Cache folder", placeholder: "Folder for the download cache, or default", desc: "Where the download cache is kept, e.g. on another drive. Change... opens your system's folder window (it may open behind the game: Alt+Tab to it); or type or paste a folder below and press Use (default: back to .cache/beamng-earth in your home folder). Used from the next start of the app; move the old folder's contents there first to keep what is already downloaded." },
       { id: "cacheCapGb", type: "select", default: "20", name: "Download cache size", desc: "The most the download cache may use. Over the limit, the server removes the files used longest ago (every few minutes, down to 90 % of the limit); never what this session used in the last hour or the gravity model. Kept by the server for its next start.",
         options: [ { label: "5 GB", value: "5" }, { label: "10 GB", value: "10" }, { label: "20 GB", value: "20" }, { label: "50 GB", value: "50" }, { label: "100 GB", value: "100" }, { label: "200 GB", value: "200" }, { label: "Unlimited", value: "unlimited" } ] },
+      { id: "worldUsage", type: "info", name: "World folder", desc: "What the pre-load (tools/preload.py) installed: kept for good in its own folder, read before the download cache, and never removed by the size limit or Clear cache. tools/world.py shows, backs up or moves it." },
+      { id: "worldRegions", type: "info", name: "Installed regions", desc: "The regions pre-loaded into the world folder, with the date of their last pre-load run." },
       { id: "cacheClear", type: "action", name: "Clear cache", desc: "Deletes the downloaded elevation and imagery (and the server's de-shadowing and colour-seam data). What this session used and the gravity model stay. Places are downloaded again when you visit them." },
     ],
   },
@@ -440,8 +442,24 @@ function infoValue(item) {
   if (item.id === "deshadow") return s.deshadow || "off"
   if (item.id === "colormatch") return s.colormatch || "off"
   if (item.id === "cacheUsage") return (s.cache && s.cache.line) || "-"
+  if (item.id === "worldUsage") return worldLine(s.paths)
+  if (item.id === "worldRegions") return regionsLine(s.paths)
   if (item.id === "theDriveTimes") return driveTimes(s.theDrive)
   return ""
+}
+
+// The world folder (the server's app_paths): its path and size, and the regions installed in it
+function worldLine(p) {
+  if (!p || !p.worldDir) return "None (the server has no world folder)"
+  const b = p.worldBytes
+  const size = b == null || b < 0 ? "counting..." : b >= 1e9 ? `${(b / 1e9).toFixed(1)} GB` : `${Math.round(b / 1e6)} MB`
+  const files = p.worldFiles != null && p.worldFiles >= 0 ? `, ${p.worldFiles.toLocaleString()} files` : ""
+  return `${size}${files} in ${p.worldDir}`
+}
+function regionsLine(p) {
+  const rs = (p && p.worldRegions) || []
+  if (!rs.length) return "None yet"
+  return rs.map(r => `${r.name}${r.last ? ` (${r.last}${r.complete ? "" : ", unfinished"})` : ""}`).join("; ")
 }
 
 function formatDefault(item) {

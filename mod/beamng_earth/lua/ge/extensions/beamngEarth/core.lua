@@ -1067,8 +1067,18 @@ local function onMessage(msg)
     -- the settings page's "Cache folder" and "BeamMP launcher": the paths now, and the answer to the last choice
     local r = type(msg.result) == 'table' and msg.result or nil
     if r then appPathAnswers = appPathAnswers + 1 end
+    -- the world folder (what the pre-load installed, never cleared): its size (-1 while counted) and regions
+    local regions = {}
+    for _, g in ipairs(type(msg.worldRegions) == 'table' and msg.worldRegions or {}) do
+      if type(g) == 'table' then
+        regions[#regions + 1] = { name = tostring(g.name or ''), title = tostring(g.title or ''),
+          keys = tonumber(g.keys) or 0, last = tostring(g.last or ''), complete = g.complete ~= false }
+      end
+    end
     appPaths = { cacheDir = tostring(msg.cacheDir or ''), cacheNext = tostring(msg.cacheNext or ''),
       beammp = tostring(msg.beammp or ''), answers = appPathAnswers,
+      worldDir = msg.worldDir and tostring(msg.worldDir) or nil, worldBytes = tonumber(msg.worldBytes),
+      worldFiles = tonumber(msg.worldFiles), worldRegions = regions,
       result = r and { what = tostring(r.what or ''), ok = r.ok == true, text = tostring(r.text or '') }
         or (appPaths and appPaths.result) }
   elseif t == 'cache' then

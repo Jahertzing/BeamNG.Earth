@@ -13,8 +13,8 @@ How (revisit.py, blockcache.py, the mod's routepins.lua):
           mod's rebase rule (a new anchor once the car is rebaseDistance - PREFETCH_MARGIN from the last, horizontally)
           walked along the route, each new anchor the planned one within PIN of the car (another route's: the routes
           share I-25) else the grid point (geodesy.snapAnchor). Written to the mod's settings folder (routepins.lua
-          pins teleports and rebases near one to it) and to <cache>/bake/anchors.json (what is built in one of them is
-          kept in <cache>/bake, never cut back). PIN is under half the anchor spacing, so a drive either way along
+          pins teleports and rebases near one to it) and to <world>/bake/anchors.json (what is built in one of them is
+          kept in <world>/bake, never cut back or cleared; --world-dir). PIN is under half the anchor spacing, so a drive either way along
           a route, or one that set off from a town on it, lands on the same anchors.
   drive   for each route: tools/autodrive_perf.py over its legs (teleport to the start, the car's own AI on the GPS
           route, the frame times sampled), the server keeping everything it builds. The first drive after a code
@@ -170,9 +170,18 @@ def rebase_distance(user_dir):
         return DEFAULT_DISTANCE
 
 
-def bake_dir(cache_dir):
+def default_world_dir():
+    try:
+        import apppaths
+        return apppaths.saved_world_dir() or apppaths.default_world_dir()
+    except Exception:
+        return os.path.join(os.path.expanduser("~"), "beamng-earth", "world")
+
+
+def bake_dir(a):
+    """The baked route's folder: revisit.pin_dir's, in the world folder (--world-dir; "off": the cache's, as before)."""
     import revisit
-    return os.path.join(cache_dir, revisit.PIN_SUBDIR)
+    return revisit.pin_dir(a.cache_dir, None if a.world_dir == "off" else a.world_dir)
 
 
 def write_json(path, obj):
@@ -223,8 +232,8 @@ def cmd_plan(a):
                        for n in names},
             "planned": time.strftime("%Y-%m-%d %H:%M:%S")}
     write_json(os.path.join(a.user_dir, *MOD_FILE), data)
-    write_json(os.path.join(bake_dir(a.cache_dir), "anchors.json"), data)
-    write_json(os.path.join(bake_dir(a.cache_dir), "routes.json"), {n: [list(p) for p in pts[n]] for n in names})
+    write_json(os.path.join(bake_dir(a), "anchors.json"), data)
+    write_json(os.path.join(bake_dir(a), "routes.json"), {n: [list(p) for p in pts[n]] for n in names})
     print(f"{len(anchors)} anchors (rebase {dist / 1000:g} km, pinned within {pin_m / 1000:.2f} km):")
     for i, x in enumerate(anchors):
         used = [n for n in order if i in order[n]]
@@ -232,7 +241,7 @@ def cmd_plan(a):
     for n in names:
         print(f"  {n} ({data['routes'][n]['km']} km): anchors {order[n]}, back {order[n + '<']}")
     print(f"written: {os.path.join(a.user_dir, *MOD_FILE)}")
-    print(f"         {os.path.join(bake_dir(a.cache_dir), 'anchors.json')}")
+    print(f"         {os.path.join(bake_dir(a), 'anchors.json')}")
     return 0
 
 
@@ -257,7 +266,7 @@ def sizes(folder):
 
 def cmd_status(a):
     import revisit
-    bd = bake_dir(a.cache_dir)
+    bd = bake_dir(a)
     data = read_json(os.path.join(bd, "anchors.json"))
     if not data:
         print("no route planned (route_bake.py plan)")
@@ -287,7 +296,7 @@ def cmd_status(a):
 
 def cmd_drive(a):
     import revisit
-    bd = bake_dir(a.cache_dir)
+    bd = bake_dir(a)
     data = read_json(os.path.join(bd, "anchors.json"))
     if not data:
         print("plan first (route_bake.py plan)", file=sys.stderr)
@@ -338,7 +347,7 @@ def cmd_drive(a):
 
 
 def cmd_clean(a):
-    bd = bake_dir(a.cache_dir)
+    bd = bake_dir(a)
     man = read_json(os.path.join(bd, MANIFEST), {})
     last = next((r for r in reversed(man.get("runs") or []) if r.get("complete")), None)
     if last is None:
@@ -365,6 +374,8 @@ def main(argv=None):
     ap.add_argument("command", choices=("plan", "drive", "status", "clean"))
     ap.add_argument("--routes", default=",".join(ROUTES), help=f"comma list of {', '.join(ROUTES)}")
     ap.add_argument("--cache-dir", default=None, help="the server's cache (default: the server's)")
+    ap.add_argument("--world-dir", default=None,
+                    help="the world folder: the bake lives in its bake/ (default: the server's; off: the cache's)")
     ap.add_argument("--user-dir", default=None, help="the game's user folder (default: the one the game uses)")
     ap.add_argument("--rebase-m", type=float, default=None, help="plan: the rebase distance (default: the mod's)")
     ap.add_argument("--points", default=None, help="plan: the routes' points from this JSON instead of OSRM")
@@ -375,6 +386,7 @@ def main(argv=None):
     ap.add_argument("--dry-run", action="store_true", help="clean: say what would go")
     a = ap.parse_args(argv)
     a.cache_dir = a.cache_dir or default_cache_dir()
+    a.world_dir = a.world_dir or default_world_dir()
     a.user_dir = a.user_dir or default_user_dir()
     return {"plan": cmd_plan, "drive": cmd_drive, "status": cmd_status, "clean": cmd_clean}[a.command](a)
 

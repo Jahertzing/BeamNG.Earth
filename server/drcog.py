@@ -34,6 +34,7 @@ import urllib.parse
 
 import numpy as np
 
+import cache
 import staging
 
 log = logging.getLogger("earthd.mapdata")
@@ -125,7 +126,7 @@ class Drcog:
         if got is not None:
             return got
         try:
-            with np.load(path, allow_pickle=False) as z:
+            with np.load(cache.resolve(path), allow_pickle=False) as z:
                 got = {k: z[k] for k in z.files}
         except (OSError, ValueError):
             got = build()

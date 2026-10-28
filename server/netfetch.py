@@ -734,9 +734,14 @@ class Fetcher:
 
     def miss_alive(self, path, url):
         """A .404 marker for url is valid: within the host's miss_ttl, or the host cannot be asked now
-        (offline / breaker open), so an expired marker still counts as "no data" instead of an error."""
+        (offline / breaker open), so an expired marker still counts as "no data" instead of an error. The world
+        folder's markers (cache.resolve: the pre-load's) never expire."""
+        import cache
+        path = cache.resolve(path)
         if not os.path.exists(path):
             return False
+        if cache.in_world(path):
+            return True
         host = host_of(url)
         return miss_alive(path, self.policy(host).miss_ttl, self.wall()) or not self.available(host)
 

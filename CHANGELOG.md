@@ -15,6 +15,13 @@ What changed in each release of BeamNG.Earth, newest first.
 - **GPS waypoints and avoided roads**: the GPS route can pass through waypoints in order and keep off toll roads (the
   server's route request takes `via` and `avoid`). `tools/thedrive_check.py` checks both Drive routes against the
   live router.
+- **World folder**: what `tools/preload.py` fetches now goes into a permanent world folder (`C:\beamng-earth\world`
+  on Windows, `~/beamng-earth/world` elsewhere; `--world-dir`, kept in `app.json` like the cache folder) instead of
+  the download cache. The server reads it first, then the cache, and never evicts, caps or clears it: only data
+  streamed live stays in the trimmable cache. The region manifests go to `world/regions/` and the baked route to
+  `world/bake/`. `tools/world.py` shows what is installed (`status`), moves an existing cache's pre-loaded files over
+  (`migrate`, a dry run unless `--apply`), backs it up or exports it to another drive (`backup`, `export`, `import`)
+  and spot-checks it (`verify`).
 
 ## 1.7.0 beta (2026-10-27)
 
