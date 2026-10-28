@@ -1504,7 +1504,13 @@ The user: "make the world look alive ... look like a professionally made map".
   - storeys from the class and the footprint: sheds 1, row houses (narrow, deep, sharing a wall) 2-4,
     houses 1-2, apartments 3-5, others 2-4; a given height or floor count wins;
   - roofs: gabled / hipped for detached houses and small sheds on near-rectangular footprints (the
-    oriented box fills >= 80 %), flat otherwise and always when attached;
+    oriented box fills >= 80 %), flat otherwise and always when attached; a pitched roof is the outline's
+    straight skeleton (`server/roofskel.py`, 2026-10-28: hipped, each wing's end hip a gable wall when
+    gabled; L / T shapes get their valleys) and the walls, door, porch and steps follow the outline; an
+    outline within 0.25 m of its oriented box, churches, pyramids and outlines the skeleton gives up on
+    (an edge < 0.4 m, a corner < 12 deg, > 32 corners, a result that does not tile the outline) keep the
+    box roof. Frederick, 64 road tiles: 633 box-like, 661 skeleton roofs (493 L-shaped), 6 fallbacks;
+    the road and far tiles' build times unchanged (0.31 s / 0.05 s);
   - facades: the stock window sheets `m_highrise_plaster` / `m_highrise_metal` (asset survey
     2026-10-13): each 256 px band is one floor style; every floor of a wall is one band with a whole
     number of bays (12 m per 1024 px); the sash band's two black "open window" bays are skipped (one quad

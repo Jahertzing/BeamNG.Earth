@@ -329,7 +329,7 @@ def oriented_box(p):
 class Spec:
     """What is built for one footprint (decided by plan())."""
     __slots__ = ("ring", "floors", "floor_h", "height", "roof", "roof_mat", "facade", "band", "shop", "plain", "min_h", "wall", "door", "windows", "front", "steeple", "stoop",
-                 "sign", "porch", "cls", "seed", "deck", "pitch", "portal", "gring")
+                 "sign", "porch", "cls", "seed", "deck", "pitch", "portal", "gring", "skel")
 
     def __init__(self, **kw):
         for k in self.__slots__:
@@ -1060,12 +1060,54 @@ def base_z(spec, gmin, gmax):
     return gmin if spec.portal else gmax
 
 
+# Pitched roofs on the real outline (roofskel.py, 2026-10-28): the roof is the outline's straight skeleton (hipped; each
+# wing's end hip a gable wall when gabled), and the walls, door, porch and steps follow the outline. An outline within
+# RECT_TOL_M of its oriented box keeps the box's roof (the same roof, drawn as before); churches (their nave and
+# steeple are laid out on the box), pyramids and outlines the skeleton gives up on (roofskel.degenerate, a result that
+# does not check out) keep the box too.
+RECT_TOL_M = 0.25
+
+
+def roof_skeleton(spec):
+    """The skeleton roof of a pitched spec (kept on the spec: built once for the full and the lite mesh): (offset ring
+    (the eaves, EAVE_M out), nodes, node distances, faces, gables) as roofskel gives them, or None (the box roof)."""
+    got = spec.skel
+    if got is not None:
+        return got or None
+    got = False
+    ring = np.asarray(spec.ring, np.float64)
+    if spec.roof in ("gabled", "hipped") and spec.cls not in ("pyramid",) and not spec.steeple \
+            and spec.cls not in CHURCH_CLASSES and len(ring) >= 4 and not _box_like(ring):
+        import roofskel
+        eaves = None if roofskel.degenerate(ring.tolist()) else roofskel.offset_ring(ring.tolist(), EAVE_M)
+        sk = roofskel.skeleton(eaves) if eaves is not None else None
+        if sk is not None:
+            nodes, nt, faces = sk
+            gables = []
+            if spec.roof == "gabled":
+                nodes, nt, faces, gables = roofskel.gable(eaves, nodes, nt, faces)
+            got = (eaves, nodes, nt, faces, gables)
+    spec.skel = got
+    return got or None
+
+
+def _box_like(ring):
+    """Is the ring (nearly) its own oriented box: four corners, each within RECT_TOL_M of the box's?"""
+    if len(ring) != 4:
+        return False
+    c, u, hl, hw = oriented_box(ring)
+    v = np.array([-u[1], u[0]])
+    box = np.array([c - u * hl - v * hw, c + u * hl - v * hw, c + u * hl + v * hw, c - u * hl + v * hw])
+    return all(float(np.hypot(*(box - p).T).min()) <= RECT_TOL_M for p in ring)
+
+
 def drawn_ring(spec):
-    """The footprint its walls are drawn on: a pitched roof's house is its oriented box (build); its door, steps and
-    porch go on these walls (on the map's outline they stood off a box wall at an angle, or inside it, only the
-    door's frame showing: Stelvio pass, the user's reports 2026-10-17)."""
+    """The footprint its walls are drawn on: the outline itself, but a pitched roof's house without a skeleton roof
+    (roof_skeleton) is its oriented box (build); its door, steps and porch go on these walls (on the map's outline
+    they stood off a box wall at an angle, or inside it, only the door's frame showing: Stelvio pass, the user's
+    reports 2026-10-17)."""
     ring = spec.ring
-    if spec.roof != "flat":
+    if spec.roof != "flat" and roof_skeleton(spec) is None:
         c, u, hl, hw = oriented_box(ring)
         v = np.array([-u[1], u[0]])
         ring = np.array([c - u * hl - v * hw, c + u * hl - v * hw, c + u * hl + v * hw, c - u * hl + v * hw])
@@ -1197,12 +1239,48 @@ def _clutter(m, spec, ring, z_eave, mat_idx):
         _box(m, p, u, hx, hy, z_eave, z_eave + h, mat)
 
 
+def _skeleton_roof(m, spec, sk, z_eave, mat_idx):
+    """A roof_skeleton roof: each face its wall's plane, from the eaves (EAVE_M out, as the box roof's) up at the
+    pitch; its texture along the wall, up the slope (as _roof's); each gable a wall triangle in the facade's colour on
+    its wall, up to just under the ridge."""
+    eaves, nodes, nt, faces, gables = sk
+    rm = mat_idx[spec.roof_mat]
+    tp = math.tan(math.radians(roof_pitch(spec)))
+    up = 1.0 / math.cos(math.radians(roof_pitch(spec))) / ROOF_UV_M      # uv per metre of distance in, up the slope
+    ze = z_eave - EAVE_M * tp
+    n = len(eaves)
+    for i, f in enumerate(faces):
+        if len(f) < 3:
+            continue
+        (ax, ay), (bx, by) = eaves[i], eaves[(i + 1) % n]
+        L = math.hypot(bx - ax, by - ay)
+        dx, dy = (bx - ax) / L, (by - ay) / L
+        pts = [(nodes[k][0], nodes[k][1], ze + nt[k] * tp) for k in f]
+        uv = [(((x - ax) * dx + (y - ay) * dy) / ROOF_UV_M, nt[k] * up) for (x, y, _), k in zip(pts, f)]
+        m.poly(pts, uv, rm)
+    ring = spec.ring
+    fac = mat_idx[spec.facade]
+    for i, g in gables:
+        a, b = ring[i], ring[(i + 1) % len(ring)]
+        L = float(math.hypot(*(b - a)))
+        d = (b - a) / L
+        x, y = nodes[g]
+        t = (x - a[0]) * d[0] + (y - a[1]) * d[1]
+        top = (float(a[0] + d[0] * t), float(a[1] + d[1] * t), ze + nt[g] * tp - EAVE_M * 0.2)
+        m.tri((float(a[0]), float(a[1]), z_eave), (float(b[0]), float(b[1]), z_eave), top,
+              (0, 0.995), (0.02, 0.995), (0.01, 0.999), fac)
+
+
 def _roof(m, spec, ring, z_eave, mat_idx):
     rm = mat_idx[spec.roof_mat]
     if spec.roof == "flat":
         pts = [(p[0], p[1], z_eave) for p in ring]
         uv = [(p[0] / ROOF_UV_M, p[1] / ROOF_UV_M) for p in ring]
         m.poly(pts, uv, rm)
+        return
+    sk = roof_skeleton(spec)
+    if sk is not None:
+        _skeleton_roof(m, spec, sk, z_eave, mat_idx)
         return
     c, u, hl, hw = oriented_box(ring)
     v = np.array([-u[1], u[0]])
@@ -1635,11 +1713,7 @@ def collision_mesh(specs_and_ground):
         if deck_plan(spec, gmin, gmax) is not None:
             _parking_deck(m, spec, gmin, gmax, _Looks(spec.seed))
             continue
-        ring = np.asarray(spec.ring, np.float64)
-        if spec.roof != "flat":
-            c, u, hl, hw = oriented_box(ring)
-            v = np.array([-u[1], u[0]])
-            ring = np.array([c - u * hl - v * hw, c + u * hl - v * hw, c + u * hl + v * hw, c - u * hl + v * hw])
+        ring = np.asarray(drawn_ring(spec), np.float64)       # (the walls as drawn: the outline or its box)
         if _area2(ring) < 0:
             ring = ring[::-1]
         mh = spec.min_h or 0.0
