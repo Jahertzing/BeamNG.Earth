@@ -594,7 +594,9 @@ def clear_of(rows, props, r=CLEAR_M):
 # front at local +x, tyres on z 0), the rest stays for the stock cars. The models built (their US shares renormalised).
 STATIC_CARS = os.environ.get("BNE_STATIC_CARS", "on").lower() not in ("off", "0", "false", "no")
 STATIC_MODELS = ("midsize", "fullsize", "pessima", "covet", "lansdale", "roamer", "pickup", "van", "sunburst2", "wendover")
-STATIC_SHARE = {(False, True): 0.30, (False, False): 0.45, (True, True): 0.40, (True, False): 0.45}   # (lot / drive, town)
+# (lot / drive, town): the curbs sparse (the user, 2026-10-28, at 0.30 / 0.45: "waaaay too many parked cars"), a
+# suburb's lots and driveways a little fuller
+STATIC_SHARE = {(False, True): 0.10, (False, False): 0.20, (True, True): 0.30, (True, False): 0.25}
 STATIC_FLIP = 0.5           # lot and driveway cars backed in (curb cars face the traffic's way)
 
 

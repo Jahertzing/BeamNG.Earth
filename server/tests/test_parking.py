@@ -61,13 +61,33 @@ class CurbTest(unittest.TestCase):
             else:
                 self.assertAlmostEqual(s[3], 180.0, places=0)
 
+    def test_only_where_parking_is_plausible(self):
+        res = roads.Spec(9.5, "paved", True, "residential", False)
+        blvd = roads.Spec(14.0, "paved", True, "secondary", False, lanes=4)
+        coll = roads.Spec(11.0, "paved", True, "tertiary", False, lanes=2)
+        self.assertTrue(parking.street_parks(res, "Elm St", town=True))
+        self.assertFalse(parking.street_parks(res, "East Frontage Rd", town=True), "no parking on a frontage road")
+        self.assertFalse(parking.street_parks(blvd, "Ridgeway Blvd", town=False), "a 4-lane boulevard: none")
+        self.assertFalse(parking.street_parks(coll, "Ridgeway Blvd", town=True), "a suburb's collector: none")
+        self.assertTrue(parking.street_parks(coll, "Wilcox St", town=False), "a downtown's: yes")
+        self.assertTrue(parking.street_parks(coll._replace(kmh=40.0), "5th St", town=True), "a main street's limit: yes")
+        # the map's parking tags win: no parking tagged on a residential street, one side on a boulevard
+        for k in range(50):
+            if furniture._h01(f"t{k}", "park") < parking.STREET_SHARE:
+                break
+        r = (f"t{k}", res._replace(park=()), np.array([(-300.0, 50.0, 0.0), (600.0, 50.0, 0.0)]), 0.0)
+        self.assertEqual(parking.curb_spots([r], walks(r), (0, 0, 256, 256), town=True), [])
+        r = (f"t{k}", blvd._replace(park=(-1,)), r[2], 0.0)
+        got = parking.curb_spots([r], walks(r), (0, 0, 256, 256), town=True)
+        self.assertTrue(got and all(s[1] < 50.0 for s in got), "the right side only")
+
     def test_one_way_against_its_geometry(self):
         for k in range(50):
             if furniture._h01(f"o{k}", "park") < parking.STREET_SHARE:
                 break
         r = (f"o{k}", roads.Spec(9.5, "paved", True, "secondary", True), np.array([(-300.0, 50.0, 0.0), (600.0, 50.0, 0.0)]), 0.0)
-        along = parking.curb_spots([r], walks(r), (0, 0, 256, 256))
-        against = parking.curb_spots([r], walks(r), (0, 0, 256, 256), directions={f"o{k}": -1})
+        along = parking.curb_spots([r], walks(r), (0, 0, 256, 256), town=False)        # (a downtown one-way)
+        against = parking.curb_spots([r], walks(r), (0, 0, 256, 256), directions={f"o{k}": -1}, town=False)
         self.assertTrue(along and all(min(s[3], 360 - s[3]) < 1 for s in along), "eastbound along the geometry")
         self.assertTrue(all(abs(s[3] - 180) < 1 for s in against), "westbound against it")
 

@@ -17,6 +17,13 @@ from polygon import Path
 import furniture
 
 PARK_CLASSES = {"residential", "tertiary", "secondary", "unclassified", "living_street"}
+# ... of those, the collector and arterial classes park along the curb only in a dense core (a main street downtown),
+# not in the suburbs (the user, 2026-10-28: "waaaay too many parked cars, even on roads that make no sense like
+# ridgeway blvd in Frederick, and the frontage roads"): a suburb's 4-lane boulevards and frontage roads have none
+ARTERIAL_PARK_CLASSES = {"tertiary", "secondary"}
+MAX_PARK_LANES = 3          # a street with more driving lanes than this (both ways) parks only where the map says so
+MAIN_STREET_KMH = 50.0      # ... except where its mapped limit is this low (a suburb or small town's main street)
+FRONTAGE_WORDS = ("frontage", "service rd", "service road")     # a frontage road's name: no curb parking
 SPOT_LEN_M = 6.5            # a spot's length along the curb (US parallel parking: 6-7 m)
 SPOT_W_M = 2.5              # the stock spot size (city.sites.json: 2.5 x 6 x 3)
 CURB_OFF_M = 1.25           # the spot's centre this far from the curb into the road
@@ -28,11 +35,28 @@ HYDRANT_CLEAR_M = 4.6       # m kept clear of a hydrant (US: 15 ft)
 DRIVE_CLEAR_M = 4.2         # m from a driveway's mouth to a spot's centre
 
 
-def curb_spots(roads, walks, box, left_hand=False, directions=None):
+def street_parks(spec, name=None, town=None):
+    """Whether a street has curbside parking by the class rule (the map's parking tags aside: spec.park): an urban
+    street of PARK_CLASSES wide enough, not a frontage road, not a wide arterial, and a collector or arterial only in
+    a dense core (town False: not a suburb's) or with a main street's speed limit."""
+    if not spec.urban or spec.cls not in PARK_CLASSES or spec.width < MIN_WIDTH_M:
+        return False
+    if name and any(w in str(name).lower() for w in FRONTAGE_WORDS):
+        return False
+    if spec.lanes is not None and spec.lanes > MAX_PARK_LANES:
+        return False
+    if spec.cls not in ARTERIAL_PARK_CLASSES or town is False:
+        return True
+    return spec.kmh is not None and spec.kmh <= MAIN_STREET_KMH       # (a small town's main street: 25-30 mph)
+
+
+def curb_spots(roads, walks, box, left_hand=False, directions=None, names=None, town=None):
     """Rows [x, y, z, heading] of the curbside spots of a tile box (x0, y0, x1, y1). roads: build_tile's
     (fid, spec, centreline (k, 3), lon); walks: its sidewalk runs (dicts with fid, pts, side, w). left_hand:
     traffic drives on the left (the car's left side to the curb). directions: fid -> +1 / -1, a one-way street's
-    traffic along / against its geometry (Overture's one-way rule; +1 when unknown)."""
+    traffic along / against its geometry (Overture's one-way rule; +1 when unknown). names: fid -> the road's name
+    (frontage roads); town: the tile is a suburb's (True), a dense core's (False) or unknown (None): street_parks.
+    The map's parking tags (spec.park: the sides that park, () none) win over the class rule."""
     x0, y0, x1, y1 = box
     by_fid = {fid: (spec, pts) for fid, spec, pts, _ in roads}
     out = []
@@ -41,13 +65,17 @@ def curb_spots(roads, walks, box, left_hand=False, directions=None):
         if fid is None or "pts" not in wk or fid not in by_fid:
             continue
         spec, line = by_fid[fid]
-        if not spec.urban or spec.cls not in PARK_CLASSES or spec.width < MIN_WIDTH_M:
-            continue
-        if furniture._h01(fid, "park") >= STREET_SHARE:
-            continue
         side = wk["side"]
-        if spec.width < BOTH_SIDES_M and side != (1 if furniture._h01(fid, "parkside") < 0.5 else -1):
-            continue
+        if spec.park is not None:
+            if side not in spec.park or not spec.urban:
+                continue
+        else:
+            if not street_parks(spec, (names or {}).get(fid), town):
+                continue
+            if furniture._h01(fid, "park") >= STREET_SHARE:
+                continue
+            if spec.width < BOTH_SIDES_M and side != (1 if furniture._h01(fid, "parkside") < 0.5 else -1):
+                continue
         run = np.asarray(wk["pts"], np.float64)
         if len(run) < 2:
             continue
