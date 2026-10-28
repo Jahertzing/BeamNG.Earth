@@ -32,6 +32,7 @@ M.MATERIALS = {
   -- highway signs (server guidesigns.py): their white legends and borders, and the delineators' reflectors, as
   -- retroreflective sheeting looks in headlights
   bne_gsign_text = { '1 1 1', 45 },
+  bne_gsign_letter = { '1 1 1', 45 },        -- (the street names' lettering as geometry)
   bne_gsign_white = { '1 1 1', 12 },
   bne_gsign_reflect = { '1 1 1', 400 },
   bne_gsign_amber = { '1 0.7 0.15', 400 },

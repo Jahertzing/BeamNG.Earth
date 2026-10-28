@@ -34,12 +34,13 @@ import numpy as np
 HERE = os.path.dirname(os.path.abspath(__file__))
 REGION_DIR = os.path.join(HERE, "hwysigns")
 FONT_FILE = os.path.join(HERE, "signfont.json")
+GLYPH_FILE = os.path.join(HERE, "signglyphs.json")     # the lettering as triangles (tools/build_sign_glyphs.py)
 PLAN_V = 1
 
 # materials (guidesigns.materials.json); a mesh's triangles carry an index into this list
 MATS = ("bne_gsign_panel", "bne_gsign_white", "bne_gsign_text", "bne_gsign_textk", "bne_gsign_steel",
-        "bne_gsign_reflect", "bne_gsign_amber", "bne_gsign_paint")
-M_PANEL, M_WHITE, M_TEXT, M_TEXTK, M_STEEL, M_REFLECT, M_AMBER, M_PAINT = range(len(MATS))
+        "bne_gsign_reflect", "bne_gsign_amber", "bne_gsign_paint", "bne_gsign_letter")
+M_PANEL, M_WHITE, M_TEXT, M_TEXTK, M_STEEL, M_REFLECT, M_AMBER, M_PAINT, M_LETTER = range(len(MATS))
 
 GREEN = (0, 98, 65)
 BLUE = (0, 56, 130)
@@ -108,6 +109,36 @@ def font():
             with open(FONT_FILE) as f:
                 _font = json.load(f)
         return _font
+
+
+_glyphs = None
+
+
+def glyphs():
+    """The glyph outlines as triangles in cap heights from the pen (tools/build_sign_glyphs.py)."""
+    global _glyphs
+    with _font_lock:
+        if _glyphs is None:
+            with open(GLYPH_FILE) as f:
+                _glyphs = json.load(f)["glyphs"]
+        return _glyphs
+
+
+def text_tris(s, cap, x, y):
+    """s as triangles from pen (x, y) on its baseline: [(points [(x, y)], triangles [(a, b, c)])], one per glyph,
+    spaced by the atlas' metrics (text_width)."""
+    f = font()
+    g, kern, out = f["glyphs"], f["kern"], []
+    vg = glyphs()
+    pen = x
+    for i, ch in enumerate(s):
+        gl = vg.get(ch)
+        if gl is not None and gl["t"]:
+            out.append(([(pen + a * cap, y + b * cap) for a, b in gl["v"]], [tuple(t) for t in gl["t"]]))
+        pen += (g[ch]["adv"] if ch in g else f["space"]) * cap
+        if i + 1 < len(s):
+            pen += kern.get(s[i:i + 2], 0.0) * cap
+    return out
 
 
 def text_width(s, cap):
@@ -241,6 +272,7 @@ class Face:
     def __init__(self):
         self.polys = []         # (layer, outline, colour or None for white, material)
         self.texts = []         # (layer, quads, ink "w" / "k")
+        self.tris = []          # (layer, points, triangles, colour, material): lettering as geometry (vtext)
 
     def poly(self, outline, color, layer):
         mat = M_WHITE if color == WHITE else M_PANEL
@@ -254,11 +286,19 @@ class Face:
         self.texts.append((layer, text_quads(s, cap, x, y), ink))
         return text_width(s, cap)
 
-    def text_c(self, s, cap, cx, y, ink="w", layer=3):
-        """s centred on cx."""
+    def text_c(self, s, cap, cx, y, ink="w", layer=3, vector=False):
+        """s centred on cx (vector: as geometry, vtext)."""
         w = text_width(s, cap)
-        self.text(s, cap, cx - w / 2, y, ink, layer)
+        (self.vtext if vector else self.text)(s, cap, cx - w / 2, y, ink, layer)
         return w
+
+    def vtext(self, s, cap, x, y, ink="w", layer=3):
+        """s as triangles of the panel materials (sharp at any distance, no texture: the street names); returns
+        its width."""
+        color, mat = (WHITE, M_LETTER) if ink == "w" else (BLACK, M_PANEL)
+        for pts, tris in text_tris(s, cap, x, y):
+            self.tris.append((layer, pts, tris, color, mat))
+        return text_width(s, cap)
 
     def add(self, other, dx, dy, dlayer=0):
         for layer, outline, color, mat in other.polys:
@@ -266,12 +306,16 @@ class Face:
         for layer, quads, ink in other.texts:
             self.texts.append((layer + dlayer, [(a + dx, b + dy, c + dx, d + dy, *uv) for a, b, c, d, *uv in quads],
                                ink))
+        for layer, pts, tris, color, mat in other.tris:
+            self.tris.append((layer + dlayer, [(x + dx, y + dy) for x, y in pts], tris, color, mat))
 
     def bounds(self):
         xs = [x for _, o, _, _ in self.polys for x, _ in o] + [q[i] for _, qs, _ in self.texts for q in qs
                                                                 for i in (0, 2)]
         ys = [y for _, o, _, _ in self.polys for _, y in o] + [q[i] for _, qs, _ in self.texts for q in qs
                                                                 for i in (1, 3)]
+        xs += [x for _, pts, _, _, _ in self.tris for x, _ in pts]
+        ys += [y for _, pts, _, _, _ in self.tris for _, y in pts]
         return (min(xs), min(ys), max(xs), max(ys)) if xs else (0.0, 0.0, 0.0, 0.0)
 
 
@@ -636,6 +680,8 @@ def draw_face(mesh, face, o, right, normal, back=True):
     for layer, outline, color, mat in face.polys:
         tris = triangulate(outline)
         mesh.tri_poly([P(x, y, layer) for x, y in outline], tris, mat, color)
+    for layer, pts, tris, color, mat in face.tris:
+        mesh.tri_poly([P(x, y, layer) for x, y in pts], tris, mat, color)
     for layer, quads, ink in face.texts:
         mat = M_TEXT if ink == "w" else M_TEXTK
         for x0, y0, x1, y1, u0, v0, u1, v1 in quads:
@@ -1522,7 +1568,7 @@ def blade_face(text, cap):
     f = Face()
     f.poly(rounded_rect(-W / 2, 0, W / 2, H, cap * 0.25), WHITE, 0)
     f.poly(rounded_rect(-W / 2 + 0.012, 0.012, W / 2 - 0.012, H - 0.012, cap * 0.2), GREEN, 1)
-    f.text_c(text, cap, 0.0, (H - cap) / 2, "w", 2)
+    f.text_c(text, cap, 0.0, (H - cap) / 2, "w", 2, vector=True)
     return f, (W, H)
 
 

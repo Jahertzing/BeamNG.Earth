@@ -212,5 +212,32 @@
       {}
     ],
     "translucent": false
+  },
+  "bne_gsign_letter": {
+    "name": "bne_gsign_letter",
+    "mapTo": "bne_gsign_letter",
+    "class": "Material",
+    "version": 1.5,
+    "Stages": [
+      {
+        "baseColorFactor": [
+          0.95,
+          0.95,
+          0.95,
+          1
+        ],
+        "roughnessFactor": 0.45,
+        "metallicFactor": 0,
+        "emissiveFactor": [
+          0,
+          0,
+          0
+        ]
+      },
+      {},
+      {},
+      {}
+    ],
+    "translucent": false
   }
 }

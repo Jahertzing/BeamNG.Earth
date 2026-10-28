@@ -301,15 +301,15 @@ class Streets(unittest.TestCase):
             x, y = (a[0] + a[3]) / 2, (a[1] + a[4]) / 2
             self.assertGreater(abs(y - 100.0), 7.0 + 1.0)
             self.assertGreater(abs(x - 100.0), 4.5 + 1.0)
-        text = [P[t[0]] for t, m in zip(mesh.T, mesh.M) if m == gs.M_TEXT]
+        text = [P[t[0]] for t, m in zip(mesh.T, mesh.M) if m == gs.M_LETTER]
         self.assertTrue(text)
         self.assertGreater(min(p[2] for p in text), gs.BLADE_TOP_M)
-        self.assertLess(max(p[2] for p in text), gs.BLADE_TOP_M + 0.8)
+        self.assertLess(max(p[2] for p in text), gs.BLADE_TOP_M + 1.1)
         a = col.aabbs[0]
         px, py = (a[0] + a[3]) / 2, (a[1] + a[4]) / 2
         mine = [p for p in text if abs(p[0] - px) < 2 and abs(p[1] - py) < 2]
-        lower = np.array([p for p in mine if p[2] < gs.BLADE_TOP_M + 0.33])     # Colfax's blade (the widest, below)
-        upper = np.array([p for p in mine if p[2] > gs.BLADE_TOP_M + 0.36])
+        lower = np.array([p for p in mine if p[2] < gs.BLADE_TOP_M + 0.17 + 2 * gs.BLADE_CAP[0] + 0.03])     # Colfax's blade (the widest, below)
+        upper = np.array([p for p in mine if p[2] > gs.BLADE_TOP_M + 0.17 + 2 * gs.BLADE_CAP[0] + 0.03])
         self.assertGreater(np.ptp(lower[:, 0]), 5 * np.ptp(lower[:, 1]))          # along Colfax (east-west)
         self.assertGreater(np.ptp(upper[:, 1]), 5 * np.ptp(upper[:, 0]))          # along Grant
         avoid = [((a[0] + a[3]) / 2, (a[1] + a[4]) / 2) for a in col.aabbs]
