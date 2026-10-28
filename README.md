@@ -207,6 +207,24 @@ helpers before starting BeamNG.Earth, for example `BNGE_PEERS=192.168.1.20:47620
 running other code are left out, and anything a helper fails on is built on your own computer. Only use helpers on a
 network you trust: the connection is not encrypted.
 
+**Road lanes you can fix yourself (optional):** where a road's lane count or width comes out wrong, put a file named
+`road_overrides.json` in the server's cache folder (`~/.cache/beamng-earth/`, on Windows
+`%USERPROFILE%\.cache\beamng-earth\`; another path in the environment variable `BNE_ROAD_OVERRIDES`). It wins over every
+other lane source (then, in Colorado, CDOT's highway data; then OpenStreetMap's tags, checked against DRCOG's surveyed
+pavement in the Denver region; then the road class's guess). Each entry picks roads by their OpenStreetMap way id, or
+by name with an optional box `[lon0, lat0, lon1, lat1]` (and `class`), and sets any of `lanes` (both ways),
+`lanes:forward` / `lanes:backward` (along / against the way), `centre_turn_lane`, `width` and `shoulder` (metres). The
+server reads it when it starts; the roads it changes are built again. CO-52 through Frederick as two lanes each way with
+a turn lane:
+
+```json
+{"roads": [
+  {"name": "Highway 52", "bbox": [-104.99, 40.080, -104.92, 40.095],
+   "lanes:forward": 2, "lanes:backward": 2, "centre_turn_lane": true, "shoulder": 2.5},
+  {"way": 26834512, "lanes": 3}
+]}
+```
+
 ### Developer setup
 `python3 install.py` also works from a checkout (mod copy, `.venv`, then `python3 start.py`); by hand:
 1. Python 3.10+ with the packages in `server/requirements.txt`. The server needs its Rust module: the checkout

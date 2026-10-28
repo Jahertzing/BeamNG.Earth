@@ -66,7 +66,8 @@ class _State:
             roadwidthmod.store_dir(cache_dir, md)).get
             if road_widths and self.md is not None else None)
         if self.widths is not None and md.drcog() is not None:     # the edges of pavement first (drcog.py)
-            self.widths = md.drcog().widths(self.widths)
+            import roads as roadsmod
+            self.widths = roadsmod.pavement_first(md.drcog().widths(None), self.widths)
         self.surface = surfacemod.Surface(md) if surface else None
         if self.surface is not None:    # gas station forecourts painted asphalt (--gas-stations on)
             self.surface.gas_pads = bool(gas_stations)

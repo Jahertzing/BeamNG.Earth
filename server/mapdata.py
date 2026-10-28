@@ -302,6 +302,16 @@ class MapData:
                 self._lidar = lidarheights.Lidar(self.raw_dir, self.fetcher)
             return self._lidar
 
+    def cdot(self):
+        """cdot.Cdot when CDOT's highway geometrics are on (BNE_CDOT, on unless 0: earthd --cdot), else None."""
+        import cdot
+        if not cdot.enabled() or self.fetcher is None:
+            return None
+        with self._lock:
+            if getattr(self, "_cdot", None) is None:
+                self._cdot = cdot.Cdot(self.raw_dir, self.fetcher)
+            return self._cdot
+
     def regional(self):
         """osmtags.Regional over this cache's regional tables (tools/osm_tag_table.py), made when first asked for."""
         with self._lock:
@@ -326,6 +336,10 @@ class MapData:
             tag = self.regional().covering(key.bounds())
             if tag is not None:         # a cell inside a regional OSM table: built with its tags, kept under its tag
                 name = f"{name}.{tag}"
+            if self.cdot() is not None:
+                import cdot
+                if cdot.covers(key.bounds()):   # (Colorado: CDOT's lanes joined in, kept under their own name)
+                    name = f"{name}.{cdot.TAG}"
         return os.path.join(self.cache_dir, "mapdata", f"v{VERSION}", source, release, name,
                             str(key.z), str(key.x), f"{key.y}.npz")
 
@@ -437,6 +451,21 @@ class MapData:
                     recs = feats.attrs.get("src_record")
                     ways = [osmtags.way_id(str(r)) for r in recs] if recs is not None else []
                     osmtags.join_regional(feats, self.regional().tags(tag, ways))
+                import cdot
+                if self.cdot() is not None and cdot.covers(key.bounds()) and len(feats):
+                    try:
+                        feats, n = cdot.join(feats, self.cdot().geometrics(key, kind))
+                    except DEFERRED:
+                        if kind not in ("demand", "urgent"):
+                            raise           # (a prefetch: built later, with them)
+                        log.warning("mapdata: CDOT lanes of %s: the host is busy; the roads go on without them", key)
+                        n, transient = 0, True      # (not kept: with them next time)
+                    except Exception as e:  # (the roads keep the OSM lanes, as outside Colorado)
+                        log.warning("mapdata: CDOT lanes of %s: %s: %s", key, type(e).__name__, e)
+                        n, transient = 0, transient or isinstance(e, (OSError, ValueError))
+                    if n:                   # (credited with the cell's datasets: credits.FEATURES)
+                        sources = dict(sources)
+                        sources[(cdot.DATASET, cdot.LICENSE)] = n
             ox, oy = mapcells.owner(feats.attrs.get("cx", np.zeros(0)), feats.attrs.get("cy", np.zeros(0)), key.z)
             feats.own = (ox == key.x) & (oy == key.y)
             if feats.clipped is not None:

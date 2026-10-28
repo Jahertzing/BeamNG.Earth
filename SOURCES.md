@@ -29,6 +29,7 @@ A few things hold for all of them:
 | Overture Maps file index | `stac.overturemaps.org` | The list of which file holds which part of the world. | The app carries its own copy of the list, which is used instead. | named |
 | DRCOG planimetrics (Denver region) | `gis.drcog.org` | Measured building roofprints with their heights, and the edges of the pavement for street widths, in the Denver region (settings: DRCOG switch). | Overture's buildings and the estimated street widths there. | optional |
 | USGS 3DEP lidar heights (Microsoft Planetary Computer) | `planetarycomputer.microsoft.com` | Building heights measured by lidar in the US, where the map has none or only a machine-learned one (settings: lidar switch). | The map's own building heights. | optional |
+| CDOT highway geometrics (Colorado) | `dtdapps.codot.gov` | Lane counts of Colorado's state and US highways and interstates: through, auxiliary, express and turn lanes, shoulders and lane widths (`server/cdot.py`, `--cdot on` by default). | OpenStreetMap's lane counts and the estimated widths. | optional |
 | OpenStreetMap road details (OSM US Layercake) | `data.openstreetmap.us` | OpenStreetMap's own road tags matched to the roads: lanes, widths, sidewalks, surfaces, speed limits, roads under construction. | Roads keep their width, lane and sidewalk estimates from their class and the land around them. | optional |
 
 ## Terrain heights (elevation)

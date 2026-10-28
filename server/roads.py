@@ -126,9 +126,12 @@ def look_of(spec):
         return CONCRETE
     return LOOK[spec.kind]
 Spec = namedtuple("Spec", "width kind urban cls oneway walk dir kmh gap median lanes surf link sides lanes_f lanes_b "
-                          "lanes_c park turns_f turns_b",
+                          "lanes_c park turns_f turns_b shoulder lsrc",
                   defaults=(False, 2.5, 0, None, None, None, None, None, False, None, None, None, None, None, None,
-                            None))   # median: m to the other carriageway's centre line
+                            None, None, None))   # median: m to the other carriageway's centre line
+# (shoulder: m of carriageway each side of the driving lanes where a lane source says (CDOT's shoulders, an override, a
+# ramp's), None: the class rule's edge_margin; lsrc: where the lanes came from: "override", "cdot", "osm", "pavement"
+# (DRCOG's edges of pavement), None the class: _lane_sources, _measured_widths)
 # (sides: the sidewalk sides OpenStreetMap's sidewalk tag gives (_osm_sidewalks; walk_sides' +1 left / -1 right of the
 # geometry, () none), None where it has none: the class and land-cover rule, has_sidewalks; from mpsteppe's PR #292)
 # (lanes: OpenStreetMap's lane count, both directions on a two-way road, None unknown: osmtags.py; surf: the surface
@@ -430,8 +433,8 @@ def _structure_width(feats, i):
     lanes = int(lanes) if lanes is not None else None
     kind = surface_kind(cls, _rule_value(rules.get("surface"), i))
     ow = _rule_value(rules.get("oneway"), i) is not None
-    if rule_w is None and _rule_value(rules.get("subclass"), i) == "link" and lanes is None:
-        rule_w = LINK_M[1] if ow else LINK_M[2]
+    if rule_w is None and _rule_value(rules.get("subclass"), i) == "link":
+        rule_w = link_width(lanes) if lanes else (LINK_M[1] if ow else LINK_M[2])
     return carriageway(cls, kind, False, rule_w, ow, lanes)
 
 
@@ -994,8 +997,10 @@ def rural_motorway(spec):
 
 
 def edge_margin(spec):
-    """m of a drawn carriageway beside its driving lanes on each side, parking aside: a rural road's edge strip or
-    a rural motorway's shoulder (carriageway), 0 in towns."""
+    """m of a drawn carriageway beside its driving lanes on each side, parking aside: the lane source's shoulder
+    (spec.shoulder), else a rural road's edge strip or a rural motorway's shoulder (carriageway), 0 in towns."""
+    if spec.shoulder is not None:
+        return float(spec.shoulder)
     if spec.urban or spec.kind not in BUILT or spec.cls == "service":
         return 0.0
     return motorway_shoulder(spec) if rural_motorway(spec) else EDGE_STRIP_M
@@ -1346,8 +1351,8 @@ def _road_specs(feats, urban_fn, left_hand):
         kind = surface_kind(cls, surf)
         ow = _rule_value(rules.get("oneway"), i) is not None
         link = _rule_value(rules.get("subclass"), i) == "link"
-        if rule_w is None and link and lanes is None:
-            rule_w = LINK_M[1] if ow else LINK_M[2]
+        if rule_w is None and link:
+            rule_w = link_width(lanes) if lanes else (LINK_M[1] if ow else LINK_M[2])
         dk = _dir_kmh(feats, i, ncon, lens)
         if dk[1] is None:                       # OpenStreetMap's speed limit where Overture has none
             ms = _osm(feats, "maxspeed", i, 5.0, 200.0)
@@ -1378,7 +1383,117 @@ def _road_specs(feats, urban_fn, left_hand):
             out[j] = Spec(carriageway(cls, kind, urban, None, ow, lanes), kind, urban, cls, ow, 2.5, *dk, lanes=lanes,
                           surf=token, link=link)
     out = dual_carriageways(feats, out, left_hand)
-    return _osm_lanes(feats, _osm_sidewalks(feats, out))
+    return _lane_sources(feats, _osm_lanes(feats, _osm_sidewalks(feats, out)))
+
+
+# Lane sources (feature lane-sources, 2026-10-28; Jeff: CO-52 through Frederick drew 1 or 2 lanes where the road has
+# more, I-25's express lanes and ramps one lane): the first that speaks for a road wins:
+#   1. the player's overrides (laneoverrides.py: <cache-dir>/road_overrides.json),
+#   2. CDOT's highway geometrics in Colorado (cdot.py: through, auxiliary and managed lanes, a painted median's turn
+#      lane, shoulders, lane widths: the roads layer's cdot_* columns),
+#   3. OpenStreetMap's lanes, unless DRCOG's surveyed pavement is more than PAVE_LANES_TOL lanes off them
+#      (_measured_widths: the pavement's then),
+#   4. lanes from DRCOG's pavement where OpenStreetMap has none ((width - shoulders - parking) / PAVE_LANE_M),
+#   5. the class's rule.
+# A road CDOT or an override speaks for keeps its width from them (the measured width between buildings or pavement edges
+# is not taken). Ramps take two lanes' width where OpenStreetMap or the pavement says two (link_width), their lane line
+# with them, a shoulder each side.
+CDOT_COLS = ("cdot_lanes_f", "cdot_lanes_b", "cdot_lanes_c", "cdot_lane_w", "cdot_shoulder", "cdot_express")
+PAVE_LANE_M = 3.6           # m a lane when counting the lanes of DRCOG's pavement
+PAVE_LANES_TOL = 1          # OpenStreetMap's lane count kept within this many of the pavement's
+PAVE_MAX_LANES = 8          # more from the pavement is not believed (a boulevard's median, a plaza measured: Denver
+                            # had 2 of 2,495 arterials at 8-9 lanes from 31-34 m)
+PAVE_LINK_LANES = (1, 2)    # a ramp's lanes from its pavement, at least and at most (more: the edges measured a gore
+                            # or the motorway beside it, 15 of 216 I-25 ramps from Frederick to Castle Rock: not taken)
+
+
+def link_width(lanes):
+    """m of a ramp of `lanes` lanes: LINK_M, wider by LINK_LANE_M a lane past two."""
+    n = max(1, int(lanes))
+    return LINK_M.get(n, LINK_M[2] + (n - 2) * LINK_LANE_M)
+
+
+def _fin(col, i):
+    if col is None:
+        return None
+    try:
+        v = float(col[i])
+    except (TypeError, ValueError):
+        return None
+    return v if np.isfinite(v) else None
+
+
+def _fit_turns(turns, n):
+    return turns if turns is not None and n is not None and len(turns) == n else None
+
+
+def _with_lanes(sp, nf, nb, nc, lane_w, shoulder, width, src):
+    """sp with these lanes (one-way: nf), its width (None: the lanes at lane_w and the shoulders), the shoulders and
+    no parking. Pure."""
+    nc = int(nc or 0)
+    if sp.oneway:
+        n = int(nf)
+        w = width if width is not None else n * lane_w + 2 * shoulder
+        return sp._replace(width=float(w), lanes=n, lanes_f=None, lanes_b=None, lanes_c=None, shoulder=float(shoulder),
+                           park=(), turns_f=_fit_turns(sp.turns_f, n), turns_b=None, lsrc=src)
+    total = int((nf or 0) + (nb or 0) + nc)
+    w = width if width is not None else total * lane_w + 2 * shoulder
+    return sp._replace(width=float(w), lanes=total, lanes_f=None if nf is None else int(nf),
+                       lanes_b=None if nb is None else int(nb), lanes_c=nc, shoulder=float(shoulder), park=(),
+                       turns_f=_fit_turns(sp.turns_f, nf), turns_b=_fit_turns(sp.turns_b, nb), lsrc=src)
+
+
+def _lane_sources(feats, specs):
+    """specs with CDOT's lanes (the cdot_* columns) and then the player's overrides (laneoverrides) where they speak, a
+    ramp's shoulders where it has OpenStreetMap's lanes. Pure given the override file."""
+    import laneoverrides
+    out = list(specs)
+    cols = {c: feats.attrs.get(c) for c in CDOT_COLS}
+    ovr = laneoverrides.for_features(feats)
+    for i, sp in enumerate(out):
+        if sp is None:
+            continue
+        lf = _fin(cols["cdot_lanes_f"], i)
+        if lf is not None and sp.kind in BUILT:
+            lb, lc = _fin(cols["cdot_lanes_b"], i) or 0.0, _fin(cols["cdot_lanes_c"], i) or 0.0
+            lw = _fin(cols["cdot_lane_w"], i) or LANE_W.get(sp.cls, LANE_W_DEFAULT)
+            sh = _fin(cols["cdot_shoulder"], i)
+            sh = edge_margin(sp) if sh is None else sh
+            sp = _with_lanes(sp, lf, None if sp.oneway else lb, lc, lw, sh, None, "cdot")
+        elif sp.link and sp.lanes and sp.shoulder is None and sp.kind in BUILT:
+            sp = sp._replace(shoulder=max(0.0, (sp.width - sp.lanes * LINK_LANE_M) / 2), lsrc="osm")
+        e = ovr[i]
+        if e is not None:
+            sp = _override(sp, e)
+        out[i] = sp
+    return out
+
+
+def _override(sp, e):
+    """sp as an override entry (laneoverrides.parse) sets it. Pure."""
+    lw = LANE_W.get(sp.cls, LANE_W_DEFAULT)
+    sh = e.get("shoulder", sp.shoulder if sp.shoulder is not None else edge_margin(sp))
+    nc = (1 if e["centre_turn_lane"] else 0) if "centre_turn_lane" in e else (sp.lanes_c or 0)
+    nf, nb = e.get("lanes:forward"), e.get("lanes:backward")
+    if sp.oneway:
+        n = e.get("lanes", nf if nf is not None else sp.lanes)
+        if not n:
+            return sp._replace(width=e.get("width", sp.width), shoulder=sh, lsrc="override")
+        return _with_lanes(sp, n, None, 0, lw, sh, e.get("width"), "override")
+    total = e.get("lanes")
+    if nf is None and nb is None:
+        if total is None:
+            total = sp.lanes
+        if not total:
+            return sp._replace(width=e.get("width", sp.width), shoulder=sh, lsrc="override")
+        rem = max(0, total - nc)
+        nb = rem // 2
+        nf = rem - nb
+    elif nf is None:
+        nf = max(0, (total if total is not None else nb * 2 + nc) - nb - nc)
+    elif nb is None:
+        nb = max(0, (total if total is not None else nf * 2 + nc) - nf - nc)
+    return _with_lanes(sp, nf, nb, nc, lw, sh, e.get("width"), "override")
 
 
 def _measured_widths(feats, specs, widths):
@@ -1387,7 +1502,12 @@ def _measured_widths(feats, specs, widths):
     rules = feats.rules
     out = list(specs)
     for j, sp in enumerate(out):
-        if sp is None or sp.kind not in BUILT or sp.cls not in SIDEWALK_CLASSES or sp.cls in MEASURE_SKIP:
+        if sp is None or sp.kind not in BUILT or sp.lsrc in ("cdot", "override"):
+            continue                # (lane sources 1 and 2 keep their widths)
+        if sp.link and not sp.lanes and _rule_value(rules.get("width"), j) is None:
+            out[j] = _pavement_link(feats, j, sp, widths)
+            continue
+        if sp.cls not in SIDEWALK_CLASSES or sp.cls in MEASURE_SKIP:
             continue
         if _rule_value(rules.get("width"), j) is not None:
             continue
@@ -1404,7 +1524,63 @@ def _measured_widths(feats, specs, widths):
         minimum = 3.0 if sp.cls in {"residential", "living_street", "unclassified", "tertiary"} else 0.6 * dflt
         if m is not None and minimum <= m[0] <= MEASURE_MAX * dflt:
             out[j] = sp._replace(width=m[0], walk=m[1])
+            if len(m) > 2 and m[2] == "pavement":
+                out[j] = _pavement_lanes(out[j])
     return out
+
+
+def _pavement_lanes(sp):
+    """sp (its width DRCOG's pavement) with lanes from the pavement where OpenStreetMap has none (a road that is
+    marked: LANE_CLASSES), or where its lanes are more than PAVE_LANES_TOL off the pavement's (lane sources 3 and 4):
+    the driving width (lane_layout: less the shoulders, edge strips and parking) over PAVE_LANE_M, a two-way centre
+    turn lane kept. Pure."""
+    nc = sp.lanes_c or 0
+    lay = lane_layout(sp._replace(lanes=None, lanes_f=None, lanes_b=None, lanes_c=None))
+    if lay is None:
+        return sp
+    drive = lay["hi"] - lay["lo"] - nc * PAVE_LANE_M
+    n = max(1 if sp.oneway else 2, int(round(drive / PAVE_LANE_M)))
+    if not sp.oneway and n % 2 and not nc and n > 2:
+        n -= 1                      # (an odd count two-way: the extra width is a turn lane or shoulders)
+    if n + nc > PAVE_MAX_LANES:
+        return sp
+    if sp.lanes is not None:
+        if abs((sp.lanes - nc) - n) <= PAVE_LANES_TOL:
+            return sp._replace(lsrc="osm")
+        return sp._replace(lanes=n + nc, lanes_f=None, lanes_b=None, turns_f=None, turns_b=None, lsrc="pavement")
+    if sp.cls not in LANE_CLASSES:
+        return sp
+    return sp._replace(lanes=n + nc, lsrc="pavement")
+
+
+def _pavement_link(feats, j, sp, widths):
+    """A ramp without OpenStreetMap's lanes: its lanes from DRCOG's pavement (PAVE_LINK_LANES), drawn link_width with
+    its shoulders, else as it is. Pure given widths."""
+    a = feats.coord_off[feats.ring_off[feats.part_off[j]]]
+    b = feats.coord_off[feats.ring_off[feats.part_off[j + 1]]]
+    m = widths(str(feats.ids[j]), feats.lonlat[a:b]) if b > a else None
+    if m is None or len(m) < 3 or m[2] != "pavement" or not 3.0 <= m[0] <= 20.0:
+        return sp
+    shoulder = (LINK_M[1] - LINK_LANE_M) / 2
+    n = int(round((m[0] - 2 * shoulder) / LINK_LANE_M))
+    if not PAVE_LINK_LANES[0] <= n <= PAVE_LINK_LANES[1]:
+        return sp
+    w = link_width(n)
+    return sp._replace(width=w, lanes=n, shoulder=(w - n * LINK_LANE_M) / 2, lsrc="pavement")
+
+
+def pavement_first(pavement, fallback):
+    """A widths(fid, lonlat) function for road_specs: (width, sidewalk, "pavement") where pavement (DRCOG's edges of
+    pavement: drcog.Drcog.widths(None)) measures the road, the sidewalk from fallback (the buildings' measure:
+    roadwidth.RoadWidths.get); else fallback's (two values). The third value lets the lane sources tell surveyed
+    pavement from the width between walls."""
+    def get(fid, lonlat):
+        fb = fallback(fid, lonlat) if fallback is not None else None
+        pv = pavement(fid, lonlat)
+        if pv is None:
+            return fb
+        return (pv[0], fb[1] if fb is not None else pv[1], "pavement")
+    return get
 
 
 def bridge_specs(feats):
@@ -1450,11 +1626,11 @@ def _bridge_specs(feats, want="bridge"):
         kind = surface_kind(cls, surf)
         ow = _rule_value(rules.get("oneway"), i) is not None
         link = _rule_value(rules.get("subclass"), i) == "link"
-        if rule_w is None and link and lanes is None:
-            rule_w = LINK_M[1] if ow else LINK_M[2]
+        if rule_w is None and link:
+            rule_w = link_width(lanes) if lanes else (LINK_M[1] if ow else LINK_M[2])
         out.append(Spec(carriageway(cls, kind, False, rule_w, ow, lanes), kind, False, cls, ow,
-                        lanes=lanes, surf=surface_token(surf)))
-    return out
+                        lanes=lanes, surf=surface_token(surf), link=link))
+    return _lane_sources(feats, out)
 
 
 class _EndJoin:
