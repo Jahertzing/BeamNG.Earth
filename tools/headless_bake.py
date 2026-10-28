@@ -21,9 +21,14 @@ itself the game's cores), --map-tiles off, and its workers by --mode:
   game   the game is running (--mode auto finds its process): --workers 1 and --road-processes 1 (THROTTLE), Windows
          the idle priority class (its worker processes inherit it; --nice 0, or it would raise itself to below
          normal), elsewhere --nice 19 --sched idle;
-  alone  no game: the machine's share (alone_workers: a far worker per 4 CPUs, a road process per 6, split between
-         --jobs), the below normal class on Windows, --nice 10 elsewhere. The bake of 2026-10-28 10:18 used 0.8 of 24
-         CPUs with the throttle while the car stood 45% of the time for far and road tiles.
+  alone  no game: servers and workers sized together from the memory free at the start (plan_servers: a server tree
+         is SERVER_FIXED_GB plus WORKER_GB a worker; ROAD_PER_JOB road processes, up to roads.BUILD_PER_POSE, the most a
+         pose dispatches; FAR_PER_JOB far workers, whose geometry takes 20 ms a tile), the below normal class on
+         Windows, --nice 10 elsewhere. The bake of 2026-10-28 10:18 used 0.8 of 24 CPUs with the throttle while the car
+         stood 45% of the time for far and road tiles; the run of 20:50 with 5 servers of 1 + 1 workers crawled at
+         0.7-1.5 km/min each, no faster than 2 servers of 3 + 2: a server's pace follows its workers (a pose's tiles
+         are a wave; the wave takes as many rounds as tiles over workers), so the memory a job cap frees goes back
+         into workers.
 It shares the game's user folder (each server touches its session marker every minute and sweeps only folders idle for
 ten), the download cache and the world folder (revisit writes a temp file and renames it; two servers of one code
 baking at once write the same items at most twice). It ends with this tool: stopped in a finally, and
@@ -35,7 +40,7 @@ summary.json files), the children's lines prefixed with their leg. --split M cut
 (overlapping by SPLIT_OVERLAP_M, so the cut is built from both sides), legs of their own: the run of 2026-10-28 13:18
 (--jobs 2, the game closed) used 1.7 cores a server, 0.65 of them the server process itself (far textures, base
 photos and every tile's dispatch pass through its one interpreter), its 11 workers 4-14% busy each, and the machine
-13%: the way to use it is more servers, not more workers (about SERVER_GB of RAM each; --jobs is capped to the RAM).
+13%: more servers, each with its workers, sized together from the memory free (plan_servers).
 
 The client (the mod's rules from server/tests/modsim.py, line-by-line ports of follow.lua and rebase.lua): hello; per
 route a teleport to its start (the anchor pinned as routepins.lua does: the planned anchor within PIN_SHARE of the
@@ -106,15 +111,17 @@ MOD_VERSION = re.search(r"MOD_VERSION = '([^']+)'", (modsim.MOD_DIR / "core.lua"
 THROTTLE = ["--workers", "1", "--road-processes", "1", "--load-boost", "off", "--map-tiles", "off"]   # --mode game
 QUIET = ["--load-boost", "off", "--map-tiles", "off"]       # both modes: never the game's cores, no map tiles
 GAME_EXES = ("BeamNG.drive.x64.exe", "BeamNG.drive.x64")    # the game itself (not its launcher BeamNG.drive.exe)
-ALONE_FAR_PER_CPU = 4       # --mode alone: a far-tile worker per this many CPUs (os.cpu_count: threads) ...
-ALONE_ROAD_PER_CPU = 6      # ... and a road-tile process per this many
-ALONE_MAX = (8, 4)          # at most (far workers, road processes) for one server
+FAR_PER_JOB = (1, 3)        # --mode alone: far workers per server, least and most (geometry 20 ms a tile; textures
+                            # render in the server process while de-shadowing is on: more workers buy nothing)
+ROAD_PER_JOB = (2, 4)       # ... road processes: 4 = roads.BUILD_PER_POSE, the tiles a pose dispatches at once
+SERVER_FIXED_GB = 4.5       # a server tree without its far and road workers: the server 1.5 GB, two block lanes
+                            # 1.1 GB each, the far-building worker 0.7 (measured 2026-10-28 14:15)
+WORKER_GB = 0.9             # a far or road worker
+CPUS_PER_JOB = 3            # a server tree used 1.4-1.7 cores (the same run): no more jobs than this allows
 MODES = ("auto", "game", "alone")
 CPU_SAMPLE_S = 2.0          # --profile: the server tree's CPU sampled this often
 SPLIT_OVERLAP_M = 1000.0    # --split: each stretch reaches this far into its neighbours
 SPLIT_STEP_M = 50.0         # ... its line sampled this often along the route
-SERVER_GB = 6.5             # a server tree's private memory, about: measured 7.3 GB with 3 far + 4 road workers (the
-                            # server 1.5 GB, each worker 0.5-1.1 GB), ~6.5 with 1 + 1 (2026-10-28 14:15): caps --jobs
 LEG_PART_RE = re.compile(r"^(.*)_(\d+)of(\d+)$")
 WORKER_CPU_RE = re.compile(r"worker (\d+) cpu: (.*)")        # blockworker's debug line
 JOB_RE = re.compile(r"(\w+) (\d+) jobs ([\d.]+) s")
@@ -124,15 +131,59 @@ JOB_ROLE = {"build": "block", "terrain_patch": "block", "base_photo": "block", "
 
 
 # --- the server -----------------------------------------------------------------------------------------------------
-def alone_workers(cpus=None, jobs=1):
-    """(far workers, road processes) of one of jobs servers with the machine to themselves: a far worker per
-    ALONE_FAR_PER_CPU CPUs and a road process per ALONE_ROAD_PER_CPU, ALONE_MAX at most, divided between the jobs,
-    at least one each. 24 CPUs: (6, 4); two jobs (3, 2)."""
+def available_gb():
+    """The memory free now (GB; psutil), or None."""
+    try:
+        import psutil
+        return psutil.virtual_memory().available / 2 ** 30
+    except ImportError:
+        return None
+
+
+def workers_for(gb):
+    """(far, road) workers of a server tree within gb of memory: the road processes first (ROAD_PER_JOB: a pose's wave
+    of tiles takes as many rounds as tiles over road processes), then the far workers (FAR_PER_JOB); None when not
+    even the least fit."""
+    n = int((gb - SERVER_FIXED_GB) / WORKER_GB)
+    if n < FAR_PER_JOB[0] + ROAD_PER_JOB[0]:
+        return None
+    road = min(ROAD_PER_JOB[1], n - FAR_PER_JOB[0])
+    far = min(FAR_PER_JOB[1], n - road)
+    return far, road
+
+
+def plan_servers(wanted, n_legs=None, ram_gb=None, cpus=None):
+    """(jobs, far, road, note) for --mode alone: as many servers as wanted (at most one per leg and one per CPUS_PER_JOB
+    CPUs), each with the most workers (workers_for) that fit its share of 90% of the memory available now; when the
+    memory allows fewer full servers than wanted, the plan with the most workers in all wins, the fewest servers on a
+    tie (a server's pace follows its workers: the run of 2026-10-28 20:50, five servers of 1 + 1, crawled; five of
+    1 + 2 would be 15 workers, three of 3 + 4 are 21). ram_gb None: psutil (None there: no memory cap). 43 GB free,
+    8 or 4 wanted: 3 servers of 3 + 4."""
     cpus = (os.cpu_count() or 1) if cpus is None else cpus
-    jobs = max(1, int(jobs))
-    far = min(ALONE_MAX[0], cpus // ALONE_FAR_PER_CPU)
-    road = min(ALONE_MAX[1], cpus // ALONE_ROAD_PER_CPU)
-    return max(1, far // jobs), max(1, road // jobs)
+    most = max(1, min(int(wanted), n_legs if n_legs else int(wanted), max(1, cpus // CPUS_PER_JOB)))
+    ram_gb = available_gb() if ram_gb is None else ram_gb
+    if ram_gb is None:
+        return most, FAR_PER_JOB[1], ROAD_PER_JOB[1], None
+    budget = ram_gb * 0.9
+    best = None             # (total workers, -jobs, jobs, far, road): the most workers in all, then the fewest servers
+    for jobs in range(most, 0, -1):
+        w = workers_for(budget / jobs)
+        if w is not None:
+            best = max(best or (-1,), (jobs * (w[0] + w[1]), -jobs, jobs, w[0], w[1]))
+    if best is None:
+        return 1, FAR_PER_JOB[0], ROAD_PER_JOB[0], f"{ram_gb:.0f} GB free: one server with the least workers"
+    _, _, jobs, far, road = best
+    note = None
+    if jobs < most:         # (the memory, not the legs or the CPUs, cut it)
+        note = (f"--jobs {int(wanted)}: {jobs} server{'s' if jobs > 1 else ''} in the {ram_gb:.0f} GB free, each with "
+                f"{far} far and {road} road workers (the most workers in all; --workers / --road-processes to insist)")
+    return jobs, far, road, note
+
+
+def alone_workers(ram_gb=None):
+    """(far, road) workers of a single server with the machine to itself (plan_servers for one)."""
+    _, far, road, _ = plan_servers(1, 1, ram_gb)
+    return far, road
 
 
 def game_running(win=IS_WIN):
@@ -177,7 +228,7 @@ def server_command(user_dir, port=0, cache_dir=None, win=IS_WIN, mode="game", wo
     if mode == "game" and workers is None and road_processes is None:
         cmd += THROTTLE
     else:
-        far, road = (1, 1) if mode == "game" else alone_workers()
+        far, road = (1, 1) if mode == "game" else alone_workers()     # (alone: the memory free now)
         cmd += ["--workers", str(int(workers if workers is not None else far)),
                 "--road-processes", str(int(road_processes if road_processes is not None else road))] + QUIET
     if mode == "game":
@@ -846,29 +897,35 @@ def stretch(route, i, n, overlap=SPLIT_OVERLAP_M, step=SPLIT_STEP_M):
     return gd.Route([route.point(s0 + (s1 - s0) * j / k) for j in range(k + 1)])
 
 
-def jobs_for(wanted, n_legs, ram_gb=None):
-    """The servers to run at once: wanted, at most one per leg and SERVER_GB each within 90% of the memory available
-    now (psutil virtual_memory().available: the OS and whatever else runs are already taken off; unknown: wanted).
-    Returns (jobs, note or None)."""
-    jobs = max(1, min(int(wanted), max(1, n_legs)))
-    if ram_gb is None:
-        try:
-            import psutil
-            ram_gb = psutil.virtual_memory().available / 2 ** 30
-        except ImportError:
-            return jobs, None
-    cap = max(1, int(ram_gb * 0.9 / SERVER_GB))
-    if jobs > cap:
-        return cap, (f"--jobs {jobs} needs about {jobs * SERVER_GB:.0f} GB of memory; {ram_gb:.0f} GB available: "
-                     f"{cap} jobs")
-    return jobs, None
+def leg_lengths(legs, routes_file):
+    """{leg label: its line's length (m)} from routes.json (a stretch: its share plus the overlaps); a route not in
+    the file: 0."""
+    out, routes = {}, {}
+    for n, back, part in legs:
+        if n not in routes:
+            try:
+                routes[n] = gd.load_route(routes_file, n).length
+            except (OSError, ValueError, SystemExit):
+                routes[n] = 0.0
+        length = routes[n]
+        if part and part[1] > 1:
+            length = length / part[1] + SPLIT_OVERLAP_M * (2 if 0 < part[0] < part[1] - 1 else 1)
+        out[leg_label(n, back, part)] = length
+    return out
 
 
-def share_out(legs, jobs):
-    """The legs dealt round to jobs lists (the routes' lengths are not known here: round robin), empty lists left
-    out."""
+def share_out(legs, jobs, lengths=None):
+    """The legs shared out over jobs lists so the jobs finish together: the longest first, each to the job with the
+    least so far (lengths: {leg label: m}; None: round robin); empty lists left out."""
     jobs = max(1, int(jobs))
-    groups = [legs[i::jobs] for i in range(jobs)]
+    if not lengths:
+        groups = [legs[i::jobs] for i in range(jobs)]
+        return [g for g in groups if g]
+    groups, load = [[] for _ in range(jobs)], [0.0] * jobs
+    for lg in sorted(legs, key=lambda lg: -lengths.get(leg_label(*lg), 0.0)):
+        i = min(range(jobs), key=lambda j: (load[j], j))
+        groups[i].append(lg)
+        load[i] += lengths.get(leg_label(*lg), 0.0)
     return [g for g in groups if g]
 
 
@@ -979,20 +1036,17 @@ def child_command(a, legs, out, mode, workers, road_processes):
     return cmd
 
 
-def run_children(a, groups, out, mode):
+def run_children(a, groups, out, mode, workers=(1, 1)):
     """The legs' groups driven by children (child_command) at once, waited for; their summaries read back from
-    out/<leg>. Returns (every leg complete, [records] in the groups' order)."""
-    far, road = alone_workers(jobs=len(groups)) if mode == "alone" else (1, 1)
-    # (--workers / --road-processes given: each server's own, as without --jobs; the PC's 2026-10-28 --jobs 4 --workers
-    # 3 ran every server at 1 and 1)
-    far = a.workers if a.workers is not None else far
-    road = a.road_processes if a.road_processes is not None else road
+    out/<leg>. workers: each child's (far, road) in mode alone (plan_servers'). Returns (every leg complete,
+    [records] in the groups' order)."""
+    far, road = workers if mode == "alone" else (1, 1)
     procs = []
     try:
         for i, legs in enumerate(groups):
             cmd = child_command(a, legs, out, mode, far, road)
             print(f"job {i + 1}: {', '.join(leg_label(*lg) for lg in legs)} ({far} far workers, {road} road "
-                  f"processes)", flush=True)
+                  f"processes, about {SERVER_FIXED_GB + (far + road) * WORKER_GB:.0f} GB)", flush=True)
             procs.append(subprocess.Popen(cmd, cwd=ROOT, env=dict(os.environ, PYTHONUNBUFFERED="1")))
         while any(p.poll() is None for p in procs):
             time.sleep(1.0)
@@ -1027,13 +1081,13 @@ def main(argv=None):
     ap.add_argument("--both-ways", action="store_true", help="each route back again too")
     ap.add_argument("--speed", type=float, default=SPEED, help="m/s along the road between waits (default %(default)g)")
     ap.add_argument("--mode", choices=MODES, default="auto",
-                    help="game: the game runs, one worker at idle priority; alone: the machine's share of workers "
-                         "(alone_workers) below normal; auto (default): alone unless the game's process is found")
+                    help="game: the game runs, one worker at idle priority; alone: servers and workers sized from the "
+                         "memory free (plan_servers) below normal; auto (default): alone unless the game's process is found")
     ap.add_argument("--workers", type=int, default=None, help="far-tile workers of the server (default: the mode's)")
     ap.add_argument("--road-processes", type=int, default=None, help="road-tile processes (default: the mode's)")
     ap.add_argument("--jobs", type=int, default=1,
-                    help="the legs shared out over this many servers at once, the workers divided (default 1; at "
-                         "most one per leg, and SERVER_GB of RAM each)")
+                    help="the legs shared out over this many servers at once (default 1; at most one per leg; alone: "
+                         "as many as the memory free allows, each with the most workers that fit: plan_servers)")
     ap.add_argument("--split", type=int, default=1,
                     help="every leg cut into this many stretches (legs of their own, overlapping SPLIT_OVERLAP_M), so "
                          "more servers can run at once (default 1)")
@@ -1093,9 +1147,17 @@ def main(argv=None):
     man_path = os.path.join(bd, rb.MANIFEST)
     man = rb.read_json(man_path, {})
     prior = next((r.get("code") for r in reversed(man.get("runs") or []) if r.get("code")), None)
-    jobs, note = jobs_for(a.jobs, len(legs)) if not a.connect else (1, None)
-    if note:
-        print(note, flush=True)
+    workers = (1, 1)
+    if a.connect:
+        jobs = 1
+    elif mode == "alone" and (a.workers is None or a.road_processes is None):
+        jobs, far, road, note = plan_servers(a.jobs, len(legs))
+        workers = (a.workers if a.workers is not None else far, a.road_processes if a.road_processes is not None else road)
+        if note:
+            print(note, flush=True)
+    else:
+        jobs = max(1, min(a.jobs, len(legs)))
+        workers = (a.workers or 1, a.road_processes or 1)
     print(f"headless bake: {', '.join(leg_label(*lg) for lg in legs)} at {a.speed:g} m/s, mode {mode}"
           f"{' (auto)' if a.mode == 'auto' else ''}{f', {jobs} jobs' if jobs > 1 else ''}; "
           f"code {code}, BNE env {bne_env() or 'none'}; bake {bd}")
@@ -1103,7 +1165,8 @@ def main(argv=None):
         print(f"note: the last bake run had code {prior}: a server/*.py change or other BNE_* switches since",
               flush=True)
     run = {"started": time.strftime("%Y-%m-%d %H:%M:%S"), "start_ts": time.time(), "code": code, "routes": names,
-           "driver": "headless", "mode": mode, "speed": a.speed, "jobs": jobs, "complete": False, "legs": []}
+           "driver": "headless", "mode": mode, "speed": a.speed, "jobs": jobs,
+           "workers": list(workers) if jobs > 1 or mode == "alone" else None, "complete": False, "legs": []}
     man.setdefault("runs", []).append(run)
     rb.write_json(man_path, man)
 
@@ -1113,7 +1176,7 @@ def main(argv=None):
     ok = False
     try:
         if jobs > 1:
-            ok, run["legs"] = run_children(a, share_out(legs, jobs), out, mode)
+            ok, run["legs"] = run_children(a, share_out(legs, jobs, leg_lengths(legs, routes_file)), out, mode, workers)
         else:
             ok, _ = drive_legs(a, legs, lines, routes_file, anchors, pin_m, distance, out, mode, a.workers,
                                a.road_processes, on_leg=on_leg)
