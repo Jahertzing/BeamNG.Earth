@@ -80,12 +80,14 @@ BUS_CURB_M = 0.7            # m behind the curb (the road's edge where no sidewa
 BUS_SHELTER_BACK_M = 2.4    # m behind the sign
 BUS_SNAP_M = 25.0           # a mapped stop this far from a road's edge at most (OSM maps them at the pole or on the way)
 BUS_SHIFTS_M = (0.0, 6.0, -6.0, 12.0, -12.0, 18.0)   # along the traffic (past the junction first), to clear the crossing
+BUS_WALK_M = 4.0            # a sidewalk this near the sign's curb spot takes it
 BUS_CLASSES = {"primary", "secondary", "tertiary", "trunk", "residential", "unclassified"}
 
 USPS_SPACING_M = 420.0      # downtown: a blue collection box along a main street every this along each side
 BIKE_SPACING_M = 160.0
 PLANTER_SPACING_M = 55.0
 DOWNTOWN_CLASSES = {"primary", "secondary", "tertiary"}
+DOWNTOWN_END_M = 9.0        # m off a sidewalk run's ends (its corner's crosswalk and curb ramp)
 USPS_H, BIKE_RACK_H, PLANTER_H = 1.53, 1.16, 0.8     # (the stock shapes' heights: trees.lua CATALOG)
 
 
@@ -309,7 +311,9 @@ def driveway_rows(drives, walks, box, z_at, to_ll, us=True, town=True, spots=Non
         elif dn:
             # a subdivision: a cluster box for the cell, at one of its drives' ends behind the curb (or sidewalk)
             q = p1 + u * out + s * side * (half_w + 1.6)
-            cbu_cand.setdefault(cell, []).append((_h01(k, "cbu"), q, _yaw(-u[0], -u[1])))
+            qm = p1 + u * (MAILBOX_IN_M if outer is None else out) + s * side * (half_w + MAILBOX_SIDE_M)
+            cbu_cand.setdefault(cell, []).append((_h01(k, "cbu"), q, _yaw(-u[0], -u[1]),
+                                                  (qm, G_MAILBOX, _yaw(-u[0], -u[1]), MAILBOX_H, _h01(k, "mb"), 0.0)))
         elif outer is None or urban is False:
             # a curbside mailbox beside the drive, its door to the road
             q = p1 + u * MAILBOX_IN_M + s * side * (half_w + MAILBOX_SIDE_M)
@@ -319,10 +323,14 @@ def driveway_rows(drives, walks, box, z_at, to_ll, us=True, town=True, spots=Non
             for j, g in enumerate((G_CART_TRASH, G_CART_RECYCLE)):
                 q = p1 + u * 0.7 - s * side * (half_w - 0.45 - 0.75 * j)
                 places.append((q, g, _yaw(-u[0], -u[1]) + 8.0 * (_h01(k, j, "cy") - 0.5), CART_H, 0.0, 0.0))
+    boxed = {cell for cell, cand in cbu_cand.items() if len(cand) >= CBU_CELL_MIN}
     for cell, cand in cbu_cand.items():
-        if len(cand) < CBU_CELL_MIN:                # (its houses' box is in the next cell)
+        if cell not in boxed:
+            # too few for a box of their own: the box of a neighbouring cell, else each its own mailbox
+            if not any((cell[0] + i, cell[1] + j) in boxed for i in (-1, 0, 1) for j in (-1, 0, 1)):
+                places.extend(mb for *_, mb in cand)
             continue
-        _, q, yaw = min(cand, key=lambda c: c[0])
+        _, q, yaw, _ = min(cand, key=lambda c: c[0])
         places.append((q, G_CBU, yaw, CBU_H, 0.0, 0.0))
     if spot_at:
         S = np.array([q for q, _ in spot_at], np.float64)
@@ -383,7 +391,7 @@ def bus_stops_for(md, frame, keys):
     return mapped_bus_stops(frame, infra)
 
 
-def bus_stop_rows(stops, lines, box, z_at, left_hand=False):
+def bus_stop_rows(stops, lines, box, z_at, left_hand=False, walks=None, town=True):
     """Rows of the bus stops (mapped_bus_stops) in the tile box: the sign at the back of the curb of the nearest
     street (lines: build_tile's [(centreline (k, 2+), half width, class, urban)]), facing the oncoming traffic; a
     shelter behind it where mapped, else a bench where mapped."""
@@ -404,6 +412,7 @@ def bus_stop_rows(stops, lines, box, z_at, left_hand=False):
     D = B - A
     L2 = np.maximum((D * D).sum(1), 1e-12)
     every = _Segs(lines)
+    wp, wh = _walk_index(walks)
     places = []
     for x, y, shelter, bench in stops:
         if not (x0 <= x < x1 and y0 <= y < y1):
@@ -429,6 +438,19 @@ def bus_stop_rows(stops, lines, box, z_at, left_hand=False):
                 p = pp
                 break
         else:
+            continue
+        # on the sidewalk where the street has one (its curb side); a dense core's street without one (a wall at
+        # the asphalt): no sign
+        if len(wp):
+            dw = np.hypot(*(wp - p[None]).T)
+            i = int(np.argmin(dw))
+            if dw[i] <= BUS_WALK_M:
+                pp = wp[i] - out_n * max(0.0, wh[i] - 0.5)
+                if every.clear(pp[None], 0.4)[0]:
+                    p = pp
+            elif not town:
+                continue
+        elif not town:
             continue
         # (the stock sign's plate stands out from its pole along its local +x, faces along y: +x to the road shows it
         # to the traffic both ways; the shelter, 3.9 m along its y, its open side +x to the road)
@@ -466,20 +488,20 @@ def downtown_rows(roads, walks, box, us=True, town=True, curb_h=0.15):
             continue
         side, w = wk["side"], wk.get("w", 2.5)
 
-        def put(group, spacing, phase, curb_off, height, yaw_fn, clear=furniture.END_CLEAR_M):
+        def put(group, spacing, phase, curb_off, height, yaw_fn, clear=DOWNTOWN_END_M):
             for p, out in furniture._stations(run, line, spacing, phase, clear, side):
                 q = p[:2] - out * (w / 2 - curb_off)
                 if x0 <= q[0] < x1 and y0 <= q[1] < y1:
                     rows.append(_row(group, q, p[2] + curb_h, yaw_fn(out), height))
         if us:      # near a corner (the run's start), against the curb
             put(G_USPS, USPS_SPACING_M, _h01(fid, side, "usps") * USPS_SPACING_M, 0.55, USPS_H,
-                lambda out: _yaw(out[0], out[1]), clear=furniture.END_CLEAR_M + 2.0)
+                lambda out: _yaw(out[0], out[1]), clear=DOWNTOWN_END_M + 2.0)
         put(G_BIKE_RACK, BIKE_SPACING_M, _h01(fid, side, "bike") * BIKE_SPACING_M, 0.8, BIKE_RACK_H,
             lambda out: _yaw(-out[1], out[0]))
         if w >= 3.5 and not (spec.cls in furniture.STREET_TREE_CLASSES
                              and _h01(fid, "trees") < furniture.STREET_TREE_SHARE):
             put(G_PLANTER, PLANTER_SPACING_M, _h01(fid, side, "planter") * PLANTER_SPACING_M, 0.9, PLANTER_H,
-                lambda out: _yaw(-out[1], out[0]), clear=furniture.END_CLEAR_M + 6.0)
+                lambda out: _yaw(-out[1], out[0]), clear=DOWNTOWN_END_M + 6.0)
     return rows
 
 
@@ -526,6 +548,6 @@ def tile_rows(frame, md, keys, drives, walks, lines, box, ground, us, town, left
         return np.asarray(la, np.float64).reshape(-1), np.asarray(lo, np.float64).reshape(-1)
     rows = driveway_rows(drives, walks, box, z_at, to_ll, us=us, town=town, spots=spots, lines=lines)
     if md is not None and lines:
-        rows += bus_stop_rows(bus_stops_for(md, frame, keys), lines, box, z_at, left_hand)
+        rows += bus_stop_rows(bus_stops_for(md, frame, keys), lines, box, z_at, left_hand, walks, town)
     rows = [r for r in rows if math.isfinite(r[3])]
     return out_of(off_roads(clear_of(rows, props), lines), blockers)
