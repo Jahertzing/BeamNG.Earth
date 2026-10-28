@@ -500,12 +500,14 @@ class CommandTest(unittest.TestCase):
                 return [sys.executable, "-c", script, out, ",".join(hb.leg_label(*lg) for lg in legs)]
             # (available_gb patched: on a machine short of memory the planner falls to one server, which this tool
             # then runs itself, a real earthd: the test hung 500 s on the PC while a bake ran, 2026-10-28)
+            # (and the CPUs: a 4-CPU machine plans one server too)
             with (unittest.mock.patch.object(hb, "child_command", fake_child),
-                  unittest.mock.patch.object(hb, "available_gb", return_value=64.0)):
+                  unittest.mock.patch.object(hb, "available_gb", return_value=64.0),
+                  unittest.mock.patch.object(hb.os, "cpu_count", return_value=24)):
                 rc = hb.main(["--rebase-m", "900", "--mode", "alone", "--jobs", "2", "--both-ways"] + self.args(d))
             self.assertEqual(rc, 1, "a leg that did not finish (t_back) fails the run")
             self.assertEqual([lg for lg, _, _, _ in cmds], [[("t", False, None)], [("t", True, None)]], "a job per leg")
-            far, road = hb.plan_servers(2, 2, ram_gb=64.0)[1:3]
+            far, road = hb.plan_servers(2, 2, ram_gb=64.0, cpus=24)[1:3]
             self.assertEqual({(m, w, r) for _, m, w, r in cmds}, {("alone", far, road)}, "the plan's workers")
             run = rb.read_json(os.path.join(bd, rb.MANIFEST))["runs"][-1]
             self.assertFalse(run["complete"])
