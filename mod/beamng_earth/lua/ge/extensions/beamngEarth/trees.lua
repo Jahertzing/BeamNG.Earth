@@ -195,6 +195,16 @@ M.CATALOG = {
 }
 -- the Vienna Convention's round km/h signs: their shapes and how far out they show (CATALOG, GROUP_MAX_M)
 vienna.install(M)
+-- billboards along the motorways (server guidesigns.billboards): West Coast USA's drag-strip billboard, 8 x 4 m on its
+-- pole, and one of its 23 ads on the same spot (bbad01 .. bbad23); seen from far, the ad never collides
+M.CATALOG.billboard = { { WCA .. 'objects/dragbillboard', 11.95 } }
+M.GROUP_MAX_M.billboard = 1500
+for i = 1, 23 do
+  local g = string.format('bbad%02d', i)
+  M.CATALOG[g] = { { WCA .. string.format('objects/dragbillboard_sign%02d', i), 11.95 } }
+  M.GROUP_MAX_M[g] = 1500
+  M.NO_COLLIDE[g] = true
+end
 local MATERIALS = {
   ECA .. 'trees/trees_oak', ECA .. 'trees/trees_beech', ECA .. 'trees/trees_aspen', ECA .. 'trees/trees_douglasfir',
   ECA .. 'trees/ECA_coast_bush', ECA .. 'trees/common', ECA .. 'trees', ECA .. 'rocks',

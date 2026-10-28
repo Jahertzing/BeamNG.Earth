@@ -27,6 +27,12 @@ M.MATERIALS = {
   bne_star_bulb = { '1 0.96 0.86', 4000, when = function(c) return c.night and M.starSeason(c.year, c.month, c.day) end },
   -- a city's sky glow (nightglow.lua): additive, a faint haze of light
   bne_city_glow = { '1 1 1', 6 },
+  -- highway signs (server guidesigns.py): their white legends and borders, and the delineators' reflectors, as
+  -- retroreflective sheeting looks in headlights
+  bne_gsign_text = { '1 1 1', 45 },
+  bne_gsign_white = { '1 1 1', 12 },
+  bne_gsign_reflect = { '1 1 1', 400 },
+  bne_gsign_amber = { '1 0.7 0.15', 400 },
 }
 M.STADIUM_OFF_H = 23.0      -- local hour the stadiums' lights go out (a game is over by then)
 M.STAR_LAST = { 1, 25 }     -- the star goes off after the National Western Stock Show (month, day; mid to late January)

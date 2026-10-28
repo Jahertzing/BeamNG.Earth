@@ -511,6 +511,7 @@ def _roads_tile(aid, lat, lon, zoom, tx, ty, out_dir, vfs_dir, sidewalks, lift, 
         return roadsmod.block_arch_raise(tunnels, cell_fn, frame, la, lo, elev(la, lo),
                                          (box[0] - 8, box[1] - 8, box[2] + 8, box[3] + 8))
     cover = []                          # the ground carriageways for the decks' parapets (roadmesh.deck ground=)
+    signs = []                          # highway signs (guidesigns.py)
     chunks = roadsmod.build_tile(frame, tx, ty, cells, elev, urban, walks=walks, deck_context=ctx, bridges=bridges, widths=_s.widths,
                                  walk_cuts=fuel_cuts,    # (the stations' made-up driveways: no sidewalk across them)
                                  props=props, lines=lines, wires=wires, town=town, park=park,
@@ -525,7 +526,8 @@ def _roads_tile(aid, lat, lon, zoom, tx, ty, out_dir, vfs_dir, sidewalks, lift, 
                                  barrier_lines=barriersmod.mapped_for(
                                      _s.md, frame, roadsmod.cells_of_tile(frame, tx, ty, SIGNALS_MARGIN_M)),
                                  barrier_homes=barriersmod.residential_for(
-                                     _s.md, frame, roadsmod.cells_of_tile(frame, tx, ty, BARRIER_HOMES_MARGIN_M)))
+                                     _s.md, frame, roadsmod.cells_of_tile(frame, tx, ty, BARRIER_HOMES_MARGIN_M)),
+                                 signs=signs)
     chunks += railsmod.tile_chunks(frame, tx, ty, cells)     # railway and tram tracks on the ground
     if _s.airports is not None:         # runway markings, drawn by the road mesh like the lane lines
         chunks += _s.airports.tile_chunks(frame, tx, ty, elev, roadsmod.tile_bbox)
@@ -585,7 +587,8 @@ def _roads_tile(aid, lat, lon, zoom, tx, ty, out_dir, vfs_dir, sidewalks, lift, 
                         + industry.power_plant_sound_rows(frame, tx, ty, _s.md, elev))
     return roadsmod.write_tile(out_dir, vfs_dir, aid, tx, ty, chunks, walks if sidewalks else None, mesh, dmesh,
                                bld, props, wires, park, tunnel_mesh=tmesh, fuel=fuel, rail_mesh=rmesh,
-                               garage_sound=garage_sound, wells=oil_wells) + (fuel_pads,)
+                               garage_sound=garage_sound, wells=oil_wells,
+                               signs=signs[0] if signs else None) + (fuel_pads,)
 
 
 def _with_plazas(mesh, frame, tx, ty, elev, origin, surface):
