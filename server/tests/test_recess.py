@@ -289,19 +289,40 @@ class RecessTest(unittest.TestCase):
             self.assertLessEqual(len(nokit[0]), len(off[0]))
 
     def test_tall_sheet_capped(self):
-        """No sheet window recessed above RECESS_MAX_Z over the floors' base."""
-        spec = bld.plan(rect(0.0, 0.0, 30.0, 20.0), {"class": "apartments", "num_floors": 18}, 1, LAT, LON)
-        for k in range(200):
-            if fk.sheet_band(spec) is not None:
+        """Sheet windows recessed up to RECESS_STREET_MAX_Z on the street wall (the front door's), RECESS_MAX_Z on the
+        others; without a street wall, RECESS_MAX_Z everywhere."""
+        self.assertGreater(fk.RECESS_STREET_MAX_Z, fk.RECESS_MAX_Z)
+        found = 0
+        for k in range(300):
+            spec = bld.plan(rect(k * 50.0, 0.0, 30.0, 20.0), {"class": "apartments", "num_floors": 14}, 1, LAT, LON)
+            if fk.sheet_band(spec) is None:
+                continue
+            base = spec.height - spec.floors * spec.floor_h
+            ring = bld.drawn_ring(spec)
+            for door in (None, (0, 6.0)):
+                spec.door = door
+                if door:
+                    spec.roof = "flat"
+                Qa, Ua, Ma = walls(spec)
+                nA = normals(Qa)
+                rev = np.abs(nA[:, 2]) > 0.999                          # sills and heads
+                self.assertTrue(rev.any())
+                top = {}
+                for i in range(len(ring)):
+                    a, d, n, L = fk._wall(ring, i)
+                    on = rev & (np.abs((Qa[:, :, :2].mean(1) - a) @ n + fk.RECESS_SHEET_M / 2) < 1e-6) \
+                        & (((Qa[:, :, :2].mean(1) - a) @ d) > 0) & (((Qa[:, :, :2].mean(1) - a) @ d) < L)
+                    top[i] = float(Qa[on][:, :, 2].max()) - base if on.any() else 0.0
+                side = max(v for i, v in top.items() if not door or i != door[0])
+                self.assertLessEqual(side, fk.RECESS_MAX_Z + 1e-6)
+                if door:
+                    self.assertLessEqual(top[0], fk.RECESS_STREET_MAX_Z + 1e-6)
+                    self.assertGreater(top[0], fk.RECESS_MAX_Z + 3.0, "the street wall recessed higher")
+                    self.assertGreater(top[0], side + 3.0)
+            found += 1
+            if found >= 3:
                 break
-            spec = bld.plan(rect(k * 50.0, 0.0, 30.0, 20.0), {"class": "apartments", "num_floors": 18}, 1, LAT, LON)
-        self.assertIsNotNone(fk.sheet_band(spec))
-        Qa, Ua, Ma = walls(spec)
-        nA = normals(Qa)
-        rev = np.abs(nA[:, 2]) > 0.999
-        self.assertTrue(rev.any())
-        base = spec.height - spec.floors * spec.floor_h
-        self.assertLessEqual(float(Qa[rev][:, :, 2].max()), base + fk.RECESS_MAX_Z + 1e-6)
+        self.assertEqual(found, 3)
 
     def test_deterministic(self):
         for spec in houses(5) + sheets(1):

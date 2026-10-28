@@ -56,11 +56,13 @@ RECESS_HOUSE_M = 0.08               # m a house's glass sits behind its wall's f
 RECESS_SHEET_M = 0.15               # ... a plaster sheet building's (masonry: deeper reveals)
 RECESS_MIN_W = 0.25                 # m: an opening cut narrower than this by its quad's end (a wall's corner, a door's
                                     # plain strip) stays painted on the wall
-RECESS_MAX_Z = 8.0                  # m over the building's floors' base: sheet windows recessed this high at most, the
-                                    # floors seen up close from the street. Each opening is ~6 quads more (its glass,
-                                    # 4 reveals, the wall between): downtown Denver's road tile (39.747, -104.992) had
-                                    # 44.6k near vertices flat, 67.9k at 8 m, 94.9k at 12 m, 118k at 30 m, 130k uncapped
-                                    # (2026-10-28). Houses (3 floors at most) are not capped.
+RECESS_MAX_Z = 8.0                  # m over the building's floors' base: sheet windows recessed this high at most on its
+                                    # side and back walls, the floors seen up close. Each opening is ~6 quads more (its
+                                    # glass, 4 reveals, the wall between): downtown Denver's road tile (39.747, -104.992)
+                                    # had 44.6k near vertices flat, 67.9k at 8 m, 94.9k at 12 m, 118k at 30 m, 130k
+                                    # uncapped (2026-10-28). Houses (3 floors at most) are not capped.
+RECESS_STREET_MAX_Z = 30.0          # ... on its street wall (street_edge(): the one you drive past and look up at; well
+                                    # under the tile's kit budget, buildings.KIT_FILL)
 WAINSCOT_TOL = 0.1                  # m an opening may reach down behind a stone base band (a house's sill: 5 cm)
 DOOR_CLEAR_M = 0.05                 # m kept between an opening and a door / garage door frame
 # The plaster sheet's window openings (x0, y0, x1, y1 px of 1024, image top first) per band (buildings.BAND_TALL,
@@ -281,6 +283,28 @@ def sheet_band(spec):
     return k if k in PLASTER_BANDS else None
 
 
+def street_edge(spec):
+    """The edge of a building's street wall (doors(): its front door's, else its shopfront sign's or big box
+    storefront's), or None."""
+    if spec.door:
+        return int(spec.door[0])
+    for e in (spec.sign, spec.front):
+        if e is not None:
+            return int(e)
+    return None
+
+
+def _on_wall(ring, edge, a, d):
+    """Which quads (their start a (k, 2), along d (k, 2)) lie on wall `edge` of the ring: (mask, their start's s
+    along that wall)."""
+    wl = _wall(ring, edge) if edge is not None and 0 <= edge < len(ring) else None
+    if wl is None:
+        return np.zeros(len(a), bool), np.zeros(len(a))
+    ea, ed, en, _ = wl
+    rel = a - ea
+    return (np.abs(rel @ en) < 1e-3) & (d @ ed > 0.999), rel @ ed
+
+
 _TEXEL = np.array([(0.002, 0.995), (0.012, 0.995), (0.012, 0.999), (0.002, 0.999)])   # the trims' plain white texel
 
 
@@ -343,7 +367,8 @@ def recess(spec, ring, z_eave, P, UV, mid):
         bk, bpt = sb
         O = SHEET_OPENINGS[bk]
         u1 = U[:, 1, 0]
-        cand = np.flatnonzero(rect & (M == 0) & (u1 - u0 >= 0.5 / bpt) & (za < base + RECESS_MAX_Z))
+        cap = base + np.where(_on_wall(ring, street_edge(spec), a, d)[0], RECESS_STREET_MAX_Z, RECESS_MAX_Z)
+        cand = np.flatnonzero(rect & (M == 0) & (u1 - u0 >= 0.5 / bpt) & (za < cap))
         if not len(cand):
             return P, UV, mid
         t0 = np.floor(u0[cand] + 1e-9)
@@ -362,7 +387,7 @@ def recess(spec, ring, z_eave, P, UV, mid):
         hz0 = za[ci] + (ov[:, 0] - v0[ci]) / vz[ci]
         hz1 = za[ci] + (ov[:, 1] - v0[ci]) / vz[ci]
         ok = (hs1 - hs0 >= RECESS_MIN_W) & (hz0 > za[ci] + 1e-6) & (hz1 < zb[ci] - 1e-6) \
-            & (hz1 <= base + RECESS_MAX_Z)
+            & (hz1 <= cap[ci])
         hq, hs0, hs1, hz0, hz1 = ci[ok], hs0[ok], hs1[ok], hz0[ok], hz1[ok]
         glass = None
     if not len(hq):
@@ -382,13 +407,7 @@ def recess(spec, ring, z_eave, P, UV, mid):
         if gs is not None:
             spans.append((spec.drive[0], gs[0] - FRAME_W, gs[1] + FRAME_W, base + GARAGE_H + 0.18))
     for edge, s0, s1, ztop in spans:
-        wl = _wall(ring, edge)
-        if wl is None:
-            continue
-        ea, ed, en, _ = wl
-        rel = a[hq] - ea
-        on = (np.abs((rel * en).sum(1)) < 1e-3) & ((d[hq] * ed).sum(1) > 0.999)
-        se = (rel * ed).sum(1)
+        on, se = _on_wall(ring, edge, a[hq], d[hq])
         keep &= ~(on & (se + hs1 > s0 - DOOR_CLEAR_M) & (se + hs0 < s1 + DOOR_CLEAR_M) & (hz0 < ztop + DOOR_CLEAR_M))
     hq, hs0, hs1, hz0, hz1 = hq[keep], hs0[keep], hs1[keep], hz0[keep], hz1[keep]
     if glass is not None:
