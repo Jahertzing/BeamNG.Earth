@@ -118,7 +118,9 @@ def swap(text, tokens):
     return text
 
 
-SHAPE_RE = re.compile(r'"shape":"([^"]+)"')
+# (json.dumps' default separators too: buildings.far_tile writes '"shape": "..."', and its far building tiles were kept
+# without their mesh, a revisit's hit pointing at a shape file that was never written)
+SHAPE_RE = re.compile(r'"shape":\s*"([^"]+)"')
 
 
 def shapes_in(text, vfs_dir):
