@@ -145,14 +145,73 @@ T.check(N.boxMoved(nil, { 0, 0, 1, 1 }) == 0 and N.boxMoved({}, { 0, 0, 1, 1 }) 
 T.check(384 >= N.RECLIP_M and 128 < N.RECLIP_M, 'a 384 m move re-clips the graph, one step of 128 m does not')
 -- GitHub #353: at motorway speed a respawned car goes ahead, short of the block's edge guard; slower: behind (nil)
 do
-  local box = { -256, -256, 256, 256 }
+  -- the terrain block: 2046 m, the player 600 m from its east edge
+  local box = { -1446, -1023, 600, 1023 }
   local x, y, dx, dy, lo, hi = N.aheadSpot(0, 0, 30, 0, box)
-  T.check(x == 0 and dx == 1 and dy == 0 and lo == N.AHEAD_M[1] and hi == math.min(N.AHEAD_M[2], 256 - N.GUARD_M - 20),
-    'aheadSpot: 67 mph east, ahead along the way: ' .. tostring(hi))
+  T.check(x == 0 and dx == 1 and dy == 0 and lo == N.AHEAD_M[1] and hi == N.AHEAD_M[2],
+    'aheadSpot: 67 mph east, 600 m of block ahead: the full AHEAD_M: ' .. tostring(lo) .. '-' .. tostring(hi))
   T.check(N.aheadSpot(0, 0, 10, 0, box) == nil, 'aheadSpot: 22 mph: behind the camera as before')
-  T.check(N.aheadSpot(150, 0, 30, 0, box) == nil, 'aheadSpot: near the block edge ahead: no room, behind')
-  local _, _, _, _, _, h2 = N.aheadSpot(0, 0, 0, -30, box)
-  T.check(h2 and h2 <= 256 - N.GUARD_M - 20, 'aheadSpot: south, limited by the box too')
+  -- 400 m of block: the farthest spot leaves the clip's edge and a car's cut reach at its starting speed (the loop)
+  local room = N.aheadRoom(30)
+  T.check(math.abs(room - (N.EDGE_M + 30 * N.AHEAD_PACE * N.CUT_S + N.AHEAD_MARGIN_M)) < 1e-9, 'aheadRoom: ' .. room)
+  local _, _, _, _, lo2, hi2 = N.aheadSpot(200, 0, 30, 0, box)
+  T.check(hi2 == 400 - room and lo2 == N.AHEAD_M[1], 'aheadSpot: 400 m of block: to ' .. tostring(hi2))
+  -- a car put at the far end is out of its cut reach (the cut nodes stand EDGE_M inside the edge)
+  local cutAt = 400 - N.EDGE_M
+  T.check(cutAt - hi2 > N.cutReach(0, N.aheadSpeed(30), true), 'aheadSpot: the far end is clear of the cut reach')
+  -- 320 m of block (the nearest the block lets the edge come): a tighter spot, then none
+  local _, _, _, _, lo3, hi3 = N.aheadSpot(280, 0, 30, 0, box)
+  T.check(lo3 == N.AHEAD_TIGHT_M and hi3 == 320 - room, 'aheadSpot: 320 m: from AHEAD_TIGHT_M: ' .. tostring(hi3))
+  T.check(N.aheadSpot(400, 0, 30, 0, box) == nil, 'aheadSpot: 200 m of block ahead: no room, behind')
+  local _, _, _, _, _, h4 = N.aheadSpot(0, 700, 0, 30, box)
+  T.check(h4 and h4 == 323 - room, 'aheadSpot: north, limited by the box too: ' .. tostring(h4))
+end
+-- a car keeps its route across a new map when every node of it is still there, in place and linked (keepRouteLua);
+-- ai.lua is stood in for by a closure with its two upvalues, run through the same debug-library calls
+do
+  local function graphOf(shift, drop)
+    local pos, g = {}, {}
+    for i, nm in ipairs({ 'c1', 's5_1', 's5_2', 'c2', 'c3' }) do
+      if nm ~= drop then pos[nm] = { x = i * 50 + shift, y = 0, z = 1 } g[nm] = {} end
+    end
+    local function link(a, b) if g[a] and g[b] then g[a][b] = {} g[b][a] = g[a][b] end end
+    link('c1', 's5_1') link('s5_1', 's5_2') link('s5_2', 'c2') link('c2', 'c3')
+    return { positions = pos, graph = g }
+  end
+  local function run(newMap, route, mode)
+    local mapData, currentRoute = graphOf(0), route
+    local reports = {}
+    _G.ai = { mode = mode or 'traffic' }
+    _G.ai.updateGFX = function()
+      if mapData ~= mapmgr.mapData then currentRoute = nil end
+      mapData = mapmgr.mapData
+      return currentRoute
+    end
+    _G.mapmgr = { mapData = mapData, setMap = function() mapmgr.mapData = newMap end }
+    _G.obj = { queueGameEngineLua = function(_, s) reports[#reports + 1] = s end }
+    _G.objectId = 42
+    assert(loadstring(N.keepRouteLua()))()
+    mapmgr.setMap(7)
+    return ai.updateGFX(), reports
+  end
+  local route = { path = { 'c1', 's5_1', 's5_2', 'c2' } }
+  local kept, rep = run(graphOf(0), route)
+  T.check(kept == route, 'keepRoute: the same nodes in the new map: the route kept')
+  T.check(#rep == 1 and rep[1]:find('routeKept(42, true)', 1, true), 'keepRoute: reported kept: ' .. tostring(rep[1]))
+  T.check(run(graphOf(0.1), route) == route, 'keepRoute: nodes 0.1 m off (rounding): kept')
+  local moved, rep2 = run(graphOf(15000), route)
+  T.check(moved == nil and rep2[1]:find('routeKept(42, false)', 1, true), 'keepRoute: a rebase moved every node: dropped')
+  T.check(run(graphOf(0, 's5_2'), route) == nil, 'keepRoute: a node of the route clipped away: dropped')
+  local g = graphOf(0)
+  g.graph.s5_1.s5_2, g.graph.s5_2.s5_1 = nil, nil
+  T.check(run(g, route) == nil, 'keepRoute: a link of the route gone: dropped')
+  T.check(run(graphOf(0), route, 'manual') == nil, 'keepRoute: only traffic mode (the GPS autodrive is left alone)')
+  local _, rep3 = run(graphOf(0), nil)
+  T.check(#rep3 == 0, 'keepRoute: no route yet: nothing to keep, nothing reported')
+  N.routeKept(1, true) N.routeKept(2, false) N.routeKept(3, true)
+  local st = N.status()
+  T.check(st.routesKept >= 2 and st.routesDropped >= 1, 'routeKept: counted in status')
+  _G.ai, _G.mapmgr, _G.obj, _G.objectId = nil, nil, nil, nil
 end
 -- a rebase (core finishRebase): the graph in the new frame, its signals' stop points, directions and heads too
 do
