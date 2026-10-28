@@ -15,6 +15,7 @@ footprints and a ground-height function; no game state.
 """
 import os
 import hashlib
+import logging
 import math
 
 import numpy as np
@@ -1378,6 +1379,9 @@ def _concat(meshes):
 KIT_FILL = 0.85     # the facade kit's details only while the tile's meshes stay under this share of max_parts meshes
 
 
+_log = logging.getLogger("earthd.buildings")
+
+
 def build_parts(specs_and_ground, lite=False, max_verts=MAX_MESH_VERTS, with_lod=False, max_parts=None):
     """build() split into meshes of at most max_verts vertices each (whole buildings per mesh): a list, [] if empty.
     Each building is built once (build draws them one by one) and the meshes joined. with_lod: each mesh carries the
@@ -1394,9 +1398,20 @@ def build_parts(specs_and_ground, lite=False, max_verts=MAX_MESH_VERTS, with_lod
             parts.append(mesh + (_concat(cur_lite) if cur_lite else None,) if with_lod and not lite else mesh)
 
     for item in specs_and_ground:
-        one = build([item], lite)
-        if one is not None and budget is not None and not lite and total + len(one[0]) > budget:
-            one = build([item], lite, kit=False)        # (over the tile's budget: no kit)
+        try:
+            one = build([item], lite)
+            if one is not None and budget is not None and not lite and total + len(one[0]) > budget:
+                one = build([item], lite, kit=False)    # (over the tile's budget: no kit)
+        except Exception as e:                          # noqa: BLE001 (the facade kit's bug: never the tile's)
+            if lite:
+                raise
+            # a facade kit / walls' depth (facadekit.py) failure takes that building's kit off, not the road tile and
+            # its buildings with it (2026-10-28: an IndexError in facadekit._cut failed whole tiles, 5 times each)
+            spec = item[0]
+            c = np.asarray(spec.ring, np.float64)[:, :2].mean(0)
+            _log.warning("buildings: facade kit failed for a building (seed %r, centre %.1f, %.1f, %s): %s: %s; built "
+                         "without it", spec.seed, c[0], c[1], spec.cls or "-", type(e).__name__, e)
+            one = build([item], lite, kit=False)
         if one is None:
             continue
         total += len(one[0])

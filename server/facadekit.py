@@ -645,6 +645,12 @@ def _cut(F, hq, hs0, hs1, hz0, hz1, D, glass=None, glass_out=0.0, reveals=None, 
     if units is not None:
         units = tuple(np.asarray(x)[o] for x in units)
     nh = len(hq)
+    if not nh:                                          # no opening: the quads less `drop` (a house whose windows are
+        cut = np.zeros(F.q, bool)                       # all on blank walls: its native sashes left out, the walls
+        if drop is not None and len(drop):              # whole; 2026-10-28 the row split below raised on it, IndexError,
+            cut[np.asarray(drop, np.int64)] = True      # and the road tile failed with all its buildings)
+        k = np.flatnonzero(~cut)
+        return F.Q.reshape(-1, 12)[k].ravel().tolist(), F.U.reshape(-1, 8)[k].ravel().tolist(), F.M[k].tolist()
     first = np.ones(nh, bool)
     first[1:] = (hq[1:] != hq[:-1]) | (np.abs(hz0[1:] - hz0[:-1]) > 1e-6)
     prev1 = np.r_[0.0, hs1[:-1]]
