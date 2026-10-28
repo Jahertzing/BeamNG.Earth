@@ -1094,6 +1094,10 @@ three days of testing: dem 741 MB / 7.5k files, imagery 1.4 GB / 35k, deshadow 7
   layer 8): rule (a)'s pocket covers its own way's share (POCKET_M where the segment is one way), and where OSM's
   lanes are the ones in use (`Spec.lsrc` None / "osm"), a part of another lane count is wider or narrower by those
   lanes, the step tapering inside the wider part as rule (b) (rule (d); a pocket's part keeps the segment's width).
+  Each part draws its own lanes (`part_lines`, `_part_spec`: the split each way its end's turn lanes ask for, else
+  the one keeping the centre line nearest the segment's); across a taper a line both parts have runs from one to
+  the other and a new lane's line starts where the lane is 2/3 wide (`POCKET_LINE_SHARE`, US lane-add striping); the
+  arrows stand in the lanes of the part at their end. Build time only (no layer bump).
 - Turn lanes without turn:lanes (rule (c), 2026-10-28): CDOT counts a stretch's left turn lanes into its
   lanes (a painted median: `lanes_c`; else the direction's lanes), and its stretches are short, so CO-52
   through Frederick widens near its junctions by segment; those steps now taper too (a centre turn lane

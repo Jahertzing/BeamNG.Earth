@@ -222,6 +222,8 @@ POCKET_RANK = {"motorway": 0, "trunk": 1, "primary": 2, "secondary": 3, "tertiar
                             # joints of two same-named arterial segments there have one), others 7
 POCKET_TOL_M = 0.5      # m: an offset this near a pocket's outer boundary (the centre line's two strokes) moves with it
 POCKET_STEP_M = 4.0     # m between the nodes added along a widened stretch (the painted ground's and blockers' pieces)
+POCKET_LINE_SHARE = 2 / 3   # a lane appearing in a taper gets its line from where it is this share of its width
+PART_LINES_ON = True        # a merged segment's parts draw their own lanes (part_lines; off: the segment's, spread)
 POCKET_REACH_M = POCKET_TAPER_M + NEAR_M    # m around a tile whose cells' roads the joints are looked up in
 POCKET_MODE = os.environ.get("BNE_TURN_POCKETS", "on")     # "off": every carriageway of one width, as before;
 POCKETS_ON = POCKET_MODE != "off"                           # "tags": the map's lanes only (rules (a), (b)), no
@@ -2559,7 +2561,8 @@ def extras(spec, pts, lon, left_hand=False, wid=None):
                     out.append((look, CENTRE["w"], offset_polyline(
                         pts, ms * (w / 2 - EDGE_LINE["inset"] - 2 * k * CENTRE["gap"]))))
             out.append(({**GUTTER, "side": ms}, GUTTER["w"], op(pts, ms * (w / 2 - GUTTER["w"] / 2))))
-    tagged = kind == "paved" and (has_lane_tags(spec) or (wid is not None and bool(wid[0].added or wid[0].turns)))
+    tagged = kind == "paved" and (has_lane_tags(spec) or (wid is not None and bool(wid[0].added or wid[0].turns
+                                                                                    or wid[0].parts)))
     if tagged:                  # the regional tables' lanes, centre turn lanes, parking and turn arrows (lane_marks)
         out.extend(lane_marks(spec, pts, lon, left_hand, wid))
     if kind == "paved" and cls in CENTRE_CLASSES and w >= 6.0 and not spec.oneway and not tagged:   # no paint on cobbles
@@ -2716,7 +2719,22 @@ def lane_marks(spec, pts, lon, left_hand=False, wid=None):
 
     def line(look, w, off):
         out.append((look, w, offset_polyline(pts, moved(off))))
-    for d, n, g0, g1 in groups:                     # lane lines within each direction
+    by_part = PART_LINES_ON and wid is not None and bool(wid[0].parts) and not spec.lanes_c
+    if by_part:                                     # (a merged segment's parts: each its own lanes, part_lines)
+        other = wid[0]._replace(comps=tuple(c for c in wid[0].comps if c[0] != "dscale"))
+        yellow_ = centre_colour(lon)
+        for key, off in part_lines(spec, wid[0], wid[1], left_hand).items():
+            off = widen_off(other, wid[1], off)
+            for run in _true_runs(np.isfinite(off)):
+                if len(run) < 2:
+                    continue
+                if key[0] == "lane" or yellow_ == "line_white":
+                    out.append((LANE_LINE, LANE_LINE["w"], offset_polyline(pts[run], off[run])))
+                else:
+                    for sgn in (1, -1):
+                        out.append(({"m": yellow_, "tl": CENTRE["tl"], "p": CENTRE["p"]}, CENTRE["w"],
+                                    offset_polyline(pts[run], off[run] + sgn * CENTRE["gap"])))
+    for d, n, g0, g1 in (() if by_part else groups):    # lane lines within each direction
         lw = (g1 - g0) / n
         for k in range(1, n):
             line(LANE_LINE, LANE_LINE["w"], g0 + k * lw)
@@ -2737,7 +2755,7 @@ def lane_marks(spec, pts, lon, left_hand=False, wid=None):
     yellow = centre_colour(lon)
     gap = CENTRE["gap"]
     look = {"m": yellow, "tl": CENTRE["tl"], "p": CENTRE["p"]}
-    if not spec.oneway and len(groups) == 2:
+    if not spec.oneway and len(groups) == 2 and not by_part:
         if lay["centre"] is None:                   # the centre line between the two directions
             b = groups[0][3] if groups[0][2] < groups[1][2] else groups[1][3]
             if yellow == "line_white":
@@ -2759,7 +2777,19 @@ def lane_marks(spec, pts, lon, left_hand=False, wid=None):
     L = float(np.hypot(*np.diff(pts[:, :2], axis=0).T).sum()) if len(pts) >= 2 else 0.0
     if L >= ARROW_MIN_ROAD_M:
         syn = {dd: t for dd, t in (wid[0].turns if wid is not None else ()) if t != "C"}
-        for d, n, g0, g1 in groups:
+        agroups = groups
+        if by_part:                                 # (the arrows in the lanes of the part at that end)
+            parts = wid[0].parts
+            wf = len(spec.turns_f) if spec.turns_f else None
+            wb = len(spec.turns_b) if spec.turns_b else None
+            agroups = []
+            for d in sorted({g[0] for g in groups}, reverse=True):
+                k = len(parts) - 1 if d > 0 else 0
+                pl = lane_layout(_part_spec(spec, parts[k][2], parts[k][3], wf if k == len(parts) - 1 else None,
+                                            wb if k == 0 else None, left_hand), left_hand)
+                agroups += [g for g in (pl["groups"] if pl is not None else ()) if g[0] == d]
+            moved = lambda off: widen_off(other, wid[1], off)    # noqa: E731
+        for d, n, g0, g1 in agroups:
             turns = (spec.turns_f if d > 0 else spec.turns_b) or syn.get(d)
             pk = pockets.get(d, {})
             if not turns or len(turns) != n + len(pk) or not any(turns):
@@ -2842,9 +2872,11 @@ def clear_of(pts, blockers):
 # sub_polyline), comps, added, ring, c, s): comps ((kind, o_b, sigma, knots), ...), knots ((s, e), ...) linear between:
 # "ins" moves every offset from o_b on (toward sigma, POCKET_TOL_M short of it included) by sigma x e, "mid" every
 # offset by e, "scale" every offset by its share e / w; added: rule (a)'s / (c)'s lanes ((d, "L" / "R", sigma, o_b,
-# knots)); turns: (c)'s arrows ((d, turns of its lanes left to right, or "C": a left arrow in the centre turn lane)).
+# knots)); turns: (c)'s arrows ((d, turns of its lanes left to right, or "C": a left arrow in the centre turn lane));
+# parts: (d)'s ((from m, to m, lanes, m wider), ...) along it, its "dscale" comp their widths ("scale" as such), ptapers
+# their steps' tapers ((from m, to m, the narrower part, the wider part), ...): lane_marks draws each part's lanes.
 # The offsets are lane_layout's (m left of the geometry); widen_off moves them, widen_edges gives the carriageway's.
-Widening = namedtuple("Widening", "w L comps added ring c s turns", defaults=((),))
+Widening = namedtuple("Widening", "w L comps added ring c s turns parts ptapers", defaults=((), (), ()))
 LEFT_TURNS = frozenset({"left", "slight_left", "sharp_left"})
 RIGHT_TURNS = frozenset({"right", "slight_right", "sharp_right"})
 _POCKET_MEMO = {}               # (cell ids, urban_fn, widths, left_hand) -> (cells, profiles): pocket_profiles
@@ -2911,7 +2943,7 @@ def widen_off(wd, s, o):
     out = base.copy()
     for kind, ob, sg, kn in wd.comps:
         e = _knot_eval(kn, s)
-        if kind == "scale":
+        if kind in ("scale", "dscale"):
             out += base * e / wd.w
         elif kind == "mid":
             out += e
@@ -3080,6 +3112,117 @@ def _step_knots(L, ranges, ext):
             pts += [(x - T, e0), (x, e1)]
     pts.append((L, ext[-1]))
     return _knots(pts)
+
+
+def _step_tapers(L, ranges, ext):
+    """The tapers of _step_knots' steps: ((from m, to m, the narrower part, the wider part), ...)."""
+    out = []
+    for k in range(len(ranges) - 1):
+        x = ranges[k][1] * L
+        e0, e1 = ext[k], ext[k + 1]
+        if abs(e1 - e0) < 1e-9:
+            continue
+        if e1 > e0:
+            T = min(POCKET_TAPER_M, (ranges[k + 1][1] - ranges[k + 1][0]) * L / 2)
+            out.append((x, x + T, k, k + 1))
+        else:
+            T = min(POCKET_TAPER_M, (ranges[k][1] - ranges[k][0]) * L / 2)
+            out.append((x - T, x, k + 1, k))
+    return tuple(out)
+
+
+def _part_spec(spec, n, ext, want_f=None, want_b=None, left_hand=False):
+    """The spec of a part of a merged segment (Widening.parts): n lanes, ext m wider; a two-way road's lanes each way
+    those its turn lanes ask for at that end (want_f / want_b), else the split whose centre line lies nearest the
+    segment's (it moves only by an odd difference: Thornton's 136th Avenue alternates 4 to 7 lanes, a split shared out
+    one way first wandered at every part)."""
+    w = spec.width + ext
+    if spec.oneway or n is None:
+        return spec._replace(width=w, lanes=n)
+    nc = spec.lanes_c or 0
+    f, b = spec.lanes_f, spec.lanes_b
+    if f is None or b is None:
+        return spec._replace(width=w, lanes=n, lanes_f=None, lanes_b=None)
+    rest = n - nc
+    if rest < 2:
+        return spec._replace(width=w, lanes=n, lanes_f=None, lanes_b=None)
+    if want_f is not None and 1 <= want_f < rest:
+        return spec._replace(width=w, lanes=n, lanes_f=want_f, lanes_b=rest - want_f)
+    if want_b is not None and 1 <= want_b < rest:
+        return spec._replace(width=w, lanes=n, lanes_f=rest - want_b, lanes_b=want_b)
+    here = _keyed_lines(lane_layout(spec, left_hand), False).get(("centre",)) if lane_layout(spec, left_hand) else None
+    best = None
+    for fp in range(1, rest):
+        ps = spec._replace(width=w, lanes=n, lanes_f=fp, lanes_b=rest - fp)
+        lay = lane_layout(ps, left_hand)
+        c = _keyed_lines(lay, False).get(("centre",)) if lay is not None else None
+        score = (abs(c - here) if c is not None and here is not None else 0.0, abs(fp / rest - f / max(f + b, 1)), -fp)
+        if best is None or score < best[0]:
+            best = (score, ps)
+    return best[1]
+
+
+def _keyed_lines(lay, oneway):
+    """{("lane", d, k): offset} of a layout's lane lines, k counted from the centre line out (a one-way road: from the
+    driver's left), and {("centre",): offset} of a two-way road's centre line."""
+    out = {}
+    groups = lay["groups"]
+    for d, n, g0, g1 in groups:
+        lw = (g1 - g0) / n
+        others = [g for g in groups if g[0] != d]
+        if oneway or not others:
+            edge, sgn = (g1, -1) if d > 0 else (g0, 1)
+        else:
+            edge, sgn = (g1, -1) if g0 < others[0][2] else (g0, 1)
+        for k in range(1, n):
+            out[("lane", d, k)] = edge + sgn * k * lw
+    if not oneway and len(groups) == 2 and lay["centre"] is None:
+        out[("centre",)] = groups[0][3] if groups[0][2] < groups[1][2] else groups[1][3]
+    return out
+
+
+def part_lines(spec, wd, s, left_hand=False):
+    """{key: offsets (len(s),), NaN where the line is not}: the lane lines and centre line of a merged segment by part
+    (Widening.parts, _keyed_lines' keys), each part its own lanes; across a taper a line both parts have goes from one
+    to the other, one only the wider part has starts where its new lane is POCKET_LINE_SHARE wide (US lane-add
+    striping), as if drawn at the wider part's layout scaled to the width there. Offsets before the profile's other
+    comps (widen_off with them)."""
+    s = np.asarray(s, np.float64)
+    parts = wd.parts
+    n_parts = len(parts)
+    want_f = len(spec.turns_f) if spec.turns_f else None
+    want_b = len(spec.turns_b) if spec.turns_b else None
+    lays = []
+    for k, (a, b, n, e) in enumerate(parts):
+        ps = _part_spec(spec, n, e, want_f if k == n_parts - 1 else None, want_b if k == 0 else None, left_hand)
+        lay = lane_layout(ps, left_hand)
+        lays.append(_keyed_lines(lay, spec.oneway) if lay is not None else {})
+    which = np.clip(np.searchsorted([b for _a, b, _n, _e in parts], s, side="right"), 0, n_parts - 1)
+    keys = sorted({k for ly in lays for k in ly})
+    out = {k: np.full(len(s), np.nan) for k in keys}
+    for j in range(n_parts):                    # each part's own lines where it is at its width
+        m = which == j
+        for k, o in lays[j].items():
+            out[k][m] = o
+    for sa, sb, kn, kw in wd.ptapers:           # across each taper
+        m = (s >= sa) & (s <= sb)
+        if not m.any() or sb <= sa:
+            continue
+        t = (s[m] - sa) / (sb - sa) if kw > kn else (sb - s[m]) / (sb - sa)
+        en, ew = parts[kn][3], parts[kw][3]
+        half = (wd.w + en + (ew - en) * t) / 2
+        for k in keys:
+            on, ow = lays[kn].get(k), lays[kw].get(k)
+            if on is not None and ow is not None:
+                v = on + (ow - on) * t
+            elif ow is not None:
+                v = np.where(t >= POCKET_LINE_SHARE, ow * half / ((wd.w + ew) / 2), np.nan)
+            elif on is not None:
+                v = np.where(t <= 1 - POCKET_LINE_SHARE, on * half / ((wd.w + en) / 2), np.nan)
+            else:
+                continue
+            out[k][m] = v
+    return out
 
 
 def _travels(sp, at_end):
@@ -3301,6 +3444,7 @@ def _pocket_profiles(fl, urban_fn, widths, left_hand):
     # (d) a segment merged from ways of different lane counts (osm_parts) where OpenStreetMap's lanes are in use
     # (lane sources: not CDOT's, an override's or the pavement's): its width by part, the wider part opening from the
     # narrower over POCKET_TAPER_M as (b); a part a pocket of (a) covers keeps the segment's width (the pocket is it)
+    part_info = {}                      # fid -> (parts, ptapers): Widening's
     for fid in sorted(roads):
         feats, i, sp, ring, _nm = roads[fid]
         if sp.kind not in BUILT or sp.lanes is None or sp.lsrc not in (None, "osm") or sp.link:
@@ -3309,12 +3453,15 @@ def _pocket_profiles(fl, urban_fn, widths, left_hand):
         if not parts:
             continue
         lw = _lane_width(sp, left_hand)
-        ext = [0.0 if k in pocket_parts.get(fid, ()) or n is None else (n - sp.lanes) * lw
-               for k, (_a, _b, n) in enumerate(parts)]
+        keep = [k in pocket_parts.get(fid, ()) or n is None for k, (_a, _b, n) in enumerate(parts)]
+        ext = [0.0 if kp else (n - sp.lanes) * lw for kp, (_a, _b, n) in zip(keep, parts)]
         if not any(abs(e) >= POCKET_STEP_MIN_M for e in ext):
             continue
         L = float(_ring_metric(ring)[1][-1])
-        comps.setdefault(fid, []).append(("scale", 0.0, 0, _step_knots(L, [(a, b) for a, b, _n in parts], ext)))
+        ranges = [(a, b) for a, b, _n in parts]
+        comps.setdefault(fid, []).append(("dscale", 0.0, 0, _step_knots(L, ranges, ext)))
+        part_info[fid] = (tuple((a * L, b * L, sp.lanes if kp else n, e)
+                                for kp, (a, b, n), e in zip(keep, parts, ext)), _step_tapers(L, ranges, ext))
     # (c) the approaches to a junction of major roads where OpenStreetMap gives no turn lanes (rule (c) above)
     if POCKET_INFER_ON:
         appr = []                       # (fid, its end at the junction, the direction arriving there)
@@ -3371,7 +3518,7 @@ def _pocket_profiles(fl, urban_fn, widths, left_hand):
         feats, i, sp, ring, _nm = roads[fid]
         c, s = _ring_metric(ring)
         out[fid] = Widening(float(sp.width), float(s[-1]), tuple(comps.get(fid, ())), tuple(added.get(fid, ())), ring,
-                            c, s, tuple(arrows.get(fid, ())))
+                            c, s, tuple(arrows.get(fid, ())), *part_info.get(fid, ((), ())))
     return out
 
 

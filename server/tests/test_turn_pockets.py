@@ -240,6 +240,46 @@ class PartsTest(unittest.TestCase):
         self.assertAlmostEqual(el, er, places=6)
         self.assertAlmostEqual(sum(edges_at(wd, 100.0 + roads.POCKET_TAPER_M / 2)), lw, places=6)
 
+    def marks(self, f, wd):
+        sp = roads.road_specs(f, None)[0]
+        ring = f.parts(0)[0][0]
+        lonlat, s = roads.widen_nodes(wd, ring, roads.widen_s(wd, ring))
+        pts = np.c_[(lonlat[:, 0] - LON) * M_LON, (lonlat[:, 1] - LAT) * M_LAT, np.full(len(s), 10.0)]
+        return sp, s, roads.extras(sp, pts, LON_US, wid=(wd, s))
+
+    def test_each_part_draws_its_own_lanes(self):
+        """2 lanes, then 4: the 4-lane part's two lane lines start in its taper where the new lanes are 2/3 wide; the
+        centre line goes on through."""
+        f = self.merged([[0, 0.5, 2], [0.5, 1, 4]], 2, {})
+        wd = profiles(f)["id000"]
+        self.assertEqual([p[2] for p in wd.parts], [2, 4])
+        (sa, sb, kn, kw), = wd.ptapers
+        self.assertEqual((kn, kw), (0, 1))
+        sp, s, ex = self.marks(f, wd)
+        lines = [ln for lk, w, ln in ex if lk is roads.LANE_LINE]
+        self.assertEqual(len(lines), 2)
+        start = sa + (sb - sa) * roads.POCKET_LINE_SHARE
+        for ln in lines:
+            self.assertGreater(ln[0, 0], start - roads.POCKET_STEP_M - 0.5)
+            self.assertLess(ln[0, 0], start + roads.POCKET_STEP_M + 0.5)
+            self.assertAlmostEqual(ln[-1, 0], 200.0, delta=0.5)
+        yellow = [ln for lk, w, ln in ex if lk["m"] == "line_yellow"]
+        self.assertEqual(len(yellow), 2)
+        self.assertTrue(all(ln[0, 0] < 1.0 and ln[-1, 0] > 199.0 for ln in yellow))
+
+    def test_arrows_in_the_end_parts_lanes(self):
+        """The last way's turn lanes (3 forward) fit its part's lanes (4: 3 forward, 1 back), not the segment's (2)."""
+        f = self.merged([[0, 0.5, 2], [0.5, 1, 4]], 2,
+                        {"lanes:forward": "1", "lanes:backward": "1", "turn:lanes:forward": "left|through|through"})
+        wd = profiles(f)["id000"]
+        sp, s, ex = self.marks(f, wd)
+        arrows = [ln for lk, w, ln in ex if lk.get("arrow")]
+        self.assertTrue(arrows)
+        lw = roads._lane_width(roads._part_spec(sp, 4, wd.parts[1][3], 3))
+        left = [a for a in arrows if len(a) == 2 and abs(a[1, 1] - a[0, 1]) > 1.0]  # (the left arrow's bent stroke)
+        self.assertTrue(left)
+        self.assertTrue(all(a[:, 1].mean() > -lw for a in left))           # (the leftmost forward lane: by the centre)
+
     def test_one_way_segments_and_unknown_lanes_unchanged(self):
         self.assertEqual(profiles(self.merged([[0, 0.5, None], [0.5, 1, 2]], 2, {})), {})
         f = road([[(0, 0), (200, 0)]], ["primary"], ["Main"], lanes=[2], rows=[{}])
