@@ -43,6 +43,12 @@ final, at most --roads-q road tiles and --backlog-q far tiles still to come roun
 spot it moves on anyway (counted in the summary). Writes <out>/<route>/samples.jsonl and summary.json, and a run in the
 bake's manifest.json (route_bake.py status / clean read it).
 
+--profile: the server at -v (debug logging: every worker process logs its CPU seconds by job every 30 s,
+blockworker "worker <pid> cpu: ..."), and this tool samples the CPU of the server's process tree every CPU_SAMPLE_S
+(psutil) into <out>/cpu<tag>.jsonl; at the end profile<tag>.json and a line: the wall time, the server process's
+own CPU (base photos, far textures, the event loop: the one interpreter lock) against its workers', and the
+workers' CPU by job kind (road tiles, far tiles, blocks, far buildings). What to speed up next is read off it.
+
 The speed (SPEED, --speed) is the bake's pace, not a car's: the car stands wherever the server has not finished, so
 a faster car only shortens the stretches with nothing to wait for. At the ghost drive's 27 m/s a 94 km route took
 58 min with nothing to build, 53% of a 41 min run (2026-10-28 10:18; the terrain blocks took 96 s of it). The pose
@@ -59,6 +65,7 @@ import signal
 import socket
 import subprocess
 import sys
+import threading
 import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -97,6 +104,12 @@ ALONE_FAR_PER_CPU = 4       # --mode alone: a far-tile worker per this many CPUs
 ALONE_ROAD_PER_CPU = 6      # ... and a road-tile process per this many
 ALONE_MAX = (8, 4)          # at most (far workers, road processes) for one server
 MODES = ("auto", "game", "alone")
+CPU_SAMPLE_S = 2.0          # --profile: the server tree's CPU sampled this often
+WORKER_CPU_RE = re.compile(r"worker (\d+) cpu: (.*)")        # blockworker's debug line
+JOB_RE = re.compile(r"(\w+) (\d+) jobs ([\d.]+) s")
+JOB_ROLE = {"build": "block", "terrain_patch": "block", "base_photo": "block", "navgraph": "block",
+            "roads_tile": "roads", "far_tile": "far", "far_geometry": "far", "base_entry": "far",
+            "far_buildings_tile": "far buildings", "skyline_tile": "far buildings"}
 
 
 # --- the server -----------------------------------------------------------------------------------------------------
@@ -133,10 +146,11 @@ def resolve_mode(mode, win=IS_WIN):
     return mode
 
 
-def server_command(user_dir, port=0, cache_dir=None, win=IS_WIN, mode="game", workers=None, road_processes=None):
+def server_command(user_dir, port=0, cache_dir=None, win=IS_WIN, mode="game", workers=None, road_processes=None,
+                   profile=False):
     """launcher.start_server's command for user_dir (its options and the mod settings' flags, the remembered cache
     folder), then this tool's: a free port, and by mode ("game" | "alone") the workers and priority (workers,
-    road_processes: given, or THROTTLE's / alone_workers' for one job)."""
+    road_processes: given, or THROTTLE's / alone_workers' for one job); profile: -v (the workers' CPU lines)."""
     if port == GAME_PORT:
         raise ValueError(f"port {GAME_PORT} is the game's server")
     if mode not in ("game", "alone"):
@@ -159,7 +173,121 @@ def server_command(user_dir, port=0, cache_dir=None, win=IS_WIN, mode="game", wo
         cmd += ["--nice", "0"] if win else ["--nice", "19", "--sched", "idle"]
     else:           # (Windows: the class is start_server's; --nice 0 keeps the server from changing it)
         cmd += ["--nice", "0"] if win else ["--nice", "10"]
+    if profile:
+        cmd += ["-v"]
     return cmd
+
+
+# --- the profile (--profile) ------------------------------------------------------------------------------------------
+def cpu_by_kind(log_path):
+    """{job kind: (jobs, CPU seconds)} over the server log's worker CPU lines (-v; the last line of each worker
+    process counts: they are cumulative), and {pid: role} (JOB_ROLE of its jobs). ({}, {}) without them."""
+    last = {}
+    try:
+        with open(log_path, encoding="utf-8", errors="replace") as f:
+            for line in f:
+                m = WORKER_CPU_RE.search(line)
+                if m:
+                    last[int(m.group(1))] = m.group(2)
+    except OSError:
+        return {}, {}
+    kinds, roles = {}, {}
+    for pid, text in last.items():
+        jobs = JOB_RE.findall(text.split(";")[0])
+        for name, n, s in jobs:
+            k0, s0 = kinds.get(name, (0, 0.0))
+            kinds[name] = (k0 + int(n), s0 + float(s))
+        by = {}
+        for name, n, s in jobs:
+            r = JOB_ROLE.get(name, name)
+            by[r] = by.get(r, 0.0) + float(s)
+        if by:
+            roles[pid] = max(by, key=by.get)
+    return kinds, roles
+
+
+class CpuSampler:
+    """The CPU seconds of a process and its descendants (psutil), sampled every CPU_SAMPLE_S into a JSONL file
+    ({"t": s, "cpu": {pid: cumulative seconds}}); summary() at the end. Without psutil: nothing (said once)."""
+
+    def __init__(self, pid, path, every=CPU_SAMPLE_S, say=print):
+        self.pid, self.path, self.every, self.say = pid, path, every, say
+        self.first, self.last, self.t0 = {}, {}, time.monotonic()
+        self.stop_ev = threading.Event()
+        self.thread = None
+        try:
+            import psutil
+            self.psutil = psutil
+        except ImportError:
+            self.psutil = None
+            say("profile: psutil is not installed: no CPU samples (pip install psutil)", flush=True)
+
+    def start(self):
+        if self.psutil is None:
+            return self
+        self.thread = threading.Thread(target=self._run, daemon=True, name="cpu-sampler")
+        self.thread.start()
+        return self
+
+    def sample(self):
+        ps = self.psutil
+        try:
+            root = ps.Process(self.pid)
+            procs = [root] + root.children(recursive=True)
+        except ps.Error:
+            return {}
+        cpu = {}
+        for p in procs:
+            try:
+                t = p.cpu_times()
+                cpu[p.pid] = t.user + t.system
+            except ps.Error:
+                pass
+        for pid, s in cpu.items():
+            self.first.setdefault(pid, s)
+            self.last[pid] = s
+        return cpu
+
+    def _run(self):
+        with open(self.path, "w", encoding="utf-8") as f:
+            while not self.stop_ev.is_set():
+                cpu = self.sample()
+                f.write(json.dumps({"t": round(time.monotonic() - self.t0, 1), "cpu": cpu}) + "\n")
+                f.flush()
+                self.stop_ev.wait(self.every)
+
+    def stop(self):
+        self.stop_ev.set()
+        if self.thread is not None:
+            self.thread.join(self.every + 5.0)
+
+    def summary(self, log_path=None):
+        """{seconds, cpu_s, by_pid: {pid: s}, by_role: {role: s}, by_kind: {job: [jobs, s]}}: the wall time, every
+        process's CPU seconds since the first sample, by role (the server process itself: "server"; its workers by
+        their jobs' kinds from log_path's -v lines, else "worker"), and the workers' jobs by kind."""
+        wall = time.monotonic() - self.t0
+        by_pid = {pid: round(self.last[pid] - self.first.get(pid, 0.0), 1) for pid in self.last}
+        kinds, roles = cpu_by_kind(log_path) if log_path else ({}, {})
+        by_role = {}
+        top = max(by_pid, key=by_pid.get) if by_pid else None     # the busiest process without jobs: the server
+        for pid, s in by_pid.items():
+            role = roles.get(pid)
+            if role is None:
+                role = "server" if pid == top or pid == max((p for p in by_pid if p not in roles), key=by_pid.get,
+                                                              default=None) else "other"
+            by_role[role] = round(by_role.get(role, 0.0) + s, 1)
+        return {"seconds": round(wall, 1), "cpu_s": round(sum(by_pid.values()), 1), "by_pid": by_pid,
+                "by_role": by_role, "by_kind": {k: [n, round(s, 1)] for k, (n, s) in sorted(kinds.items())}}
+
+
+def profile_text(p):
+    """One line of a CpuSampler summary: the cores used on average, by role, and the jobs by kind."""
+    wall = max(p.get("seconds") or 0.0, 1e-9)
+    roles = ", ".join(f"{k} {v / wall:.2f}" for k, v in sorted(p.get("by_role", {}).items(), key=lambda kv: -kv[1]))
+    kinds = ", ".join(f"{k} {n} in {s:.0f} s" for k, (n, s) in sorted(p.get("by_kind", {}).items(),
+                                                                 key=lambda kv: -kv[1][1]))
+    return (f"profile: {p.get('cpu_s', 0) / wall:.2f} cores used over {wall:.0f} s (by role: {roles or 'n/a'})"
+            + (f"; jobs: {kinds}" if kinds else ""))
 
 
 def start_server(cmd, log_path, timeout=START_S, mode="game"):
@@ -683,18 +811,22 @@ def drive_legs(a, legs, lines, routes_file, anchors, pin_m, distance, out, mode,
     """A server (unless a.connect) and the legs driven through it in turn, each leg's summary.json in out/<leg>;
     on_leg(record) after each. Returns (every leg complete, [records])."""
     say = saying(prefix)
-    proc = c = None
+    proc = c = sampler = None
+    log_path = None
     ok, records = True, []
     try:
         if a.connect:
             port = a.connect
         else:
-            cmd = server_command(a.user_dir, 0, a.cache_dir, mode=mode, workers=workers, road_processes=road_processes)
+            cmd = server_command(a.user_dir, 0, a.cache_dir, mode=mode, workers=workers, road_processes=road_processes,
+                                 profile=getattr(a, "profile", False))
             say("server: " + " ".join(cmd[1:]), flush=True)
             tag = ("-" + prefix.strip(": ")) if prefix else ""
             log_path = os.path.join(out, f"server{tag}.log")
             proc, port = start_server(cmd, log_path, mode=mode)
             say(f"server listening on {port} (log {log_path})", flush=True)
+            if getattr(a, "profile", False):
+                sampler = CpuSampler(proc.pid, os.path.join(out, f"cpu{tag}.jsonl"), say=say).start()
         c = Client(port)
         h = hello(c)
         size = int(h.get("blockSize") or 1024)
@@ -729,6 +861,11 @@ def drive_legs(a, legs, lines, routes_file, anchors, pin_m, distance, out, mode,
     finally:
         if c is not None:
             c.close()
+        if sampler is not None:
+            sampler.stop()
+            p = sampler.summary(log_path)
+            rb.write_json(os.path.join(out, f"profile{tag}.json"), p)
+            say(profile_text(p), flush=True)
         stop_server(proc)
     return ok, records
 
@@ -743,6 +880,8 @@ def child_command(a, legs, out, mode, workers, road_processes):
         v = getattr(a, opt, None)
         if v is not None:
             cmd += ["--" + opt.replace("_", "-"), str(v)]
+    if getattr(a, "profile", False):
+        cmd.append("--profile")
     return cmd
 
 
@@ -802,6 +941,9 @@ def main(argv=None):
     ap.add_argument("--max-wait", type=float, default=MAX_WAIT_S)
     ap.add_argument("--ground-wait", type=float, default=GROUND_WAIT_S,
                     help="s to wait for the ground's final photo at most (the server's own limit is 90)")
+    ap.add_argument("--profile", action="store_true",
+                    help="the server at -v and its process tree's CPU sampled: profile.json and a summary line per "
+                         "server (where the build time goes: the server process against its workers, by job kind)")
     ap.add_argument("--connect", type=int, default=None, help="drive a server already listening on this port")
     ap.add_argument("--cache-dir", default=None, help="the server's cache (default: the launcher's)")
     ap.add_argument("--world-dir", default=None, help="the world folder (default: the server's)")
@@ -872,6 +1014,9 @@ def main(argv=None):
     finally:
         run["ended"] = time.strftime("%Y-%m-%d %H:%M:%S")
         run["complete"] = ok
+        if a.profile:
+            import glob
+            run["profile"] = [rb.read_json(p) for p in sorted(glob.glob(os.path.join(out, "profile*.json")))]
         rb.write_json(man_path, man)
     return 0 if ok else 1
 

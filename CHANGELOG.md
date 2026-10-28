@@ -27,7 +27,7 @@ What changed in each release of BeamNG.Earth, newest first.
   whether the game is running (`--mode auto`) and, when it is not, gives its server the machine's share of far
   workers and road processes at below-normal priority instead of one of each at idle; `--jobs 2` bakes the routes
   at once on a server each. Each leg's summary says where its seconds went (moving, ground, road tiles, far
-  tiles).
+  tiles), and `--profile` says where the server's CPU went (its own process against its workers, by job kind).
 
 ## 1.7.0 beta (2026-10-27)
 
