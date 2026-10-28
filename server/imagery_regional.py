@@ -29,15 +29,17 @@ PLACE = {
     "co_frederick": "Frederick, CO", "co_boulder_county": "Boulder County, CO", "co_thornton": "Thornton, CO",
     "co_arapahoe": "Arapahoe County, CO", "co_douglas": "Douglas County, CO", "co_jeffco": "Jefferson County, CO",
     "co_lakewood": "Lakewood, CO", "co_springs": "Colorado Springs", "co_larimer": "Larimer County, CO",
-    "co_pitkin": "Pitkin County, CO",
+    "co_pitkin": "Pitkin County, CO", "co_arvada": "Arvada, CO", "co_laplata": "La Plata County, CO",
+    "co_vail": "Vail, CO",
 }
 
 # name: (url, attribution, (south, west, north, east), kind, leaf_off[, max_zoom[, nodata]])
 #   kind "xyz": an XYZ / TMS cache; "export": a WMS / ArcGIS export (lazy)
 #   max_zoom: the finest zoom asked (default 17); an export at 18 is one 1024 px image per z16 parent, its z17 tiles
 #   still cover the base photo (imagery.Imagery._passes)
-#   nodata: what an export fills past its data with, "white" (default: MapServer exports) or "black" (ImageServers);
-#   a black one's white is never taken for "outside" (snow on a mountain at a tile's edge)
+#   nodata: what an export fills past its data with, "white" (default: MapServer exports) or "black" (ImageServers),
+#   or "grey" (a MapServer with ArcGIS's light grey background); a black one's white is never taken for "outside"
+#   (snow on a mountain at a tile's edge)
 REGIONAL = {
     # --- United States (state programmes; spring leaf-off flights) ---------------------------------------------
     "ct2023": ("https://cteco.uconn.edu/ctraster/rest/services/images/Ortho_2023_tiled/ImageServer/tile/{z}/{y}/{x}",
@@ -103,6 +105,12 @@ REGIONAL = {
     "co_douglas": ("https://apps.douglas.co.us/gisis/rest/services/DRAPP2024/MapServer/export?" + ARCGIS_EXPORT,
                    "DRCOG DRAPP 2024 via Douglas County, CO (CC BY 3.0)", (39.11, -105.42, 39.67, -104.52), "export",
                    True, 18),
+    # The City of Arvada's 2024 flight (service "BaseMapping/Aerials2024", 3- and 6-inch layers; its description still
+    # says "DRCOG 2020": the DRAPP 2024 tiles are the newest it holds), its whole box (Arvada, west Westminster, the
+    # foothills to Golden Gate Canyon; white past it); ~0.4 s a 1024 px export (2026-10-28). Ahead of Jeffco's 2022
+    "co_arvada": ("https://maps.arvada.org/arcgis/rest/services/BaseMapping/Aerials2024/MapServer/export?" + ARCGIS_EXPORT,
+                  "City of Arvada, CO 2024 aerial imagery (DRCOG DRAPP, CC BY 3.0)", (39.77, -105.32, 39.92, -105.01),
+                  "export", True, 18),
     # DRAPP 2022 via Jefferson County (Arvada, Wheat Ridge, Lakewood, Golden, west Broomfield; black outside)
     "co_jeffco": ("https://gisportal.jeffco.us/image/rest/services/DRAPP/DRAPP2022/ImageServer/exportImage?bandIds=0,1,2&"
                   + ARCGIS_EXPORT, "DRCOG DRAPP 2022 via Jefferson County, CO (CC BY 3.0)",
@@ -122,6 +130,19 @@ REGIONAL = {
     "co_pitkin": ("https://maps.pitkincounty.com/arcgis/rest/services/FullCounty_WM/ImageServer/exportImage?"
                   + ARCGIS_EXPORT, "Pitkin County, CO 2025 orthoimagery", (38.99, -107.29, 39.42, -106.59), "export",
                   False, 18, "black"),
+    # La Plata County's 2025 flight, 3-inch, round its towns (Durango, Bayfield, Ignacio, the US-160 / US-550 corridors;
+    # leaf-on): the county's public ArcGIS Online item "La Plata County 2025 Imagery (Offline)", a cached MapServer behind
+    # ArcGIS Online's proxy. Past the flights it fills with ArcGIS's light grey (204): nodata "grey" (its PNG
+    # transparency also took the white of white roofs). Slow: 3-6 s a 1024 px export (2026-10-28). No licence stated
+    "co_laplata": ("https://utility.arcgis.com/usrsvcs/servers/f659067f61d3499b85c7580098df9814/rest/services/basemaps/"
+                   "LPC_CO_3_Inch_Imagery_2025/MapServer/export?" + ARCGIS_EXPORT,
+                   "La Plata County, CO 2025 aerial imagery", (36.98, -108.34, 37.66, -107.46), "export", False, 18,
+                   "grey"),
+    # The Town of Vail's May 2018 colour flight (cached MapServer, 2 cm cache levels), the valley from West Vail to East
+    # Vail (white past it); ~0.7 s a 1024 px export (2026-10-28). Older than NAIP 2023 but ~10x finer
+    "co_vail": ("https://gis.vailgov.com/arcgis/rest/services/Imagery/AerialImagery_2018_Color_cached/MapServer/export?"
+                + ARCGIS_EXPORT, "Town of Vail, CO 2018 aerial imagery", (39.60, -106.46, 39.66, -106.26), "export",
+                False, 18),
     # --- Europe -------------------------------------------------------------------------------------------------
     "swiss": ("https://wmts.geo.admin.ch/1.0.0/ch.swisstopo.swissimage/default/current/3857/{z}/{x}/{y}.jpeg",
               "(c) swisstopo SWISSIMAGE", (45.80, 5.95, 47.81, 10.50), "xyz", False),

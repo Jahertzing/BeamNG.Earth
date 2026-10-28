@@ -95,7 +95,7 @@ EST = {
 EST["sky"] = (150e3, 100e3, 1.0)        # a skyline cell's few layers (the tall filter runs in the fetch plan)
 EST["edges"] = (1.2e6, 240e3, 2.0)      # a cell's edges: GeoJSON pages (~5x the npz); 236 KB a cell in Jeff's cache
 # hosts slower than the export estimate (the live Front Range run, 2026-10-28: seconds a request at 2 at once x 2)
-EST_HOST_SEC = {"apps.douglas.co.us": 3.6}
+EST_HOST_SEC = {"apps.douglas.co.us": 3.6, "utility.arcgis.com": 6.0}      # (La Plata County: 3-6 s an export)
 ROADS_SHARE = 0.3               # a roads-only cell's share of a full one's bytes and time
 RANGE_BPS = 12e6                # bytes/s of one range request from download.mapterhorn.com (2026-10-28: 8 MB in 0.7 s)
 # The z14 cells' layers: all but the skyline's tall ones (skyline.py builds those per z12 cell)
@@ -388,7 +388,8 @@ def classify_probe(rgb, cells=4):
     """[[bool]] per (row, column) block of a probe image: has data (texels neither white nor black). Pure."""
     a = np.asarray(rgb)
     data = (np.minimum(np.minimum(a[..., 0], a[..., 1]), a[..., 2]) < imagerymod.NODATA_WHITE_MIN) & \
-           (np.maximum(np.maximum(a[..., 0], a[..., 1]), a[..., 2]) > imagerymod.NODATA_MAX)
+           (np.maximum(np.maximum(a[..., 0], a[..., 1]), a[..., 2]) > imagerymod.NODATA_MAX) & \
+           ~imagerymod.fill_texels(a, "grey")         # (La Plata County's fill)
     h, w = data.shape
     bh, bw = h // cells, w // cells
     return [[bool(data[j * bh:(j + 1) * bh, i * bw:(i + 1) * bw].mean() > PROBE_SHARE) for i in range(cells)]
