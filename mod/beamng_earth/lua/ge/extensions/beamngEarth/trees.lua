@@ -244,6 +244,11 @@ function M.installCars(cars)
     end
   end
   table.sort(M.STATIC_CARS)
+  -- (the level loads its materials files at its start; one built after that is loaded here)
+  local mats = M.CARS_DIR .. 'static_cars.materials.json'
+  if n > 0 and rawget(_G, 'loadJsonMaterialsFile') and (not FS or FS:fileExists(mats)) then
+    pcall(loadJsonMaterialsFile, mats)
+  end
   return n
 end
 do
