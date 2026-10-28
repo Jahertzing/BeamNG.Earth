@@ -1,0 +1,27 @@
+{
+ "version": 1,
+ "about": "Denver at night for the night lights (tools/probe_look.py --set tools/night_bench.json --variants tools/night_variants.json): the city glow, the skyline's windows, the towers' red beacons, Coors Field's floodlights, the Castle Rock star (a December night: in season) and the street lamps and signals downtown",
+ "defaults": {
+  "date": "2026-12-12",
+  "hour": 21.5,
+  "weather": "clear",
+  "views": [
+   {"name": "ground", "agl": 1.7, "pitch": 1, "fov": 60},
+   {"name": "raised", "agl": 120, "pitch": -3, "fov": 60}
+  ]
+ },
+ "places": [
+  {"id": "nt_i25_erie", "name": "I-25 at Erie, looking south-southwest to Denver (~27 km): its glow, the skyline's lights",
+   "lat": 40.017, "lon": -104.988, "heading": 200, "group": "night", "tags": ["colorado"]},
+  {"id": "nt_denver_north", "name": "I-25 north of downtown, looking south at the skyline (~4 km): windows, beacons",
+   "lat": 39.7835, "lon": -104.9905, "heading": 195, "group": "night", "tags": ["colorado"]},
+  {"id": "nt_broadway", "name": "Broadway at Colfax, looking north-northwest at downtown: street lamps, signals, windows",
+   "lat": 39.7401, "lon": -104.9876, "heading": 330, "group": "night", "tags": ["colorado"]},
+  {"id": "nt_coors", "name": "Southwest of Coors Field across the Platte, looking at the stadium (~650 m): floodlights",
+   "lat": 39.7530, "lon": -105.0010, "heading": 61, "group": "night", "tags": ["colorado"],
+   "views": [{"name": "raised", "agl": 90, "pitch": -6, "fov": 55}]},
+  {"id": "nt_castle_rock", "name": "I-25 west of the Rock, looking east at it (~0.9 km): the Castle Rock star",
+   "lat": 39.3800, "lon": -104.8660, "heading": 97, "group": "night", "tags": ["colorado"],
+   "views": [{"name": "raised", "agl": 40, "pitch": 5, "fov": 50}]}
+ ]
+}

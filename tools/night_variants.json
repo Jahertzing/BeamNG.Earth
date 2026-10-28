@@ -1,0 +1,9 @@
+[
+ {"name": "base", "settle": 3},
+ {"name": "brighter",
+  "lua": "local function s(n, v) local m = scenetree.findObject(n) if m then m:setField('emissiveIntensityNits', 0, tostring(v)) m:flush() m:reload() end end s('bne_city_glow', 18) s('bne_beacon', 6000) s('bne_stadium_light', 6000) s('bne_star_bulb', 8000)",
+  "undo": "local function s(n, v) local m = scenetree.findObject(n) if m then m:setField('emissiveIntensityNits', 0, tostring(v)) m:flush() m:reload() end end s('bne_city_glow', 6) s('bne_beacon', 2500) s('bne_stadium_light', 3000) s('bne_star_bulb', 4000)",
+  "settle": 3},
+ {"name": "noglow", "lua": "require('beamngEarth/nightglow').setEnabled(false)",
+  "undo": "require('beamngEarth/nightglow').setEnabled(true)", "settle": 4}
+]

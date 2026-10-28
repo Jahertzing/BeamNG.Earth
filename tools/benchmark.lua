@@ -8,7 +8,7 @@
 --   progress()        the loading state: anchor, far-field stats, server backlog, the tile under the
 --                     car (exact or not), the player
 --   setTime(cfg)      the sky to manual and the TimeOfDay to cfg {time, year, month, day, utcOffset},
---                     the clock stopped (play = false)
+--                     the clock at a crawl (play, B.FROZEN_DAY_S: stopped, the engine left the sun where it was)
 --   setWeather(cfg)   the weather to manual and a fixed sky: cloud coverage, cirrus, fog for cfg.visM
 --   view(cfg)         the free camera at cfg {e, n | lat, lon; alt | agl; dir {x, y, z}; fov}
 --   perfStart()       a fresh beamngEarth_perfmon window (loaded if needed); perfRead() reads it
@@ -31,6 +31,7 @@ B.RAY_LEN = 15000
 B.CLOUD_NAME = 'bngEarthClouds'
 B.FOG_HEIGHT = 1000      -- fogAtmosphereHeight of the clear-sky preset (weather.lua FOG_HEIGHT)
 B.TOD_KEYS = { 'time', 'play', 'dayLength', 'year', 'month', 'day', 'utcOffset' }
+B.FROZEN_DAY_S = 1e7     -- s a day while a fixed time is set: half a second of clock a minute
 
 local function toJson(v)
   local je = rawget(_G, 'jsonEncode')
@@ -247,8 +248,10 @@ function B.setTime(cfg)
   if not tod then return toJson({ ok = false, error = 'no TimeOfDay' }) end
   local sky = ext('beamngEarth_sky')
   if sky and sky.setMode then sky.setMode('manual') end
+  -- (the clock runs, at a crawl: with play false the engine kept the sun where it was, so a night hour set from a
+  -- morning drew a daylight sky while core_environment said night, 2026-10-28)
   writeTod(tod, { time = cfg.time, year = cfg.year, month = cfg.month, day = cfg.day, utcOffset = cfg.utcOffset,
-    play = false })
+    play = true, dayLength = B.FROZEN_DAY_S })
   postApply(tod)
   return toJson({ ok = true, sky = sky and sky.status and sky.status() or nil })
 end
