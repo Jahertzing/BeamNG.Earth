@@ -318,6 +318,18 @@ class PierSitesTest(unittest.TestCase):
         road = [np.array([[100.0, -50.0], [100.0, 50.0]])]
         ps2 = roads.pier_sites(xy, z, 10.0, flat, road)
         self.assertTrue(all(abs(p[0] - 100.0) > roads.PIER_ROAD_M for p in ps2))
+        # a 22 m carriageway (its half width given): the piers keep off its edge, not just 7 m off its centre
+        wide = [(np.array([[100.0, -50.0], [100.0, 50.0]]), 11.0)]
+        ps3 = roads.pier_sites(xy, z, 10.0, flat, wide)
+        self.assertTrue(ps3)
+        self.assertTrue(all(abs(p[0] - 100.0) >= 11.0 + roads.PIER_ROAD_GAP_M for p in ps3))
+        # a road under a wide deck's outer column only (a bent: roadmesh._pier), slanting across it: none on it
+        slant = [(np.array([[90.0, 11.0], [110.0, 30.0]]), 5.0)]
+        for p in roads.pier_sites(xy, z, 24.0, flat, slant):
+            col = np.array([p[0], 24.0 / 2 - 2.0])
+            v = col - [90.0, 11.0]
+            d = abs(20.0 * v[1] - 19.0 * v[0]) / np.hypot(20.0, 19.0)
+            self.assertGreater(d, 5.0)
         # a deck lying on the ground: none
         self.assertEqual(roads.pier_sites(xy, np.full(51, 1.0), 10.0, flat), [])
         # a short bridge: none

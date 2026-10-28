@@ -4153,7 +4153,12 @@ PIER_SPAN_M = 32.0      # m between a bridge's piers (a span), longer under a hi
 PIER_SPAN_PER_M = 0.6
 PIER_SPAN_MAX = 60.0
 PIER_MIN_CLEAR = 1.5    # m from the ground up to a pier's top (under the girders): lower, the deck rests on the ground
-PIER_ROAD_M = 7.0       # m a pier keeps from the centre line of a road under the deck (its half width + room)
+PIER_ROAD_M = 7.0       # m a pier keeps from the centre line of a road under the deck when its width is not known
+PIER_ROAD_GAP_M = 2.0   # m a pier keeps off the edge of a carriageway (its half width known) under the deck: I-25's
+                        # 5-lane carriageways (CDOT's widths, 9-11 m half) had piers in their lanes at 7 m, 2026-10-28
+RAIL_PIER_HW_M = 2.5    # a railway's half width under a deck (its ballast)
+LOWER_DECK_M = 2.0      # m another deck lies under a deck's top to count as passing under it (BridgeProfiles._lower_decks)
+PIER_LOWER_REACH_M = 12.0   # m past the two half widths a lower deck is looked for (a pier's bent spreads that far)
 PIER_CHANNEL_CLEAR = 15.0   # no pier in water whose run wants this much clearance (water_clear): a ship channel
 PIER_IN_WATER_M = 8.0   # m a pier in water reaches under its surface
 
@@ -4163,9 +4168,10 @@ def pier_sites(xy, z, width, ground_fn, road_lines=(), wet_fn=None):
     (ux, uy) along the deck, z_top under its girders (roadmesh.DECK_DEPTH + GIRDER_D), z_bottom in the ground (or
     PIER_IN_WATER_M under water); evenly spaced inside the part (its ends are abutments or joints) at PIER_SPAN_M,
     longer under a higher deck; none where the deck is within PIER_MIN_CLEAR of the ground, moved along up to 40 % of
-    a span off a road under it (PIER_ROAD_M) or left out; none in a ship channel. The official maps' bridges stand
-    on piers (Italy's tapered walls, East Coast's) where ours floated (the user, 2026-10-17: "Bridges need a lot of
-    work in general"). Pure given ground_fn(xy) -> heights, wet_fn(xy) -> bool."""
+    a span off a road under it (road_lines: polylines, or (polyline, half width) kept PIER_ROAD_GAP_M off the edge,
+    PIER_ROAD_M off a bare line's centre; the lower decks too) or left out; none in a ship channel. The official maps'
+    bridges stand on piers (Italy's tapered walls, East Coast's) where ours floated (the user, 2026-10-17: "Bridges
+    need a lot of work in general"). Pure given ground_fn(xy) -> heights, wet_fn(xy) -> bool."""
     import fast
     import roadmesh
     xy = np.asarray(xy, np.float64)
@@ -4180,15 +4186,24 @@ def pier_sites(xy, z, width, ground_fn, road_lines=(), wet_fn=None):
     if n < 2:
         return []
     under = roadmesh.DECK_DEPTH + roadmesh.GIRDER_D
-    segs = [np.asarray(ln, np.float64) for ln in road_lines if len(ln) >= 2]
-    A = np.concatenate([ln[:-1] for ln in segs]) if segs else np.zeros((0, 2))
-    B = np.concatenate([ln[1:] for ln in segs]) if segs else np.zeros((0, 2))
+    segs = []
+    for ln in road_lines:
+        ln, r = (ln[0], max(PIER_ROAD_M, float(ln[1]) + PIER_ROAD_GAP_M)) if isinstance(ln, tuple) else (ln, PIER_ROAD_M)
+        ln = np.asarray(ln, np.float64)
+        if len(ln) >= 2:
+            segs.append((ln[:, :2], r))
+    A = np.concatenate([ln[:-1] for ln, _r in segs]) if segs else np.zeros((0, 2))
+    B = np.concatenate([ln[1:] for ln, _r in segs]) if segs else np.zeros((0, 2))
+    R = np.concatenate([np.full(len(ln) - 1, r) for ln, r in segs]) if segs else np.zeros(0)
     wet_runs = None
     if wet_fn is not None:
         w = np.asarray(wet_fn(xy), bool)
         wet_runs = (w, s)
     out = []
     pw = float(np.clip(0.7 * width, 2.5, 14.0))
+    # (across the deck: the wall's ends, or a bent's outer columns (roadmesh._pier), every 2 m between)
+    reach = width / 2 - 2.0 + roadmesh.PIER_COLUMN / 2 if width > roadmesh.PIER_BENT_W else pw / 2
+    across = np.linspace(-reach, reach, max(3, int(np.ceil(2 * reach / 2.0)) + 1))
     for i in range(1, n):
         placed = None
         for off in (0.0, 0.25, -0.25, 0.4, -0.4):
@@ -4200,10 +4215,10 @@ def pier_sites(xy, z, width, ground_fn, road_lines=(), wet_fn=None):
             t = xy[j] - xy[max(j - 1, 0)]
             t = t / max(float(np.hypot(*t)), 1e-9)
             nrm = np.array([-t[1], t[0]])
-            foot = np.array([p + nrm * pw / 2, p - nrm * pw / 2, p])
+            foot = p + across[:, None] * nrm
             if len(A):
                 fast.require(0, "points_near_segments")
-                hit = fast._ef.points_near_segments(foot, A, B, np.full(len(A), PIER_ROAD_M))
+                hit = fast._ef.points_near_segments(foot, A, B, R)
                 if np.asarray(hit).any():
                     continue
             zt = float(np.interp(sc, s, z)) - under
@@ -4337,6 +4352,8 @@ class BridgeProfiles:
                         e, n = mapgeom.enu_xy(feats, self.frame, ring)
                         lines.append(np.stack([e, n], axis=1))
                     roads_.append(((fid, "g"), lines))
+                    hws = self.__dict__.setdefault("road_hw", {})        # (the piers keep off its edges: _commit)
+                    hws[fid] = max(hws.get(fid, 0.0), rs[i].width / 2)
                 elif _rail_drawn(feats, i):
                     # a railway on the ground: the decks over it keep their headroom too (GitHub #324: a road bridge
                     # lay on the tracks; only roads under a deck were counted)
@@ -4503,6 +4520,7 @@ class BridgeProfiles:
                     continue
                 comp = self._resolve(key, pool, ground, loaded)
                 zs = self._solve(comp, pool, ground)
+                self._load_along(comp, pool, ground, loaded)
                 with self.lock:
                     for k, z in zip(comp, zs):
                         spec, xy, lon = pool[k][:3]
@@ -4510,7 +4528,7 @@ class BridgeProfiles:
                         # the first solve of a part is kept, and what goes with it, unless this one saw more of it
                         if old is None or len(xy) > len(old[1]):
                             self.done[k] = (spec, xy, z, lon)
-                            self._commit(k, ground)
+                            self._commit(k, ground, pool, dict(zip(comp, zs)))
                     chain = [(self.done[k][1], self.done[k][2], self.done[k][0].width) for k in comp
                              if k in self.done]
                     ck = min(comp) if comp else None
@@ -4528,16 +4546,83 @@ class BridgeProfiles:
                 out.append((self._part_id(key), spec, xy, z, lon))
         return out
 
-    def _commit(self, k, ground=None):
-        """Under self.lock: part k's solve was kept: its piers (pier_sites; TunnelProfiles keeps its sections)."""
+    def _load_along(self, comp, pool, ground, loaded):
+        """The ground roads of the cells along the chain comp its solve never loaded into ground (a long viaduct's
+        middle: its piers stood in the roads there)."""
+        need = set()
+        for k in comp:
+            xy = pool[k][1]
+            la, lo, _ = self.frame.enu_to_geodetic(xy[::8, 0], xy[::8, 1], 0.0)
+            need |= {ck for ck in mapcells.cells_for_points(np.atleast_1d(la), np.atleast_1d(lo))
+                     if str(ck) not in loaded}
+        for ck in need:
+            for gk, glines in self._cell_entries(ck)[1]:
+                ground.setdefault(gk, glines)
+
+    def _commit(self, k, ground=None, pool=None, chain=None):
+        """Under self.lock: part k's solve was kept: its piers (pier_sites; TunnelProfiles keeps its sections), off the
+        roads and railways under it (ground) and the decks of pool passing under it (chain: {key: deck z} of the
+        chain just solved with it)."""
         spec, xy, z, _lon = self.done[k]
-        lines = [ln for v in (ground or {}).values() for ln in v]
+        ground = ground or {}
+        hws = self.__dict__.get("road_hw", {})
+        lines = [(ln, hws.get(gk[0], PIER_ROAD_M - PIER_ROAD_GAP_M) if gk[1] == "g" else RAIL_PIER_HW_M)
+                 for gk, v in ground.items() for ln in v]
+        lines += self._lower_decks(k, xy, z, pool or {}, chain or {})
         try:
             self.piers[k] = pier_sites(np.asarray(xy, np.float64), np.asarray(z, np.float64), spec.width,
                                        self._ground, lines, self._wet_at)
         except Exception as ex:             # no piers rather than no bridge
             log.debug("piers of %s: %s: %s", k, type(ex).__name__, ex)
             self.piers[k] = []
+
+    def _lower_decks(self, k, xy, z, pool, chain):
+        """[(deck line, half width)] of the runs of the other decks in pool passing under part k (xy, z) near enough to
+        meet its piers: lower than its deck by LOWER_DECK_M there (solved: in its chain, {key: z}, or before), or not
+        solved yet and of a lower level (of its level where they cross). A pier of k there stood through it (a ramp's
+        on I-25's deck at E-470, the decks one chain, 2026-10-28)."""
+        xy = np.asarray(xy, np.float64)
+        z = np.asarray(z, np.float64)
+        hw = pool[k][0].width / 2 if k in pool else 0.0
+        lo, hi = xy.min(0) - 60.0, xy.max(0) + 60.0
+        level = pool[k][3] if k in pool else None
+        out = []
+        for o, v in pool.items():
+            if o[0] == k[0]:
+                continue
+            ln = np.asarray(v[1], np.float64)[:, :2]
+            if len(ln) < 2 or (ln.max(0) < lo).any() or (ln.min(0) > hi).any():
+                continue
+            ohw = v[0].width / 2
+            d2 = ((ln[:, None, :] - xy[None, :, :]) ** 2).sum(2)
+            j = d2.argmin(1)
+            near = np.sqrt(d2[np.arange(len(ln)), j]) < hw + ohw + PIER_LOWER_REACH_M
+            if not near.any():
+                continue
+            oz = chain.get(o)
+            if oz is None or len(oz) != len(ln):
+                got = self.done.get(o)
+                oz = got[2] if got is not None else None
+            if oz is not None and len(oz) == len(ln):
+                lower = np.asarray(oz, np.float64) < z[j] - LOWER_DECK_M
+            elif level is not None and v[3] < level:
+                lower = np.ones(len(ln), bool)
+            else:
+                lower = np.full(len(ln), bool(level is not None and v[3] == level and _crossings([xy], [ln])))
+            keep = near & lower
+            i = 0
+            while i < len(keep):
+                if not keep[i]:
+                    i += 1
+                    continue
+                e = i
+                while e + 1 < len(keep) and keep[e + 1]:
+                    e += 1
+                run = ln[max(i - 1, 0):min(e + 2, len(ln))]
+                if len(run) >= 2:
+                    out.append((run, ohw))
+                i = e + 1
+        return out
 
     def _wet_at(self, xy):
         if self.wet is None:
@@ -4684,7 +4769,7 @@ class TunnelProfiles(BridgeProfiles):
         # 45 m and 30 m pieces, the shorter one's sections cut the longer one's terrain 15 m short, 2026-10-17)
         return f"{key[0]}.{key[1]}"
 
-    def _commit(self, k, ground=None):
+    def _commit(self, k, ground=None, *_a):
         staged = getattr(self._tls, "staged", {}).pop(k, None)
         if staged is None:
             return
