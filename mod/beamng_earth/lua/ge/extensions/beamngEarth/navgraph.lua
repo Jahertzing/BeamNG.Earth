@@ -402,7 +402,19 @@ local function playerId() return be and be.getPlayerVehicleID and be:getPlayerVe
 
 -- Pure: where a respawned car goes, (x, y, dirX, dirY, min m, max m) for gameplay_traffic.forceTeleport, or nil for
 -- behind the camera: ahead of a player at (px, py) moving (vx, vy) m/s faster than AHEAD_MS, AHEAD_M along the way but
--- no farther than the block b's edge guard (GUARD_M + a margin) in that direction; nil too when that leaves no room.
+-- short of the block b's edge by aheadRoom: the clip's EDGE_M, the cut reach of a car put there at aheadSpeed, and a
+-- margin. (It used to stop at the edge guard, GUARD_M + 20 m, which is about where the clip's cut nodes are: a car put
+-- there was within its cut reach at once and respawned again, the traffic bench on I-25, 2026-10-28: 20 cut and 22
+-- ahead respawns in 164 s, each of the 7 cars moved every ~27 s.) Less room than AHEAD_M[1]: from AHEAD_TIGHT_M; less
+-- than that: nil, behind the camera.
+M.AHEAD_TIGHT_M = 90
+M.AHEAD_MARGIN_M = 20
+
+-- Pure: the room (m) a car put ahead of a player moving at psp m/s needs before the block's edge.
+function M.aheadRoom(psp)
+  return M.EDGE_M + M.cutReach(math.huge, M.aheadSpeed(psp), true) + M.AHEAD_MARGIN_M
+end
+
 function M.aheadSpot(px, py, vx, vy, b)
   local sp = math.sqrt(vx * vx + vy * vy)
   if sp < M.AHEAD_MS then return nil end
@@ -412,9 +424,10 @@ function M.aheadSpot(px, py, vx, vy, b)
     if dx > 1e-6 then reach = math.min(reach, (b[3] - px) / dx) elseif dx < -1e-6 then reach = math.min(reach, (b[1] - px) / dx) end
     if dy > 1e-6 then reach = math.min(reach, (b[4] - py) / dy) elseif dy < -1e-6 then reach = math.min(reach, (b[2] - py) / dy) end
   end
-  local hi = math.min(M.AHEAD_M[2], reach - M.GUARD_M - 20)
-  if hi < M.AHEAD_M[1] then return nil end
-  return px, py, dx, dy, M.AHEAD_M[1], hi
+  local hi = math.min(M.AHEAD_M[2], reach - M.aheadRoom(sp))
+  local lo = hi < M.AHEAD_M[1] and M.AHEAD_TIGHT_M or M.AHEAD_M[1]
+  if hi < lo then return nil end
+  return px, py, dx, dy, lo, hi
 end
 
 -- Pure: the speed (m/s) a car put ahead of a player moving at psp m/s starts at.
@@ -476,6 +489,69 @@ pcall(scale, mapmgr.mapData)
 end]], f, M.FAST_MS)
 end
 
+-- Every apply hands each car a new map object (mapmgr.setMap builds a new graphpath), and the stock ai.lua drops its
+-- route whenever the object changes (updateGFX: `if mapData ~= mapmgr.mapData then currentRoute = nil`): every car
+-- re-picked a road, a lane and a random way on at each apply, one every ~10 s on I-25 (the traffic bench, 2026-10-28),
+-- abandoning lane changes and passes and swerving for exits. Our graphs name their nodes the same in every graph
+-- (navgraph.py: connectors, shape points), so a route whose every node is in the new map, at the same place, with the
+-- same links between them, is still good: the car's ai.lua is told the map did not change (its mapData upvalue set to
+-- the new map, read with the debug library as ai.lua's own inspect_upvalues does) and keeps it. Anything else (a
+-- rebase moves every node, a clip cut the route) drops it as before. The car reports kept / dropped (routeKept).
+M.KEEP_ROUTE = true
+M.KEEP_TOL_M = 0.25
+
+function M.keepRouteLua()
+  return string.format([[do
+local tol2 = %.4f
+local function upvalues(f)
+  local im, ir
+  for i = 1, 255 do
+    local n = debug.getupvalue(f, i)
+    if not n then break end
+    if n == 'mapData' then im = i elseif n == 'currentRoute' then ir = i end
+  end
+  return im, ir
+end
+local function keepable(path, old, new)
+  if not (path and path[1] and old and new and old.positions and new.positions and new.graph) then return false end
+  for i = 1, #path do
+    local a = path[i]
+    local g, p, q = new.graph[a], new.positions[a], old.positions[a]
+    if not (g and p and q) or (p.x - q.x) ^ 2 + (p.y - q.y) ^ 2 + (p.z - q.z) ^ 2 > tol2 then return false end
+    local b = path[i + 1]
+    if b and not g[b] then return false end
+  end
+  return true
+end
+mapmgr._bneKeepRoute = function(old)
+  if not (ai and ai.mode == 'traffic' and type(ai.updateGFX) == 'function') then return end
+  local f = ai.updateGFX
+  local im, ir = upvalues(f)
+  if not (im and ir) then return end
+  local _, aiMap = debug.getupvalue(f, im)
+  local _, route = debug.getupvalue(f, ir)
+  if not route or aiMap ~= old or old == mapmgr.mapData then return end
+  local kept = keepable(route.path, old, mapmgr.mapData)
+  if kept then debug.setupvalue(f, im, mapmgr.mapData) end
+  obj:queueGameEngineLua(string.format('local n = package.loaded["beamngEarth/navgraph"] if n and n.routeKept then n.routeKept(%%d, %%s) end', objectId, tostring(kept)))
+end
+if not mapmgr._bneKeepSetMap then
+  mapmgr._bneKeepSetMap = mapmgr.setMap
+  mapmgr.setMap = function(...)
+    local old = mapmgr.mapData
+    local r = mapmgr._bneKeepSetMap(...)
+    pcall(mapmgr._bneKeepRoute, old)
+    return r
+  end
+end
+end]], M.KEEP_TOL_M * M.KEEP_TOL_M)
+end
+
+-- A car's report after a new map (keepRouteLua): its route kept or dropped.
+function M.routeKept(id, kept)
+  if kept then stats.routesKept = (stats.routesKept or 0) + 1 else stats.routesDropped = (stats.routesDropped or 0) + 1 end
+end
+
 local paced = {}        -- car id -> its pace factor (set in its Lua)
 
 -- Traffic cars the block left behind (or all, after a teleport), and stuck ones, are respawned on the graph.
@@ -498,6 +574,7 @@ local function guard(b, all)
       if o and not paced[id] and o.queueLuaCommand then
         paced[id] = M.paceFactor(math.random(), math.random(), math.random())
         o:queueLuaCommand(M.paceLua(paced[id]))
+        if M.KEEP_ROUTE then o:queueLuaCommand(M.keepRouteLua()) end
       end
       if o and o:getActive() then
         local p = o:getPosition()
@@ -959,6 +1036,7 @@ function M.status()
            restarts = stats.restarts, cuts = stats.cuts, cutRespawns = stats.cutRespawns, aheadRespawns = stats.aheadRespawns,
            resetMs = stats.resetMs, signalsMs = stats.signalsMs, nodesMs = stats.nodesMs, gpsMs = stats.gpsMs,
            applyMs = stats.applyMs, guardMs = stats.guardMs, guardMaxMs = stats.guardMaxMs,
+           routesKept = stats.routesKept, routesDropped = stats.routesDropped,
            traffic = gameplay_traffic and gameplay_traffic.getState() or nil }
 end
 

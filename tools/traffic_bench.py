@@ -163,6 +163,9 @@ def traffic_summary(path):
         "nav_applies": (nav[-1].get("applies") or 0) - (nav[0].get("applies") or 0),
         "ahead_respawns": (nav[-1].get("aheadRespawns") or 0) - (nav[0].get("aheadRespawns") or 0),
         "cut_respawns": (nav[-1].get("cutRespawns") or 0) - (nav[0].get("cutRespawns") or 0),
+        # (navgraph.lua keepRouteLua: each car's route kept or dropped at a new map)
+        "routes_kept": (nav[-1].get("routesKept") or 0) - (nav[0].get("routesKept") or 0),
+        "routes_dropped": (nav[-1].get("routesDropped") or 0) - (nav[0].get("routesDropped") or 0),
         "nav_apply_ms_last": nav[-1].get("applyMs"),
         "guard_max_ms": max((n.get("guardMaxMs") or 0) for n in nav),
     }
