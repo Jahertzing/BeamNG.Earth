@@ -2226,6 +2226,7 @@ def _observed_start(zs, edges, deg, observed):
     return meas
 
 
+OTHERS_NEAR_M = 40.0    # m round a chain's decks the other chains' decks are looked at for the lidar (occluders)
 DECK_CREST_R = 60.0     # m: the ground under a deck is its floor rounded to vertical curves this wide (deck_profile_once)
 DECK_SIGMA = 12.0       # m, deck profile smoothing (at least) ...
 DECK_SIGMA_SHARE = 25.0  # ... a 25th of the part's length ...
@@ -4421,7 +4422,17 @@ class BridgeProfiles:
             nav = 0.0
         required = [(c[0], c[1], z) for c, z in zip(cr, road_z)]
         levels, widths = [pool[k][3] for k in comp], [pool[k][0].width for k in comp]
-        others = [(v[1], v[0].width, v[3]) for k, v in pool.items() if k not in set(comp)]
+        others = []
+        if self.surface is not None:    # (the decks round the chain only: every deck of the cells, for every chain,
+            mine = set(comp)            # was the pool squared in Python in downtown Denver)
+            allp = np.concatenate([np.asarray(ln, np.float64)[:, :2] for ln in lines])
+            lo_c, hi_c = allp.min(0) - OTHERS_NEAR_M, allp.max(0) + OTHERS_NEAR_M
+            for k, v in pool.items():
+                if k in mine:
+                    continue
+                q = np.asarray(v[1], np.float64)[:, :2]
+                if len(q) and (q.max(0) >= lo_c).all() and (q.min(0) <= hi_c).all():
+                    others.append((v[1], v[0].width, v[3]))
         observed, clear_of = self._observed(lines, widths, levels, others)
         rails = [(c[0], c[1], z, DECK_ROAD_CLEAR if clear_of is None else clear_of[c[0]]) for c, z in zip(rcr, rail_z)]
         zs = deck_profile(lines, self._ground, required + rails + self._water(lines, nav), levels=levels, widths=widths,
