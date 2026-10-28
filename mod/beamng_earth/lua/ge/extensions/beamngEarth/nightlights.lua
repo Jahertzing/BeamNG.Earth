@@ -6,6 +6,7 @@
 local M = {}
 
 local nightglow = require('beamngEarth/nightglow')     -- a city's sky glow, the Castle Rock star
+local nightambient = require('beamngEarth/nightambient')   -- the night's ambient (a city's sky light)
 
 M.CHECK_S = 1.0
 -- the materials and their night glow (emissive factor, nits: West Coast USA's highrise windows glow at 200)
@@ -73,8 +74,15 @@ M.MAKE_PER_STEP = 4
 -- 2026-10-27: "see how wide the light from real street lights are"): the IES distributions road lamps use reach 1.75-2.75
 -- mounting heights across the street (types II / III: ~16-25 m from a 9 m head), little behind the pole, and throw
 -- their peak 2.25-3.75 heights along the road (medium): aimed tilt degrees toward the road (the lens row's yaw: the
--- lamp's arm), a soft edge (inner .. outer); before, a hard-edged 50 m disc centred under the head.
-M.LIGHT = { range = 36, inner = 50, outer = 130, brightness = 8.0, color = '1 0.66 0.33 1', drop = 0.12, tilt = 12 }
+-- lamp's arm), a soft edge (inner .. outer); before, a hard-edged 50 m disc centred under the head. Its edge reaches
+-- out to the walls and yards beside the street, faint (the user, 2026-10-28: "outside of the direct cone is dark as
+-- heck"; it was 36 m, 50 .. 130 degrees).
+M.LIGHT = { range = 44, inner = 60, outer = 160, brightness = 8.0, color = '1 0.66 0.33 1', drop = 0.12, tilt = 12 }
+-- The light the lit street throws back up (a lamp's pool lights the walls, the cars' sides, the trees' undersides
+-- and the yards around it): a dim point light under each of the FILL.max nearest street lamps (their lens rows, with
+-- an arm's yaw), `out` m toward the road from the pole and `down` m under the head, warm like the pool it stands for;
+-- its brightness by the night ambient setting (nightambient.lua: none when off).
+M.FILL = { max = 96, radius = 20, brightness = 0.5, color = '1 0.70 0.42 1', out = 3, down = 6 }
 
 local lastCheck = -1e9
 local lastLights = -1e9
@@ -83,7 +91,7 @@ M.errors = 0
 local lenses = {}        -- road tile key -> { {x, y, z}, ... }
 -- other lights' places: name -> function returning { {x, y, z}, ... } (gasstations.lua: the pump islands under their canopy)
 M.providers = {}
-local pool = {}          -- { id, at (lens table or nil) }
+local pools = { spot = {}, fill = {} }   -- kind -> { { id, at (lens table or nil) }, ... }
 
 -- Whether it is night by the stock environment (nil when there is no time of day, as in the main menu).
 -- Not while the sun drawn is up (the sky's ScatterSky, sunUp): the clock and the drawn sun can disagree (2026-10-28: a
@@ -168,7 +176,9 @@ function M.transform(xf)
   for _, list in pairs(lenses) do
     for _, l in ipairs(list) do l[1], l[2], l[3] = xf:apply(l[1], l[2], l[3]) end
   end
-  for _, e in ipairs(pool) do e.at = nil end           -- (placed again at the next step)
+  for _, pool in pairs(pools) do
+    for _, e in ipairs(pool) do e.at = nil end         -- (placed again at the next step)
+  end
 end
 
 -- Pure: the n nearest lenses (and providers' places) to (x, y) within r (their tables, nearest first). With a heading
@@ -194,15 +204,32 @@ function M.nearest(x, y, r, n, fx, fy, around)
   return out
 end
 
-local function newLight()
-  local o = createObject('SpotLight')
+-- The fill's brightness now (the night ambient setting: none when off, half when dim).
+local function fillBrightness()
+  local k = nightambient.STRENGTH[nightambient.mode] or 1
+  return M.FILL.brightness * math.min(k, 1.5)
+end
+
+-- A light's look from M.LIGHT / M.FILL (made, and again on applyLook).
+local function look(kind, o)
+  if kind == 'spot' then
+    local L = M.LIGHT
+    o:setField('range', 0, tostring(L.range))
+    o:setField('innerAngle', 0, tostring(L.inner))
+    o:setField('outerAngle', 0, tostring(L.outer))
+    o:setField('brightness', 0, tostring(L.brightness))
+    o:setField('color', 0, L.color)
+  else
+    o:setField('radius', 0, tostring(M.FILL.radius))
+    o:setField('brightness', 0, tostring(fillBrightness()))
+    o:setField('color', 0, M.FILL.color)
+  end
+end
+
+local function newLight(kind)
+  local o = createObject(kind == 'spot' and 'SpotLight' or 'PointLight')
   if not o then return nil end
-  local L = M.LIGHT
-  o:setField('range', 0, tostring(L.range))
-  o:setField('innerAngle', 0, tostring(L.inner))
-  o:setField('outerAngle', 0, tostring(L.outer))
-  o:setField('brightness', 0, tostring(L.brightness))
-  o:setField('color', 0, L.color)
+  look(kind, o)
   o:setField('castShadows', 0, 'false')
   o:setField('isEnabled', 0, 'false')
   o.canSave = false
@@ -211,10 +238,23 @@ local function newLight()
   return o:getID()
 end
 
-local function place(e, l)
+-- Pure: where a lamp's fill light stands: `out` m along its arm (yaw, degrees; none without) and `down` m under its
+-- head.
+function M.fillAt(l)
+  local x, y = l[1], l[2]
+  if l[4] then
+    local a = math.rad(l[4])
+    x, y = x + math.cos(a) * M.FILL.out, y + math.sin(a) * M.FILL.out
+  end
+  return x, y, l[3] - M.FILL.down
+end
+
+local function place(kind, e, l)
   local o = scenetree.findObjectById(e.id)
   if not o then return end
-  if l then
+  if l and kind == 'fill' then
+    o:setPosition(vec3(M.fillAt(l)))
+  elseif l then
     if l[4] then                                        -- (its forward, local y: down, tilted toward the road)
       local a, t = math.rad(l[4]), math.rad(M.LIGHT.tilt)
       local c, s = math.cos(a), math.sin(a)
@@ -231,9 +271,48 @@ local function place(e, l)
   e.at = l
 end
 
+-- One pool's lights onto the lamps wanted (nearest first): the lights already on a wanted lamp stay, the others take
+-- the rest, a few made a step.
+local function stepPool(kind, want)
+  local pool = pools[kind]
+  local made = 0
+  while #pool < #want and made < M.MAKE_PER_STEP do
+    local id = newLight(kind)
+    if not id then M.errors = M.errors + 1; break end
+    pool[#pool + 1] = { id = id }
+    made = made + 1
+  end
+  local keep, free = {}, {}
+  local wanted = {}
+  for _, l in ipairs(want) do wanted[l] = true end
+  for _, e in ipairs(pool) do
+    if e.at and wanted[e.at] then keep[e.at] = true else free[#free + 1] = e end
+  end
+  for _, l in ipairs(want) do
+    if not keep[l] then
+      local e = table.remove(free)
+      if not e then break end
+      place(kind, e, l)
+    end
+  end
+  for _, e in ipairs(free) do if e.at then place(kind, e, nil) end end
+end
+
+-- The lights' look again from M.LIGHT / M.FILL (a setting, a tuning probe).
+function M.applyLook()
+  for kind, pool in pairs(pools) do
+    for _, e in ipairs(pool) do
+      local o = scenetree.findObjectById(e.id)
+      if o then pcall(look, kind, o) end
+    end
+  end
+end
+
 local function stepLights(night)
   if not night then
-    for _, e in ipairs(pool) do if e.at then place(e, nil) end end
+    for kind, pool in pairs(pools) do
+      for _, e in ipairs(pool) do if e.at then place(kind, e, nil) end end
+    end
     return
   end
   local cx, cy, fx, fy = 0, 0, nil, nil
@@ -245,41 +324,30 @@ local function stepLights(night)
     if h > 0.3 then fx, fy = f.x / h, f.y / h end     -- (looking nearly straight down: all round)
   end
   local want = M.nearest(cx, cy, M.NEAR_M, M.LIGHTS_MAX, fx, fy, M.AROUND_M)
-  local made = 0
-  while #pool < #want and made < M.MAKE_PER_STEP do
-    local id = newLight()
-    if not id then M.errors = M.errors + 1; break end
-    pool[#pool + 1] = { id = id }
-    made = made + 1
-  end
-  -- the lights already on a wanted lens stay; the others take the rest
-  local keep, free = {}, {}
-  local wanted = {}
-  for _, l in ipairs(want) do wanted[l] = true end
-  for _, e in ipairs(pool) do
-    if e.at and wanted[e.at] then keep[e.at] = true else free[#free + 1] = e end
-  end
-  for _, l in ipairs(want) do
-    if not keep[l] then
-      local e = table.remove(free)
-      if not e then break end
-      place(e, l)
+  stepPool('spot', want)
+  local fill = {}
+  if fillBrightness() > 0 then              -- (the street lamps': not under a tunnel's or a canopy's lights)
+    for _, l in ipairs(want) do
+      if #fill >= M.FILL.max then break end
+      if l[4] then fill[#fill + 1] = l end
     end
   end
-  for _, e in ipairs(free) do if e.at then place(e, nil) end end
+  stepPool('fill', fill)
 end
 
 -- Every frame (core.lua; cheap: the materials looked at every CHECK_S, the lights every LIGHTS_S). anchor, anchorId:
 -- the frame (nightglow.lua's objects are placed by latitude and longitude).
 function M.update(anchor, anchorId)
   pcall(nightglow.update, anchor, anchorId, M.night)
+  local okA = pcall(nightambient.update, anchor, anchorId)
+  if not okA then M.errors = M.errors + 1 end
   local now = os.clockhp()
   if now - lastCheck >= M.CHECK_S then
     lastCheck = now
     local night = M.isNight()
     if night ~= nil then apply(night) end       -- (a material changes only when its state does)
   end
-  if now - lastLights >= M.LIGHTS_S and (M.night or #pool > 0) then
+  if now - lastLights >= M.LIGHTS_S and (M.night or #pools.spot > 0) then
     lastLights = now
     local ok = pcall(stepLights, M.night == true)
     if not ok then M.errors = M.errors + 1 end
@@ -289,20 +357,25 @@ end
 -- A new level or session: the materials are new (applied again at the next check), the lights gone.
 function M.reset()
   nightglow.reset()
+  nightambient.reset()
   M.night, lastCheck, lastLights = nil, -1e9, -1e9
   lit = {}
-  for _, e in ipairs(pool) do
-    local o = scenetree.findObjectById(e.id)
-    if o then o:delete() end
+  for _, pool in pairs(pools) do
+    for _, e in ipairs(pool) do
+      local o = scenetree.findObjectById(e.id)
+      if o then o:delete() end
+    end
   end
-  pool, lenses = {}, {}
+  pools, lenses = { spot = {}, fill = {} }, {}
 end
 
 function M.status()
-  local on, n = 0, 0
-  for _, e in ipairs(pool) do if e.at then on = on + 1 end end
+  local on, fills, n = 0, 0, 0
+  for _, e in ipairs(pools.spot) do if e.at then on = on + 1 end end
+  for _, e in ipairs(pools.fill) do if e.at then fills = fills + 1 end end
   for _, list in pairs(lenses) do n = n + #list end
-  return { night = M.night, errors = M.errors, lights = #pool, lit = on, lenses = n }
+  return { night = M.night, errors = M.errors, lights = #pools.spot, lit = on, fills = fills, lenses = n,
+           ambient = nightambient.status() }
 end
 
 return M

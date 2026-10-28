@@ -1,6 +1,6 @@
 {
  "version": 1,
- "about": "Streets at night for the night ambient (the user, 2026-10-28: 'outside of the direct cone is dark as heck'): tools/probe_look.py run --set tools/night_ambient_bench.json --variants tools/night_ambient_variants.json --perf 5. Street level and a little above, downtown, a main road and a suburb",
+ "about": "Streets at night for the night ambient (the user, 2026-10-28: 'outside of the direct cone is dark as heck'): tools/probe_look.py run --set tools/night_ambient_bench.json --variants tools/night_ambient_build_variants.json --perf 5 (night_ambient_variants.json: the same levers by hand, for a build without nightambient.lua). Street level and a little above, downtown, a main road and a suburb",
  "defaults": {
   "date": "2026-12-12",
   "hour": 21.5,
