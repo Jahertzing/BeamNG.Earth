@@ -91,9 +91,11 @@ VERSION = 2                     # pipeline version: bump when what a cell's laye
 LAYER_VERSIONS = {"roads": 6}
                                 # (2: clipped polygon pieces `own`ed by their cell, exact cell edges,
                                 # the exact no-area test of clipped rings)
-VECTOR_LAYERS = ("roads", "connectors", "buildings", "water", "land_use", "infrastructure", "building_parts", "places")
+VECTOR_LAYERS = ("roads", "connectors", "buildings", "water", "land_use", "infrastructure", "building_parts", "places",
+                 "tall_buildings", "tall_building_parts", "towers", "tower_parts")
 RASTER_LAYERS = ("landcover", "canopy")
-OPTIONAL_LAYERS = ("building_parts", "places")   # built only when asked for by name (buildings.py, gasstations.py)
+# built only when asked for by name (buildings.py, gasstations.py; the tall ones per z12 cell: skyline.py)
+OPTIONAL_LAYERS = ("building_parts", "places", "tall_buildings", "tall_building_parts", "towers", "tower_parts")
 LAYERS = tuple(x for x in VECTOR_LAYERS if x not in OPTIONAL_LAYERS) + RASTER_LAYERS
 ALL_LAYERS = VECTOR_LAYERS + RASTER_LAYERS
 DEFAULT_CACHE = os.path.expanduser("~/.cache/beamng-earth")
