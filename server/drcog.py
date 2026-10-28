@@ -23,6 +23,7 @@ What it changes (mapdata.MapData, a cell whose box meets EXTENT):
 Requests: the layers' ArcGIS REST query (GeoJSON, 2,000 features a page) per z14 cell, through netfetch (host
 gis.drcog.org), cached per cell under <raw>/drcog/2024/ (the data is a fixed release).
 """
+import collections
 import json
 import logging
 import math
@@ -48,6 +49,9 @@ EXTENT = (-105.4019, 39.3086, -104.3702, 40.2129)     # the roofprints' extent (
 PAGE = 2000
 DATASET, LICENSE = "DRCOG Planimetrics 2024", "CC-BY-3.0"
 FT = 0.3048
+# cells kept decoded in memory, per kind (a least-recently-used cache each): the whole dict was cleared past 64 cells of
+# both kinds together, so on a long Denver drive the road widths' edges were read from disk again and again
+MEM_CELLS = {"roofprints": 24, "edges": 64}
 MIN_HEIGHT_M = 1.5          # a roofprint's height under this is not believed (the building's Overture height, or none)
 # DRCOG's building types -> Overture-like classes (buildings.plan) where no Overture building gives one
 TYPE_CLASS = {"Residential": "residential", "Commercial": "commercial", "Industrial": "industrial",
@@ -114,7 +118,10 @@ class Drcog:
     def _cached(self, name, key, build):
         path = os.path.join(self.dir, name, str(key.z), str(key.x), f"{key.y}.npz")
         with self._lock:
-            got = self._mem.get(path)
+            mem = self._mem.setdefault(name, collections.OrderedDict())     # (kind -> path -> arrays: LRU, MEM_CELLS)
+            got = mem.get(path)
+            if got is not None:
+                mem.move_to_end(path)
         if got is not None:
             return got
         try:
@@ -127,9 +134,10 @@ class Drcog:
             np.savez_compressed(tmp, **got)
             staging.replace_cached(tmp, path)
         with self._lock:
-            if len(self._mem) > 64:
-                self._mem.clear()
-            self._mem[path] = got
+            mem[path] = got
+            mem.move_to_end(path)
+            while len(mem) > MEM_CELLS.get(name, 32):
+                mem.popitem(last=False)
         return got
 
     def roofprints(self, key, kind="demand"):
