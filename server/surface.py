@@ -274,8 +274,8 @@ def paint_roads(idx, lat, lon, feats_list, square, urban_fn=None, widths=None, e
     verge_draw = ImageDraw.Draw(verge)
     seen = set()
 
-    def line(x, y, spec, aisle):
-        width, kind = spec.width, roadsmod.surface_material_kind(spec)
+    def line(x, y, spec, aisle, more=0.0):
+        width, kind = spec.width + more, roadsmod.surface_material_kind(spec)
         if aisle:
             width += 2 * AISLE_STALLS_M         # the stalls either side (parking.aisle_spots): no grass under cars
         walks = roadsmod.has_sidewalks(spec)
@@ -298,6 +298,30 @@ def paint_roads(idx, lat, lon, feats_list, square, urban_fn=None, widths=None, e
         if vx:
             verge_draw.line(pts, fill=255, width=px + vx, joint="curve")
 
+    def wide_line(ring, spec, aisle, wd):
+        """A road not of one width (roads.pocket_profiles): its narrowest width as a line, the rest as a quad per
+        segment out to its edges."""
+        ring, rs = roadsmod.widen_nodes(wd, ring, roadsmod.widen_s(wd, ring))
+        el, er = roadsmod.widen_edges(wd, rs)
+        line(ring[:, 0], ring[:, 1], spec, aisle, 2 * min(0.0, float(el.min()), float(er.min())))
+        width, kind = spec.width, roadsmod.surface_material_kind(spec)
+        if aisle:
+            width += 2 * AISLE_STALLS_M
+        walks = roadsmod.has_sidewalks(spec)
+        if walks:
+            width += 2 * (spec.walk + square)
+        sc = np.array([111320.0 * math.cos(math.radians(float(ring[0, 1]))), 110540.0])
+        xy = np.c_[(ring[:, :2] - ring[0, :2]) * sc, np.zeros(len(ring))]
+        for draw, extra in ((draws[kind], 0.0),) + (((verge_draw, 2 * VERGE_M),) if not walks else ()):
+            sides = []
+            for d in (width / 2 + extra / 2 + el, -(width / 2 + extra / 2 + er)):
+                q = roadsmod.offset_polyline(xy, d)[:, :2] / sc + ring[0, :2]
+                c, r = (np.round(v, 6) for v in to_px(q[:, 0], q[:, 1]))
+                sides.append(list(zip(c.tolist(), r.tolist())))
+            for j in range(len(ring) - 1):
+                draw.polygon([sides[0][j], sides[0][j + 1], sides[1][j + 1], sides[1][j]], fill=255)
+
+    wids = roadsmod.pocket_profiles(feats_list, urban_fn, widths)
     for feats in feats_list:
         if feats is None or len(feats) == 0:
             continue
@@ -320,8 +344,12 @@ def paint_roads(idx, lat, lon, feats_list, square, urban_fn=None, widths=None, e
                 roadsmod._rule_value(feats.rules.get("subclass"), i) == "parking_aisle"
             mw = roadsmod.median_width(specs[i])
             ms = roadsmod.median_side(specs[i])
+            wd = wids.get(fid)
             for ring in roadsmod.ground_parts(feats, i):      # not bridges / tunnels
-                line(ring[:, 0], ring[:, 1], specs[i], aisle)
+                if wd is not None:
+                    wide_line(np.asarray(ring, np.float64), specs[i], aisle, wd)
+                else:
+                    line(ring[:, 0], ring[:, 1], specs[i], aisle)
                 if ms is not None and mw > roadsmod.MEDIAN_SLAB_M and len(ring) >= 2:
                     # the median's ground: lawn (report #48, Boston Street, 2026-10-17)
                     sc = np.array([111320.0 * math.cos(math.radians(float(ring[0, 1]))), 110540.0])
@@ -363,6 +391,7 @@ def _road_segments(frame, x0, y0, size, w, h, feats_list, urban_fn=None, widths=
     kinds = list(PHOTO_ROAD_RGBA)
     segs, hws, kind = [], [], []
     seen = set()
+    wids = roadsmod.pocket_profiles(feats_list, urban_fn, widths)
     for feats in feats_list:
         if feats is None or len(feats) == 0:
             continue
@@ -375,18 +404,28 @@ def _road_segments(frame, x0, y0, size, w, h, feats_list, urban_fn=None, widths=
             if sp is None or fid in seen or sp.kind not in PHOTO_ROAD_RGBA:
                 continue
             seen.add(fid)
-            m = sp.width / 2        # (all of the feature off the photo: none of its rings is in it)
+            wd = wids.get(fid)
+            m = sp.width / 2 + (0.0 if wd is None else roadsmod.LANE_M * 2)   # (all of the feature off the photo)
             if box[i, 1] < x0 - m or box[i, 0] > x0 + size + m or box[i, 3] < y0 - m or box[i, 2] > y0 + size + m:
                 continue
             hw = sp.width * px_m / 2
             for ring in roadsmod.ground_parts(feats, i):
+                if wd is not None:          # (a turn pocket, a taper: the centre and half width at each node)
+                    ring, rs = roadsmod.widen_nodes(wd, np.asarray(ring, np.float64), roadsmod.widen_s(wd, ring))
                 e, n = mapgeom.enu_xy(feats, frame, ring)
+                hwk = None
+                if wd is not None and len(ring) >= 2:
+                    el, er = roadsmod.widen_edges(wd, rs)
+                    q = roadsmod.offset_polyline(np.c_[e, n, np.zeros(len(e))], (el - er) / 2)
+                    e, n = q[:, 0], q[:, 1]
+                    hwk = (sp.width / 2 + (el + er) / 2) * px_m
                 c = (np.asarray(e) - x0) * px_m
                 r = (y0 + size - np.asarray(n)) * px_m
-                if len(c) < 2 or c.max() < -hw or c.min() > w + hw or r.max() < -hw or r.min() > h + hw:
+                pad = hw if hwk is None else float(hwk.max())
+                if len(c) < 2 or c.max() < -pad or c.min() > w + pad or r.max() < -pad or r.min() > h + pad:
                     continue
                 segs.append(np.stack([c[:-1], r[:-1], c[1:], r[1:]], axis=1))
-                hws.append(np.full(len(c) - 1, hw))
+                hws.append(np.full(len(c) - 1, hw) if hwk is None else np.maximum(0.0, 0.5 * (hwk[:-1] + hwk[1:])))
                 kind.append(np.full(len(c) - 1, kinds.index(sp.kind), np.uint8))
     if not segs:
         return None

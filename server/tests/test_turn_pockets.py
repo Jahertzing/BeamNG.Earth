@@ -1,0 +1,292 @@
+"""Turn pockets and width tapers (roads.pocket_profiles, widen_off / widen_edges, and their use in lane_marks, extras,
+build_tile, roadmesh.ribbons, surface._road_segments and grading.widen_plan; feature turn-pockets)."""
+import os
+import sys
+import unittest
+
+import numpy as np
+
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+
+import grading  # noqa: E402
+import roadmesh  # noqa: E402
+import roads  # noqa: E402
+import surface  # noqa: E402
+from test_roads import FRAME, LAT, LON, M_LAT, M_LON, features, flat  # noqa: E402
+from test_turn_lanes import LON_US, tagged  # noqa: E402
+
+
+def road(lines, classes, names, widths=(), lanes=None, rows=None, ids=None):
+    """Features of LINE roads with names, width rules ([(i, m)]), OSM lane counts and regional tags (rows)."""
+    f = features(lines, classes, widths=widths, ids=ids)
+    f.attrs["name"] = np.array(names)
+    if lanes is not None:
+        f.attrs["osm_lanes"] = np.array([np.nan if v is None else float(v) for v in lanes])
+    if rows is not None:
+        f = tagged(f, rows)
+    return f
+
+
+def profiles(*cells):
+    return roads.pocket_profiles(list(cells))
+
+
+def edges_at(wd, s):
+    el, er = roads.widen_edges(wd, np.atleast_1d(np.asarray(s, np.float64)))
+    return float(el[0]), float(er[0])
+
+
+class TaperTest(unittest.TestCase):
+    """(b): the wider of two segments of one road starts from the other's width at their joint."""
+
+    def two(self, wa=8.6, wb=11.9, names=("Main", "Main"), extra=()):
+        lines = [[(-100, 0), (0, 0)], [(0, 0), (150, 0)]] + [ln for ln, _c in extra]
+        return road(lines, ["primary", "primary"] + [c for _ln, c in extra], list(names) + ["Cross"] * len(extra),
+                    widths=[(0, wa), (1, wb)])
+
+    def test_wider_tapers_from_the_narrower(self):
+        f = self.two()
+        sp = roads.road_specs(f, None)
+        p = profiles(f)
+        self.assertEqual(set(p), {"id001"})                   # the wider one only
+        wd = p["id001"]
+        dw = sp[1].width - sp[0].width
+        el, er = edges_at(wd, 0.0)
+        self.assertAlmostEqual(el, -dw / 2, places=6)         # both edges: the narrower's at the joint
+        self.assertAlmostEqual(er, -dw / 2, places=6)
+        self.assertAlmostEqual(edges_at(wd, roads.POCKET_TAPER_M / 2)[0], -dw / 4, places=6)
+        self.assertEqual(edges_at(wd, roads.POCKET_TAPER_M + 1.0), (0.0, 0.0))
+        self.assertEqual(edges_at(wd, 149.0), (0.0, 0.0))
+
+    def test_not_across_a_junction_or_a_name_change_or_a_small_step(self):
+        cross = ([(0, -60), (0, 0), (0, 60)], "primary")       # a cross street of its rank through the joint
+        self.assertEqual(profiles(self.two(extra=[cross])), {})
+        ends = ([(0, -60), (0, 0)], "trunk")                   # ... or a higher one ending there
+        self.assertEqual(profiles(self.two(extra=[ends])), {})
+        self.assertIn("id001", profiles(self.two(extra=[([(0, 0), (0, 40)], "service")])))   # a driveway: it goes on
+        side = ([(0, -60), (0, 0), (0, 60)], "residential")
+        self.assertEqual(profiles(self.two(extra=[side])), {})  # (a width of no known lane: the junction's step)
+        self.assertEqual(profiles(self.two(names=("Main", "Other"))), {})
+        self.assertEqual(profiles(self.two(wb=8.9)), {})
+        bend = road([[(-100, 0), (0, 0)], [(0, 0), (60, 80)]], ["primary"] * 2, ["Main"] * 2,
+                    widths=[(0, 8.6), (1, 11.9)])
+        self.assertEqual(profiles(bend), {})                   # (a turn, not straight on)
+
+    def test_short_segment_tapers_within_itself(self):
+        f = road([[(-100, 0), (0, 0)], [(0, 0), (12, 0)]], ["primary"] * 2, ["Main"] * 2, widths=[(0, 8.6), (1, 11.9)])
+        wd = profiles(f)["id001"]
+        self.assertLess(edges_at(wd, 0.0)[0], -1.0)
+        self.assertAlmostEqual(edges_at(wd, wd.L)[0], 0.0, places=6)
+
+    def test_pocket_way_opens_its_turn_lane(self):
+        """A pocket mapped as its own way (Colorado's): the left-turn lane opens, the rest shift over; the edges match
+        the narrower segment's at the joint."""
+        rows = [{"lanes:forward": "1", "lanes:backward": "1"},
+                {"lanes:forward": "2", "lanes:backward": "1", "turn:lanes:forward": "left|through"}]
+        f = road([[(-100, 0), (0, 0)], [(0, 0), (150, 0)]], ["primary"] * 2, ["Main"] * 2, lanes=[2, 3], rows=rows)
+        sp = roads.road_specs(f, None)
+        dw = sp[1].width - sp[0].width
+        self.assertGreater(dw, 2.5)
+        wd = profiles(f)["id001"]
+        self.assertEqual(sorted({c[0] for c in wd.comps}), ["ins", "mid"])
+        el, er = edges_at(wd, 0.0)
+        self.assertAlmostEqual(el, -dw / 2, places=6)
+        self.assertAlmostEqual(er, -dw / 2, places=6)
+        lay = roads.lane_layout(sp[1])
+        (d, n, g0, g1), = [g for g in lay["groups"] if g[0] > 0]
+        # at the joint the pocket (the forward lane next to the centre line) is closed: its two edges meet
+        s0 = np.zeros(1)
+        lw = (g1 - g0) / n
+        inner = roads.widen_off(wd, s0, g1 - lw)[0]
+        outer = roads.widen_off(wd, s0, g1)[0]
+        self.assertAlmostEqual(inner, outer, places=6)
+        self.assertAlmostEqual(outer, 0.0, places=6)           # where the narrower one's centre line is
+        far = np.array([100.0])
+        self.assertAlmostEqual(roads.widen_off(wd, far, g1)[0], g1)
+
+    def test_pocket_way_from_a_side_street_not_into_its_junction(self):
+        """The pocket way starts at a side street (it opens there); where its turn arrows end (the junction it leads
+        to) it keeps its width, whatever the road beyond."""
+        rows = [{"lanes:forward": "1", "lanes:backward": "1"},
+                {"lanes:forward": "2", "lanes:backward": "1", "turn:lanes:forward": "left|through"},
+                {"lanes:forward": "1", "lanes:backward": "1"}]
+        lines = [[(-100, 0), (0, 0)], [(0, 0), (150, 0)], [(150, 0), (300, 0)], [(0, -60), (0, 0), (0, 60)]]
+        f = road(lines, ["primary"] * 3 + ["residential"], ["Main"] * 3 + ["Side"], lanes=[2, 3, 2, None],
+                 rows=rows + [{}])
+        wd = profiles(f)["id001"]
+        self.assertLess(edges_at(wd, 0.0)[0], -1.0)            # opens from the side street ...
+        self.assertEqual(edges_at(wd, wd.L), (0.0, 0.0))       # ... not narrowed into the junction at x = 150
+
+
+class PocketTest(unittest.TestCase):
+    """(a): an exclusive turn lane the lane count leaves out gets a pocket at its downstream end."""
+
+    def one(self, row, lanes=2, length=200.0):
+        return road([[(0, 0), (length, 0)]], ["primary"], ["Main"], lanes=[lanes], rows=[row])
+
+    def test_left_pocket_forward_at_the_end(self):
+        f = self.one({"lanes:forward": "1", "lanes:backward": "1", "turn:lanes:forward": "left|through"})
+        sp = roads.road_specs(f, None)[0]
+        lay = roads.lane_layout(sp)
+        lw = (lay["hi"] - lay["lo"]) / 2
+        wd = profiles(f)["id000"]
+        L = wd.L
+        self.assertAlmostEqual(L, 200.0, delta=0.5)
+        self.assertEqual(edges_at(wd, 0.0), (0.0, 0.0))
+        el, er = edges_at(wd, L - 1.0)
+        self.assertAlmostEqual(el, lw, places=6)               # toward the centre line: the other way's side grows
+        self.assertEqual(er, 0.0)
+        self.assertAlmostEqual(edges_at(wd, L - roads.POCKET_M)[0], lw, places=6)
+        self.assertAlmostEqual(edges_at(wd, L - roads.POCKET_M - roads.POCKET_TAPER_M / 2)[0], lw / 2, places=6)
+        self.assertEqual(edges_at(wd, L - roads.POCKET_M - roads.POCKET_TAPER_M - 1.0), (0.0, 0.0))
+        self.assertEqual(len(wd.added), 1)
+
+    def test_backward_pocket_at_the_start(self):
+        f = self.one({"lanes:forward": "1", "lanes:backward": "1", "turn:lanes:backward": "left|through"})
+        wd = profiles(f)["id000"]
+        el, er = edges_at(wd, 1.0)
+        self.assertEqual(el, 0.0)
+        self.assertGreater(er, 2.5)                            # toward the centre line from the left side: right edge
+        self.assertEqual(edges_at(wd, wd.L - 1.0), (0.0, 0.0))
+
+    def test_right_bay_toward_the_curb(self):
+        f = self.one({"lanes:forward": "1", "lanes:backward": "1", "turn:lanes:forward": "through|right"})
+        wd = profiles(f)["id000"]
+        el, er = edges_at(wd, wd.L - 1.0)
+        self.assertEqual(el, 0.0)
+        self.assertGreater(er, 2.5)
+
+    def test_short_way_opens_within_itself(self):
+        f = self.one({"lanes:forward": "1", "lanes:backward": "1", "turn:lanes:forward": "left|through"}, length=40.0)
+        wd = profiles(f)["id000"]
+        T = roads.POCKET_SHORT_TAPER * wd.L
+        self.assertEqual(edges_at(wd, 0.0), (0.0, 0.0))                     # (no step where its way starts)
+        self.assertGreater(edges_at(wd, T / 2)[0], 1.0)
+        self.assertGreater(edges_at(wd, T + 0.5)[0], 2.5)
+        self.assertGreater(edges_at(wd, wd.L)[0], 2.5)
+        f = self.one({"lanes:forward": "1", "lanes:backward": "1", "turn:lanes:backward": "left|through"}, length=40.0)
+        wd = profiles(f)["id000"]
+        self.assertGreater(edges_at(wd, 0.0)[1], 2.5)                       # (backward: from its start)
+        self.assertEqual(edges_at(wd, wd.L), (0.0, 0.0))
+
+    def test_lanes_counted_or_centre_turn_lane_no_pocket(self):
+        counted = self.one({"lanes:forward": "2", "lanes:backward": "1", "turn:lanes:forward": "left|through"}, lanes=3)
+        self.assertEqual(profiles(counted), {})                # (the turn lane is in the width already)
+        ctl = self.one({"lanes:forward": "1", "lanes:backward": "1", "lanes:both_ways": "1",
+                        "turn:lanes:forward": "left|through"}, lanes=3)
+        self.assertEqual(profiles(ctl), {})
+
+    def test_marks_follow_the_pocket(self):
+        f = self.one({"lanes:forward": "1", "lanes:backward": "1", "turn:lanes:forward": "left|through"})
+        sp = roads.road_specs(f, None)[0]
+        wd = profiles(f)["id000"]
+        ring = f.parts(0)[0][0]
+        lonlat, s = roads.widen_nodes(wd, ring, roads.widen_s(wd, ring))
+        e = (lonlat[:, 0] - LON) * M_LON
+        n = (lonlat[:, 1] - LAT) * M_LAT
+        pts = np.c_[e, n, np.full(len(e), 10.0)]
+        plain = roads.lane_marks(sp, pts, LON_US)
+        marks = roads.lane_marks(sp, pts, LON_US, wid=(wd, s))
+        lay = roads.lane_layout(sp)
+        lw = (lay["hi"] - lay["lo"]) / 2
+        yellow = [ln for lk, w, ln in marks if lk["m"] == "line_yellow"]
+        self.assertEqual(len(yellow), 2)
+        for ln in yellow:                                      # the centre line moved over by the pocket at the end
+            self.assertAlmostEqual(float(ln[-1, 1]) - float(ln[0, 1]), lw, delta=1e-6)
+        lines = [ln for lk, w, ln in marks if lk is roads.LANE_LINE]
+        self.assertEqual(len(lines), 1)                        # the pocket's own lane line ...
+        self.assertGreater(float(lines[0][0, 0]), 200.0 - roads.POCKET_M - roads.POCKET_TAPER_M)
+        self.assertAlmostEqual(float(lines[0][-1, 1]), float(yellow[0][0, 1]) + roads.CENTRE["gap"], delta=0.3)
+        arrows = [ln for lk, w, ln in marks if lk.get("arrow")]
+        self.assertTrue(arrows)                                # ... and both lanes' arrows (none before: 2 turns)
+        self.assertFalse([1 for lk, w, ln in plain if lk.get("arrow")])
+        left = [a for a in arrows if a[:, 1].mean() > 0.2]
+        self.assertTrue(left)                                  # the left arrow in the pocket (left of the old centre)
+        self.assertTrue(all(abs(a[:, 1].mean() - (float(yellow[0][-1, 1]) - lw / 2)) < 1.6 for a in left))
+
+
+class MeshTest(unittest.TestCase):
+    def test_ribbon_without_profile_unchanged(self):
+        c = {"m": "road_asphalt_2lane", "w": 7.0, "tl": 11.0, "p": 20,
+             "n": [[0.0, 0.0, 1.0], [20.0, 3.0, 1.0], [45.0, 3.0, 1.0]]}
+        (left, right, v, m, layer, z), = roadmesh.ribbons([c])
+        xy, s, _z = roadmesh._resample(np.asarray(c["n"]), roadmesh.DRAPE_STEP)
+        nrm = roadmesh._normals(xy) * 3.5
+        self.assertTrue(np.array_equal(left, xy + nrm) and np.array_equal(right, xy - nrm))
+
+    def test_ribbon_per_node_widths(self):
+        c = {"m": "road_asphalt_2lane", "w": 7.0, "tl": 11.0, "p": 20,
+             "n": [[0.0, 0.0, 1.0], [40.0, 0.0, 1.0]], "wl": [3.5, 6.5], "wr": [3.5, 3.5]}
+        (left, right, *_), = roadmesh.ribbons([c])
+        self.assertAlmostEqual(left[0, 1], 3.5)
+        self.assertAlmostEqual(left[-1, 1], 6.5)
+        self.assertAlmostEqual(left[len(left) // 2, 1], 5.0)
+        self.assertTrue(np.allclose(right[:, 1], -3.5))
+        far = roadmesh._reach_past(c, (5.0, -50.0, 30.0, 50.0))
+        self.assertEqual(len(far["wl"]), len(far["n"]))
+
+
+class TileTest(unittest.TestCase):
+    def setUp(self):
+        self.was = roads.ROADS_IN_GROUND
+        roads.ROADS_IN_GROUND = False
+
+    def tearDown(self):
+        roads.ROADS_IN_GROUND = self.was
+
+    def cells(self):
+        """A taper across the seam of tiles 0 and 1 (x = 256): Main narrows to 8.6 m at x = 250."""
+        lines = [[(100, 20), (250, 20)], [(250, 20), (450, 20)]]
+        both = road(lines, ["primary"] * 2, ["Main"] * 2, widths=[(0, 8.6), (1, 11.9)])
+        only_b = road(lines[1:], ["primary"], ["Main"], widths=[(0, 11.9)], ids=["id001"])
+        return both, only_b
+
+    @staticmethod
+    def left_edge_at(chunks, x):
+        for c in chunks:
+            if c["m"].startswith("road_") and c.get("wl") is not None:
+                n = np.asarray(c["n"])
+                if n[0, 0] <= x <= n[-1, 0]:
+                    return float(np.interp(x, n[:, 0], n[:, 1] + np.asarray(c["wl"])))
+        return None
+
+    def test_both_tiles_draw_the_same_taper(self):
+        both, only_b = self.cells()
+        t0 = roads.build_tile(FRAME, 0, 0, [both], flat)
+        # tile 1's own cell holds only the wider segment; the cells within reach of it hold both
+        t1 = roads.build_tile(FRAME, 1, 0, [only_b], flat, pocket_cells=[only_b, both])
+        a, b = self.left_edge_at(t0, 257.0), self.left_edge_at(t1, 257.0)
+        self.assertIsNotNone(a)
+        self.assertIsNotNone(b)
+        self.assertAlmostEqual(a, b, places=2)
+        self.assertLess(a, 20 + 11.9 / 2 - 1.0)                # (narrower than its width there: the taper)
+        self.assertEqual(roads.pocket_profiles([only_b, both]).keys(), roads.pocket_profiles([both, only_b]).keys())
+
+    def test_roads_of_one_width_unchanged(self):
+        f = road([[(-20, 30), (280, 30)]], ["primary"], ["Main"], widths=[(0, 8.6)])
+        chunks = roads.build_tile(FRAME, 0, 0, [f], flat)
+        self.assertFalse([c for c in chunks if "wl" in c])
+
+
+class GroundTest(unittest.TestCase):
+    def test_photo_segments_follow_the_pocket(self):
+        f = road([[(0, 100), (200, 100)]], ["primary"], ["Main"], lanes=[2],
+                 rows=[{"lanes:forward": "1", "lanes:backward": "1", "turn:lanes:forward": "left|through"}])
+        segs, hws, _k = surface._road_segments(FRAME, -50.0, 0.0, 300.0, 300, 300, [f])
+        self.assertGreater(hws.max() - hws.min(), 1.2)          # (1 px a metre: half the pocket's lane)
+        plain = road([[(0, 100), (200, 100)]], ["primary"], ["Main"], lanes=[2])
+        segs, hws, _k = surface._road_segments(FRAME, -50.0, 0.0, 300.0, 300, 300, [plain])
+        self.assertEqual(len(set(hws.tolist())), 1)
+
+    def test_grading_core_out_to_the_pocket(self):
+        f = road([[(0, 0), (200, 0)]], ["primary"], ["Main"], lanes=[2],
+                 rows=[{"lanes:forward": "1", "lanes:backward": "1", "turn:lanes:forward": "left|through"}])
+        wd = profiles(f)["id000"]
+        p = grading.Plan(np.array([[0.0, 0.0], [200.0, 0.0]]), np.zeros(2), 4.0 + 0.5, road_half=4.0)
+        grading.widen_plan(p, wd)
+        self.assertGreater(p.half, 4.0 + 2.5)
+        self.assertGreater(p.bbox[3], p.half)
+
+
+if __name__ == "__main__":
+    unittest.main()
