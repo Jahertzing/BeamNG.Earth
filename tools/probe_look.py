@@ -87,8 +87,10 @@ def main(argv=None):
     saved, home = info["saved"], {"lat": info["player"]["lat"], "lon": info["player"]["lon"]}
     (out / "state.json").write_text(json.dumps({"saved": saved, "home": home}))
     rows, rec = [], {"places": [], "variants": variants}
+    hide_ui = "local v = rawget(_G, 'ui_visibility') if v and v.set then v.set(%s) end return 'ok'"
     try:
         b.call("zeroInputs")
+        game.lua(hide_ui % "false")             # the game's UI (HUD, apps, banners) out of the pictures
         for pl in places:
             print(f"{pl['id']} ...", flush=True)
             views = pl["views"]
@@ -124,6 +126,10 @@ def main(argv=None):
                     rows.append(row)
                     write_index(out, rows, variants)
     finally:
+        try:
+            game.lua(hide_ui % "true")
+        except Exception as e:      # noqa: BLE001
+            print("UI back failed:", e)
         try:
             look(game, "reset")
         except Exception as e:      # noqa: BLE001 (the restore below still runs)

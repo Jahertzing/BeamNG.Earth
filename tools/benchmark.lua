@@ -251,7 +251,9 @@ function B.setWeather(cfg)
   if li then
     local st = coreState()
     local groundZ = st and st.player and st.player.z or 0
-    local sigma = (w and w.fogSigma) and w.fogSigma(cfg.visM) or 3.912 / (cfg.visM or 60000)
+    -- the height fog the weather would give that visibility (weather.lua fogSigmaFor; older mods: 3.912 / V)
+    local sigma = (w and w.fogSigmaFor) and w.fogSigmaFor(cfg.visM, false)
+      or (w and w.fogSigma) and w.fogSigma(cfg.visM) or 3.912 / (cfg.visM or 60000)
     local d = (w and w.fogDensityFor) and w.fogDensityFor(sigma, groundZ, B.FOG_HEIGHT)
       or math.min(sigma * math.exp(groundZ / B.FOG_HEIGHT), 0.05)
     li.fogDensity = d
