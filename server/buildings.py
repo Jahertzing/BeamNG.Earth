@@ -874,12 +874,13 @@ def house_window_slots(spec, a, d, out, L, z_eave, edge=None):
     return out_
 
 
-def _walls(m, spec, ring, z0, z_eave, mat_idx, lite=False):
+def _walls(m, spec, ring, z0, z_eave, mat_idx, lite=False, kit=False):
     """Each wall of the ring, floor by floor: one band of the window sheet, a whole number of bays; a plain wall with
     sash windows laid over it for a plain tileable material (spec.wall; a big box's storefront band); a plain plinth
     under the floors on a slope; a shopfront ground floor; the good bays only where a band has some; the front door's
     bay as the band's plain strip, at the sheet's scale. The Rust loop (earthfast.building_walls: the quads the Python
-    made, in its order and arithmetic)."""
+    made, in its order and arithmetic). kit (build's, never lite): the windows set into the walls
+    (facadekit.recess)."""
     global _WALL_CONSTS
     if _WALL_CONSTS is None:
         _WALL_CONSTS = [float(v) for v in (SIDING_UV_M, TILE_PX_M, FOUNDATION_M, BANDS, BAND_SHOP[0], BAND_SHOP[1],
@@ -899,6 +900,10 @@ def _walls(m, spec, ring, z0, z_eave, mat_idx, lite=False):
         P, UV, mid = _garage_windows_out(spec, ring, z_eave, P, UV, mid)
     if mid:
         UV = _night_shift(spec, P, UV, mid, z_eave)
+    if mid and kit and not lite:            # (after the shift: the openings are found from the final UVs)
+        import facadekit
+        P, UV, mid = facadekit.recess(spec, ring, z_eave, P, UV, mid)
+    if mid:
         m.quads(P, UV, mid, [mat_idx[spec.facade], mat_idx[SHOP] if (spec.shop or spec.wall) else None,
                              mat_idx["bne_bld_fac_white"] if spec.wall else None])
 
@@ -1719,7 +1724,7 @@ def build(specs_and_ground, lite=False, kit=True):
             continue
         z0 = gmin - (SKIRT_LITE_M if lite else SKIRT_M) if mh <= 0.5 else base_z(spec, gmin, gmax) + mh
         z_eave = base_z(spec, gmin, gmax) + mh + spec.height
-        _walls(m, spec, ring, z0, z_eave, mat_idx, lite)
+        _walls(m, spec, ring, z0, z_eave, mat_idx, lite, kit)
         if mh > 0.5:                                  # a part standing on another / over a street: its underside
             m.poly([(p[0], p[1], z0) for p in ring[::-1]], [(0.002, 0.995)] * len(ring), mat_idx[spec.facade])
         _roof(m, spec, ring, z_eave, mat_idx)
