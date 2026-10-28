@@ -1541,8 +1541,18 @@ The user: "make the world look alive ... look like a professionally made map".
   cornices, boxes, per-bay quads), render-only; `roads.lua` hides one while the road tile of its square
   shows its own colliding buildings, and makes them only once the near meshes are all made (they share
   the roadWalk budget: Frederick once had 50 near meshes waiting).
+- **Skyline** (`server/skyline.py`, `skyline_tile` / `skyline_drop`, `--skyline on` with `--buildings on`;
+  2026-10-28): the tall buildings of every z12 cell (~7.5 km) to 40 km, as simplified tinted prisms (<= 8
+  corners, one quad a wall, the near tiers' specs, roofs and tints) in the anchor frame with curvature.
+  Overture layers `tall_buildings` (>= 20 m / 6 floors; cells within 6 km) and `towers` (>= 50 m / 15
+  floors; beyond), filtered in the fetch plan (row-group height statistics, then bbox + height columns,
+  the geometry only of row groups with a match). Each tile is one mesh per anchor road tile ("parts", hidden
+  by `roads.lua` exactly where the road or far building tile of that square shows its buildings) plus the
+  cell merged (drawn instead while the car is over 2.6 km from the cell). One build at a time on the far
+  building pool, only while no far building tile builds. Denver downtown's cell: 618 buildings + 3,919
+  parts ("tall"), 1.3 s, ~19-29 MB fetched once per release; a suburb's "towers" cell ~2 MB.
 - **Cost:** ~0.5 s per tile to plan, 5-13k triangles (Fells Point).
-- Tests: `server/tests/test_buildings.py`.
+- Tests: `server/tests/test_buildings.py`, `server/tests/test_skyline.py`.
 
 Front porches (2026-10-14): pitched-roof houses under 300 m² get one on the front door's wall (55 % in the East,
 25 % west of 102° W, hashed): a white deck 0.35 m high, three posts and a 2.2 m deep roof in the roof's colour;

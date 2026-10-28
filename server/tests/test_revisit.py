@@ -32,6 +32,12 @@ class RevisitTest(unittest.TestCase):
             self.assertEqual(tile["road"]["shape"], "/temp/s2/road_7_1_-2.cdae")
             self.assertIsNone(revisit.load(d, "roads", revisit.key("roads", 0, 0, 1, -2)))
 
+    def test_shapes_found_with_either_separators(self):
+        """A far building tile's JSON (buildings.far_tile: json.dumps' default separators) names its mesh too."""
+        data = {"v": 1, "shape": "/temp/s1/bldfar_3_1_-2.cdae", "pos": [256.0, -512.0, 0.0]}
+        for text in (json.dumps(data), json.dumps(data, separators=(",", ":"))):
+            self.assertEqual(revisit.shapes_in(text, "/temp/s1"), ["bldfar_3_1_-2.cdae"])
+
     def test_failed_fetches_mark_builds_incomplete_but_missing_data_does_not(self):
         n = revisit.faults()
         netfetch.NotFound("404")                # (no data there: as it should be)

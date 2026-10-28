@@ -123,6 +123,37 @@ LAYERS = {
                            text=("building_id", "src_dataset", "src_record", "roof_shape", "facade_color",
                                  "roof_color"),
                            float=("height", "min_height", "num_floors", "min_floor", "roof_height")),
+    # the skyline (skyline.py): the buildings tall enough to see from tens of km, read per z12 cell (~7.5 km) with the
+    # buildings' columns. `where` keeps the rows; `stat_any` lets _plan skip a row group from its statistics alone
+    # (none of its rows can match: max height < 20 and max floors < 6), so a suburb's row groups cost no byte of their
+    # columns, and the ones with a match fetch their geometry only after their bbox and filter columns said so
+    "tall_buildings": dict(theme="buildings", type="building", clip=False,
+                           cols=f"subtype, class, {_NAME}, {_SRC}, height, min_height, num_floors, level, "
+                                "is_underground, has_parts, roof_shape, roof_height, roof_color, facade_material, "
+                                "facade_color",
+                           text=("subtype", "class", "name", "src_dataset", "src_record", "roof_shape", "roof_color",
+                                 "facade_material", "facade_color"),
+                           float=("height", "min_height", "num_floors", "level", "roof_height"),
+                           bool=("is_underground", "has_parts"),
+                           where="(height >= 20 OR num_floors >= 6)", stat_any=(("height", 20.0), ("num_floors", 6.0))),
+    # the parts of those (a tower on its podium): same filter on the part's own height
+    "tall_building_parts": dict(theme="buildings", type="building_part", clip=False,
+                                cols=f"building_id, {_SRC}, height, min_height, num_floors, min_floor, roof_shape, "
+                                     "roof_height, facade_color, roof_color",
+                                text=("building_id", "src_dataset", "src_record", "roof_shape", "facade_color",
+                                      "roof_color"),
+                                float=("height", "min_height", "num_floors", "min_floor", "roof_height"),
+                                where="(height >= 20 OR num_floors >= 6)",
+                                stat_any=(("height", 20.0), ("num_floors", 6.0))),
+}
+# ... and the skyline's far ring (skyline.TOWER_FROM_M on): the towers alone. A 20 m building 15 km away is under 2 px of a
+# 1440p screen; a metro's row groups (~20k buildings, ~2.5 MB of their columns each) nearly all hold one, but far fewer
+# a 50 m one (Denver, 2026-10-28: 5 of the 9 row groups under downtown's z12 cell, few in the suburbs)
+TOWER_WHERE = "(height >= 50 OR num_floors >= 15)"
+TOWER_STATS = (("height", 50.0), ("num_floors", 15.0))
+LAYERS["towers"] = dict(LAYERS["tall_buildings"], where=TOWER_WHERE, stat_any=TOWER_STATS)
+LAYERS["tower_parts"] = dict(LAYERS["tall_building_parts"], where=TOWER_WHERE, stat_any=TOWER_STATS)
+LAYERS.update({
     "water": dict(theme="base", type="water", clip=True,
                   cols=f"subtype, class, {_NAME}, {_SRC}, level, is_salt, is_intermittent, {_TAGS}",
                   text=("subtype", "class", "name", "src_dataset", "src_record", "tags"),
@@ -144,7 +175,7 @@ LAYERS = {
                    text=("basic_category", "taxonomy", "brand_wikidata", "brand_name", "name", "src_dataset",
                          "src_record", "operating_status"),
                    float=("confidence",)),
-}
+})
 # road_flags: one row per flag (is_bridge, is_tunnel, is_link, is_covered, ...)
 # speed_limits: max speed in km/h (mph converted) per range
 MPH = 1.609344
@@ -420,6 +451,8 @@ class Reader:
                 g["cols"].setdefault(top, []).append((min(offs), min(offs) + size))
                 if top == "bbox":
                     g["bbox"][leaf] = (smin, smax)
+                elif ", " not in col:
+                    g.setdefault("stats", {})[top] = (smin, smax)   # (a plain column's: stat_any)
             with self._lock:
                 for p in new:
                     self._meta[p] = parsed.get(p, {})
@@ -442,18 +475,31 @@ class Reader:
                 return default
         cand = [k for k, g in groups.items()
                 if stat(g, "xmin", 0, -1e9) <= lon1 and stat(g, "xmax", 1, 1e9) >= lon0
-                and stat(g, "ymin", 0, -1e9) <= lat1 and stat(g, "ymax", 1, 1e9) >= lat0]
+                and stat(g, "ymin", 0, -1e9) <= lat1 and stat(g, "ymax", 1, 1e9) >= lat0
+                and may_match(g, spec.get("stat_any"))]
         t1 = time.perf_counter()
         if not cand:
             return []
+        # the bbox columns of the candidates (and the filter's columns: a `where` layer's rows are found before any
+        # other column of theirs is fetched)
+        first = {"bbox"} | set(re.findall(r"[A-Za-z_]+", spec.get("where", ""))) - {"OR", "AND", "NOT", "NULL", "IS"}
         wanted = {}
         for path, rg in cand:
-            wanted.setdefault(path, []).extend(groups[(path, rg)]["cols"].get("bbox", []))
+            for top in sorted(first):
+                wanted.setdefault(path, []).extend(groups[(path, rg)]["cols"].get(top, []))
         self._fetch(files, wanted, kind)
         bbox = (f"bbox.xmin <= {lon1!r} AND bbox.xmax >= {lon0!r} AND "
                 f"bbox.ymin <= {lat1!r} AND bbox.ymax >= {lat0!r}")
+        if spec.get("where"):
+            bbox = f"{bbox} AND {spec['where']}"
+        # (only the candidates' row ranges: DuckDB would otherwise read the filter columns of every row group whose
+        # bbox statistics touch the cell, lazily, one request each)
+        firsts_c = sorted((path, groups[(path, rg)]["first"], groups[(path, rg)]["first"] + groups[(path, rg)]["n"] - 1)
+                          for path, rg in cand)
+        only = " OR ".join(f"(filename = '{proto}://{p}' AND file_row_number BETWEEN {a} AND {b})"
+                           for p, a, b in firsts_c) if spec.get("stat_any") else "true"
         hits = con.execute(f"""SELECT DISTINCT filename, file_row_number FROM read_parquet([{uris}],
-            filename = true, file_row_number = true) WHERE {bbox}""").fetchall()
+            filename = true, file_row_number = true) WHERE ({only}) AND {bbox}""").fetchall()
         firsts = {}
         for (path, rg), g in sorted(groups.items()):
             firsts.setdefault(path, []).append((g["first"], rg))
@@ -501,7 +547,7 @@ class Reader:
               SELECT id, version, {spec['cols']}, ST_AsWKB(geometry) AS wkb,
                      (bbox.xmin + bbox.xmax) / 2 AS cx, (bbox.ymin + bbox.ymax) / 2 AS cy,
                      sources{extra}
-              FROM {src} WHERE ({only}) AND {bbox}""")
+              FROM {src} WHERE ({only}) AND {bbox}{" AND " + spec["where"] if spec.get("where") else ""}""")
         con.execute("""CREATE TEMP TABLE t AS
             SELECT row_number() OVER (ORDER BY id) - 1 AS fi, * FROM (
               SELECT * EXCLUDE (version) FROM s
@@ -587,6 +633,22 @@ class Reader:
             ORDER BY fi, k""").fetchall()
         feats.rules["connectors"] = mg.rule_table(
             [(int(fmap[fi]), cid, [a, a]) for fi, cid, a in rows if keep[fi]], "text")
+
+
+def may_match(g, stat_any):
+    """Can row group g (Reader._plan's metadata: "stats" {column: (min, max)}) hold a row of a layer with `stat_any`
+    [(column, value)]: one column's max reaches its value, or its statistics are missing / unreadable (a column of
+    nulls only has none: such a group may still match through another column). True without stat_any."""
+    if not stat_any:
+        return True
+    st = g.get("stats", {})
+    for c, v in stat_any:
+        try:
+            if float(st[c][1]) >= v:
+                return True
+        except (KeyError, TypeError, ValueError):
+            return True
+    return False
 
 
 def empty(layer):
