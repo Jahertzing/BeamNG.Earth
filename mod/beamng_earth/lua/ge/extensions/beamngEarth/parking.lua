@@ -2,7 +2,7 @@
 -- road tiles carry curbside spots and lot stalls (server/parking.py: rows {x, y, z, heading[, 1 = lot]})
 -- and this module hands them to BeamNG's own parking system (gameplay_parking) as a sites object, the way a
 -- stock level's city.sites.json does. The stock system spawns the player's parked-car amount (Options >
--- Gameplay > Traffic, trafficParkedAmount) and keeps moving them to free spots near the player as the
+-- Gameplay > Traffic, trafficParkingAmount; the parkedCars setting, navgraph.lua) and keeps moving them to free spots near the player as the
 -- player drives; the radial menu's traffic entries work as on stock maps.
 --
 -- One sites object per session. Its spot objects are kept by position (so a car's spot stays the same object

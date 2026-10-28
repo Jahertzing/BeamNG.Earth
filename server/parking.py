@@ -71,11 +71,14 @@ def curb_spots(roads, walks, box, left_hand=False, directions=None):
 
 
 def clear_of(spots, props, drives):
-    """The spots not in front of a hydrant (props rows of group furniture.G_HYDRANT) or a driveway's mouth
+    """The spots not in front of a hydrant (props rows of group furniture.G_HYDRANT), in a bus stop's zone
+    (streetlife.G_BUS_SIGN) or in front of a driveway's mouth
     (drives: buildings.doors' driveway chunks, "n" points from the house to the road's edge)."""
     if not spots:
         return spots
-    block = [(r[1], r[2], HYDRANT_CLEAR_M) for r in (props or ()) if r[0] == furniture.G_HYDRANT]
+    import streetlife
+    clear = {furniture.G_HYDRANT: HYDRANT_CLEAR_M, streetlife.G_BUS_SIGN: streetlife.BUS_STOP_CLEAR_M}
+    block = [(r[1], r[2], clear[r[0]]) for r in (props or ()) if r[0] in clear]
     block += [(d["n"][-1][0], d["n"][-1][1], DRIVE_CLEAR_M) for d in (drives or ()) if d.get("n")]
     if not block:
         return spots

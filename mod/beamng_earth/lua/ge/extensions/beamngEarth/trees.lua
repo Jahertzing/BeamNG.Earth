@@ -197,6 +197,25 @@ M.CATALOG = {
 }
 -- the Vienna Convention's round km/h signs: their shapes and how far out they show (CATALOG, GROUP_MAX_M)
 vienna.install(M)
+-- street life (server streetlife.py; the streetLife setting turns them all on or off): our own curbside mailbox, cluster
+-- mailbox and trash / recycling carts (tools/build_street_props.py: models' fronts at their local +x), and stock shapes
+-- whose materials are global (art_shapes.zip; East and West Coast USA's own bus stop materials share a name): the bus
+-- stop sign and shelter, the blue collection box, a bike stand and a planter. Heights as the shapes are (the rows'
+-- heights are these: scale 1).
+local BNE = '/levels/beamng_earth/art/shapes/beamngEarth/'
+M.CATALOG.mailbox = { { BNE .. 'bne_mailbox', 1.25 }, { BNE .. 'bne_mailbox_b', 1.25 } }
+M.CATALOG.mailcbu = { { BNE .. 'bne_mailbox_cbu', 1.75 } }
+M.CATALOG.cart_trash = { { BNE .. 'bne_cart_trash', 1.07 } }
+M.CATALOG.cart_recycle = { { BNE .. 'bne_cart_recycle', 1.07 } }
+M.CATALOG.bussign = { { '/art/shapes/objects/s_sign_busstop', 3.6 } }
+M.CATALOG.busshelter = { { '/art/shapes/objects/s_busstop_wcu', 2.85 } }
+M.CATALOG.uspsbox = { { WCA .. 'objects/postbox_blue', 1.53 } }
+M.CATALOG.bikerack = { { ECA .. 'clutter/clutter_city_bike_stand', 1.16 } }
+M.CATALOG.planter = { { WCA .. 'objects/planterbox', 0.8 } }
+M.STREET_LIFE = { 'mailbox', 'mailcbu', 'cart_trash', 'cart_recycle', 'bussign', 'busshelter', 'uspsbox', 'bikerack',
+  'planter' }
+for _, g in ipairs(M.STREET_LIFE) do M.GROUP_MAX_M[g] = 250 end
+M.GROUP_MAX_M.bussign, M.GROUP_MAX_M.busshelter = 400, 400
 -- billboards along the motorways (server guidesigns.billboards): West Coast USA's drag-strip billboard, 8 x 4 m on its
 -- pole, and one of its 23 ads on the same spot (bbad01 .. bbad23); seen from far, the ad never collides
 M.CATALOG.billboard = { { WCA .. 'objects/dragbillboard', 11.95 } }
