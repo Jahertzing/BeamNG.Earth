@@ -50,7 +50,9 @@ M.SCHEMA = {
   groundCover = { kind = 'bool', default = true, label = 'Grass and shrubs' },
   groundCoverDensity = { kind = 'enum', default = 'normal', values = { 'low', 'normal', 'high' }, label = 'Grass density' },
   -- how far out the grass reaches (groundcover.REACH; 'near' was the only distance before 2026-10-28)
-  groundCoverDistance = { kind = 'enum', default = 'normal', values = { 'near', 'normal', 'far' }, label = 'Grass distance' },
+  groundCoverDistance = { kind = 'enum', default = 'normal', values = { 'near', 'normal', 'far', 'max' }, label = 'Grass distance' },
+  -- the grass grain in the ground tiles past the 3D grass (satmat.lua GRASS_LAYER; the server's grass masks)
+  groundGrass = { kind = 'bool', default = true, label = 'Grass in the distant ground' },
   -- BeamNG's own AI traffic on our roads when the level-start configurator leaves it to the settings (its default):
   -- off, light, normal (the game's amount for this PC), busy (navgraph.lua MODES)
   aiTraffic = { kind = 'enum', default = 'normal', values = { 'off', 'light', 'normal', 'busy' }, label = 'AI traffic' },
@@ -88,8 +90,8 @@ M.SCHEMA = {
   updateDismissed = { kind = 'string', default = '', maxLen = 40, label = 'Update notice dismissed (version)' },
 }
 M.ORDER = { 'rebaseDistance', 'viewDistanceMode', 'viewDistanceKm', 'hazeStrength', 'skyMode', 'clouds',
-  'weatherMode', 'realGravity', 'groundCover', 'groundCoverDensity', 'groundCoverDistance', 'rocks', 'roads', 'aiTraffic',
-  'drcog', 'lidarHeights', 'dashboardSatellite', 'hudVisible', 'statusBar',
+  'weatherMode', 'realGravity', 'groundCover', 'groundCoverDensity', 'groundCoverDistance', 'groundGrass', 'rocks', 'roads',
+  'aiTraffic', 'drcog', 'lidarHeights', 'dashboardSatellite', 'hudVisible', 'statusBar',
   'placeNamesOnline', 'creditsVisible', 'beammpOnLaunch',
   'creditsCorner', 'creditsSize', 'cacheCapGb', 'devOutlineKm', 'devMapKm' }
 
@@ -265,6 +267,7 @@ M.APPLY = {
   groundCover = function(v) require('beamngEarth/groundcover').setEnabled(v) end,
   groundCoverDensity = function(v) require('beamngEarth/groundcover').setDensity(v) end,
   groundCoverDistance = function(v) require('beamngEarth/groundcover').setReach(v) end,
+  groundGrass = function(v) require('beamngEarth/satmat').GRASS_LAYER = v and true or false end,
   rocks = function(v) require('beamngEarth/trees').setGroupEnabled({ 'rock', 'desert_rock' }, v) end,
   aiTraffic = function(v) require('beamngEarth/navgraph').setMode(v) end,     -- (from the next level start)
   roads = function(v)

@@ -575,6 +575,8 @@ class Server:
         self.near_visual = near_visual
         # the near tiles' asphalt layer (mesh mode: the tiles are the ground seen; surface.road_mask)
         self.road_masks = roadsmod.ROADS_IN_GROUND and near_visual not in BLOCK_DRAWN
+        # the ground tiles' grass layer (mesh mode, with surfaces: surface.grass_mask)
+        self.grass_masks = near_visual not in BLOCK_DRAWN
         if tex is None and cells == 32:
             tex = (tex_near, tex_near, tex_far)         # the v1.3.1 rule: the two finest levels are near
         # Every layout-dependent rule reads self.layout (terrain mode: frozen at 32 cells)
@@ -2083,7 +2085,7 @@ class Server:
         engine's .cdae cache of it (DAE tiles)."""
         stem = os.path.splitext(name)[0]
         out = [os.path.join(self.out_dir, name), os.path.join(self.out_dir, stem + ".dds"),
-               os.path.join(self.out_dir, stem + "_road.dds")]
+               os.path.join(self.out_dir, stem + "_road.dds"), os.path.join(self.out_dir, stem + "_grass.dds")]
         out += [os.path.join(self.out_dir, f"{stem}_r{r}.dds") for r in range(1, rev + 1)]
         if texture is not None and os.path.join(self.out_dir, texture) not in out:
             out.append(os.path.join(self.out_dir, texture))
@@ -2255,6 +2257,7 @@ class Server:
         pending = set() if self.colormatch is not None or self.deshadow is not None else None
         if done is not None:
             texture, tex_bytes, used = done
+            self.write_grass_mask(anchor, tile, self.tex_size(lvl), texture)
             material = self.matslots.take(ck)
             self.degraded.discard(ck)
             self.imagery_worker += 1
@@ -2272,6 +2275,7 @@ class Server:
                                         blobs["mask.dds"])
                     self.write_file(os.path.join(self.out_dir, texture), blobs["tex.dds"])
                     tex_bytes, used = int(extra["tex_bytes"]), extra["used"]
+                    self.write_grass_mask(anchor, tile, px, texture)
                 else:
                     f0 = revisitmod.faults()
                     rgb, used = self.imagery.render(anchor.frame, *imagerymod.gutter_square(x0, y0, tile.size, px),
@@ -2279,6 +2283,7 @@ class Server:
                     rgb = self.rock_faces(anchor, tile, px, rgb, built.grid)
                     rgb = self.road_faces(anchor, tile, px, rgb)
                     self.write_road_mask(anchor, tile, px, texture)
+                    self.write_grass_mask(anchor, tile, px, texture)
                     tex_bytes = imagerymod.write_dds(os.path.join(self.out_dir, texture), rgb)
                     self.keep_texture(tk, texture, tex_bytes, used, pending, f0)
                 material = self.matslots.take(ck)
@@ -2394,6 +2399,22 @@ class Server:
                                      np.repeat(mask[..., None], 3, axis=2))
         except Exception as e:          # the tile without its asphalt layer
             log.debug("road mask of %s: %s", tile.key, e)
+
+    def write_grass_mask(self, anchor, tile, px, texture):
+        """The tile's grass mask beside its texture (self.grass_masks: mesh mode; surface.grass_mask over the photo's
+        square with its gutter, px the texture's edge), written before the tile is sent (the mod looks for it when it
+        sets the texture). A re-rendered texture (_r<n>) shares it: the land cover did not change."""
+        if not self.grass_masks or self.surface is None or tile.level > surfacemod.GRASS_MASK_MAX_LEVEL:
+            return
+        try:
+            x0, y0, _, _ = tile.bbox
+            mask = surfacemod.grass_mask(anchor.frame, *imagerymod.gutter_square(x0, y0, tile.size, px),
+                                         surfacemod.GRASS_MASK_PX, self.surface, self.road_widths)
+            if mask is not None:
+                imagerymod.write_dds(os.path.join(self.out_dir, surfacemod.grass_mask_name(texture)),
+                                     np.repeat(mask[..., None], 3, axis=2))
+        except Exception as e:          # the tile without its grass layer
+            log.debug("grass mask of %s: %s", tile.key, e)
 
     def retexture(self, anchor, tile, prev):
         """Worker thread: render a stale tile's texture again (its colour-match regions are ready now)

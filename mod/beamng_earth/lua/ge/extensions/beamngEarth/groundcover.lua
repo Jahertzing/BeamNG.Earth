@@ -53,11 +53,16 @@ M.SOURCES = {
 -- keep the block-move rebuild near +15 ms at 'near' (in-game at Serengeti grassland 2026-10-11:
 -- stock-ish shares +30 ms; the dense near grass costs most, the long grass was kept close, radius 70 m
 -- instead of 120). 'near' is that tuning; 'normal' gives the stock maps' distances (Hirochi's long
--- grass to 120 m), 'far' more. The user (2026-10-28): grass only showed up really close to the camera.
-local LONG = { near = { 70, 45 }, normal = { 120, 80 }, far = { 200, 150 } }
-local SHORT = { near = { 50, 30 }, normal = { 60, 42 }, far = { 80, 60 } }
-local DRY = { near = { 60, 30 }, normal = { 90, 60 }, far = { 150, 110 } }
-local SHRUB = { near = { 100 }, normal = { 150, 110 }, far = { 250, 190 } }
+-- grass to 120 m), 'far' more. The user (2026-10-28): grass only showed up really close to the camera,
+-- then "200m is NOTHING": 'max' reaches what the physics block allows. GroundCover places only on the
+-- block's layer map, and the 512² block (1 km) moves on a 128 m grid with the player up to its follow
+-- reach (260 m, earthd FOLLOW_RULES) from its centre, so ~250 m ahead is always on it; past its edge
+-- the grass just stops, inside the dissolve. Beyond that the ground's own grass layer takes over
+-- (satmat.lua GRASS_LAYER).
+local LONG = { near = { 70, 45 }, normal = { 120, 80 }, far = { 200, 150 }, max = { 300, 220 } }
+local SHORT = { near = { 50, 30 }, normal = { 60, 42 }, far = { 80, 60 }, max = { 100, 75 } }
+local DRY = { near = { 60, 30 }, normal = { 90, 60 }, far = { 150, 110 }, max = { 220, 160 } }
+local SHRUB = { near = { 100 }, normal = { 150, 110 }, far = { 250, 190 }, max = { 300, 230 } }
 M.DEFS = {
   { source = 'hirochi', src = 'small_grass_close', layer = 'bngEarthGroundGrass', share = 0.25, reach = SHORT },
   { source = 'hirochi', src = 'long_grass_distant', layer = 'bngEarthGroundGrass', share = 0.17, reach = LONG },
@@ -85,7 +90,7 @@ M.density = 1.0
 -- (radius / near radius)^REACH_EXP: 2 would keep the near density everywhere, a little less is enough
 -- where far blades overlap on screen. More elements make the block-move rebuild frame longer where
 -- tools/gcpatch is not loaded (it is Linux only).
-M.REACH = { near = true, normal = true, far = true }
+M.REACH = { near = true, normal = true, far = true, max = true }
 M.REACH_EXP = 1.5
 M.reach = 'normal'
 
@@ -150,7 +155,7 @@ function M.fieldsFor(def, layer, share)
 end
 
 -- Pure: the { field = value } overrides and the element factor of definition `d` at grass distance
--- `reach` ('near' / 'normal' / 'far'): its `fields`, then its reach's radius / dissolveRadius.
+-- `reach` ('near' / 'normal' / 'far' / 'max'): its `fields`, then its reach's radius / dissolveRadius.
 function M.reachFor(d, reach)
   local out = {}
   for k, v in pairs(d.fields or {}) do out[k] = v end
@@ -252,7 +257,7 @@ function M.setDensity(v)
   return true
 end
 
--- Grass distance (the settings page): 'near' / 'normal' / 'far'; existing objects are made again
+-- Grass distance (the settings page): 'near' / 'normal' / 'far' / 'max'; existing objects are made again
 -- with it.
 function M.setReach(v)
   if not M.REACH[v] then return false end
