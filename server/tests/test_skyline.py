@@ -105,7 +105,7 @@ class FilterTest(unittest.TestCase):
         for name in ("tall_building_parts", "tower_parts"):
             self.assertEqual(overture.LAYERS[name]["type"], "building_part")
         self.assertEqual(skyline.LAYERS, {"tall": ("tall_buildings", "tall_building_parts"),
-                                          "towers": ("towers", "tower_parts")})
+                                          "towers": ("towers", "tower_parts"), "mid": ("buildings", None)})
 
     def test_row_group_statistics(self):
         sa = overture.LAYERS["tall_buildings"]["stat_any"]
@@ -253,6 +253,56 @@ class BuildTest(unittest.TestCase):
         self.assertEqual(len(P), 4 * 4 + 4)                 # 4 walls + a flat roof
         self.assertAlmostEqual(float(P[:, 2].max()), 1600.0 + 120.0, places=3)
         self.assertAlmostEqual(float(P[:, 2].min()), 1600.0 - skyline.SKIRT_M - buildings.SKIRT_LITE_M, places=3)
+
+
+class MidRingTest(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp(prefix="skyline-mid-")
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+
+    def test_mid_filter_is_the_complement_of_tall(self):
+        f = geodesy.EnuFrame(*ANCHOR)
+        rows = [(0, 0, 10, 10, 9.0, 2), (20, 0, 10, 10, 13.0, None), (40, 0, 10, 10, None, 3),
+                (60, 0, 50, 40, None, None),                 # 2,000 m2: a warehouse
+                (120, 0, 30, 30, None, None),                # 900 m2, nothing known: left out
+                (160, 0, 10, 10, 25.0, None), (180, 0, 10, 10, None, 7),        # the tall tier's
+                (200, 0, 10, 10, 15.0, 4)]
+        layer = boxes_layer(f, rows, own=[True] * 7 + [False])
+        out = skyline.mid_left_out(f, layer)
+        self.assertEqual(sorted(out), ["b-000", "b-004", "b-005", "b-006", "b-007"])
+        # with the tall filter (overture.LAYERS "tall_buildings": height >= 20 OR num_floors >= 6) nothing overlaps
+        for i, (*_, h, nf) in enumerate(rows):
+            tall = (h is not None and h >= 20) or (nf is not None and nf >= 6)
+            if tall:
+                self.assertIn(f"b-{i:03d}", out)
+
+    def test_mid_tile_and_keys(self):
+        f = geodesy.EnuFrame(*ANCHOR)
+        key = mapcells.cell_of(*ANCHOR, z=skyline.MID_ZOOM)
+        rows = [(10, 10, 20, 20, 13.0, 4), (300, 10, 20, 20, 25.0, 8), (600, 10, 10, 10, 6.0, 2)]
+        md = FakeMD({"buildings": boxes_layer(f, rows)})
+        path, n = skyline.build_tile(f, key, "mid", md, flat_ground(), self.tmp, "/vfs", 3)
+        self.assertEqual(n, 1)
+        self.assertEqual(md.asked[0][1], ("buildings",))
+        self.assertTrue(path.endswith(f"sky_3_{key.x}_{key.y}_m.json"))
+        self.assertEqual(skyline.key_name(key), f"14_{key.x}_{key.y}")
+        self.assertEqual(skyline.key_name(mapcells.cell_of(*ANCHOR, z=skyline.ZOOM)).count("_"), 1)
+
+    def test_mid_tracker_skips_cells_under_the_far_tiles(self):
+        f = geodesy.EnuFrame(*ANCHOR)
+        tr = skyline.mid_tracker()
+        self.addCleanup(tr.close)
+        want, _ = tr.wanted(f, 0.0, 0.0)
+        self.assertTrue(want)
+        self.assertTrue(all(w[2] == "mid" and w[1].z == skyline.MID_ZOOM for w in want))
+        self.assertTrue(all(w[3] <= skyline.MID_SEND_M for w in want))
+        for _, key, _, d in want:               # none lies wholly under the far building tiles
+            x0, y0, x1, y1 = tr.boxes[key]
+            self.assertGreaterEqual(max(abs(x0), abs(x1), abs(y0), abs(y1)), buildings.FAR_SEND_M - 256.0)
+        # a cell within the mid ring is in a z12 cell of the "tall" tier (the two filters meet exactly)
+        for _, key, _, d in want:
+            parent = key.parent(skyline.ZOOM)
+            self.assertEqual(skyline.tier_for(skyline.box_distance(skyline.cell_box(f, parent), 0.0, 0.0)), "tall")
 
 
 class Conn:

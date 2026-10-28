@@ -2807,6 +2807,7 @@ class Connection:
         self.bldfar = vegetationmod.Tracker(buildingsmod.FAR_SEND_M, buildingsmod.FAR_DROP_M,
                                             buildingsmod.FAR_PER_POSE, "bldfar")
         self.sky = skylinemod.Tracker()         # the skyline's z12 cells (--skyline on): after the far buildings
+        self.mid = skylinemod.mid_tracker()     # ... and its mid ring of z14 cells (2-6 km)
         self.nav = navgraphmod.Tracker()        # the AI road graph around the player (--traffic on)
         self.nav_wait = {}                      # anchor id -> monotonic time its first AI graph was wanted
         self.gravity = gravitymod.Tracker()     # real gravity: recompute rule, last message sent
@@ -3166,7 +3167,7 @@ class Connection:
             self.s.connections.discard(self)
             self.s.slots_let_go(list(self.slot_holds))
             self.slot_holds = {}
-            for tr in (self.roads, self.veg, self.bldfar, self.sky, self.nav):
+            for tr in (self.roads, self.veg, self.bldfar, self.sky, self.mid, self.nav):
                 tr.close()
             self.s.drop_claims(self)
             self.streamer.cancel()
@@ -3749,6 +3750,8 @@ class Connection:
             anchor = self.s.anchors.get(aid)
             if self.s.skyline and anchor is not None:  # (low priority: none starts while a far building tile builds)
                 self.sky.on_pose(self, aid, anchor.frame, *self.focus, asyncio.get_running_loop(),
+                                 self.s.build_skyline_tile, vel=self.vel, busy=bool(self.bldfar.building))
+                self.mid.on_pose(self, aid, anchor.frame, *self.focus, asyncio.get_running_loop(),
                                  self.s.build_skyline_tile, vel=self.vel, busy=bool(self.bldfar.building))
         if self.s.traffic and aid == self.active and self.nav_may_start(aid):
             self.nav.on_pose(self, aid, *self.focus, asyncio.get_running_loop(), self.s.build_navgraph)
