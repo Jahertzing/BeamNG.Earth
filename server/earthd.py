@@ -89,6 +89,7 @@ import surface as surfacemod  # noqa: E402
 import navgraph as navgraphmod  # noqa: E402
 import prewarm as prewarmmod  # noqa: E402
 import parking as parkingmod  # noqa: E402
+import streetlife as streetlifemod  # noqa: E402
 import gasstations as gasstationsmod  # noqa: E402
 import roads as roadsmod  # noqa: E402
 import rails as railsmod  # noqa: E402
@@ -1322,6 +1323,8 @@ class Server:
         cover = []                      # the ground carriageways for the decks' parapets (roadmesh.deck ground=)
         pocket_cells = [cell_fn(k) for k in roadsmod.cells_of_tile(anchor.frame, tx, ty, roadsmod.POCKET_REACH_M)]
         signs = []                      # highway signs (guidesigns.py)
+        tile_ground = lambda x, y: roadmeshmod.drawn_ground(anchor.frame, drawn, np.c_[x, y],  # noqa: E731
+                                                            self.anchor_q(anchor))
         chunks = roadsmod.build_tile(anchor.frame, tx, ty, cells, elev, urban, walks=walks, deck_context=ctx, bridges=anchor.bridges,
                                      pocket_cells=pocket_cells,     # (the segments going on: their tapers)
                                      walk_cuts=fuel_cuts,    # (the stations' made-up driveways: no sidewalk across them)
@@ -1330,8 +1333,7 @@ class Server:
                                      lamp_region=self.lamp_region(anchor),
                                      structures=buildingsmod.centres(items, tx, ty) if items else (),
                                      tunnels=anchor.tunnels, walls=rwalls,
-                                     ground=lambda x, y: roadmeshmod.drawn_ground(anchor.frame, drawn, np.c_[x, y],
-                                                                                  self.anchor_q(anchor)),
+                                     ground=tile_ground,
                                      terrain_paint=self.surface is not None, cover_out=cover,
                                      signals=furnituremod.signals_for(
                                          self.mapdata, anchor.frame,
@@ -1353,6 +1355,12 @@ class Server:
             props.extend(buildingsmod.doors(items, lines, x0, y0, drives))
             props.extend(buildingsmod.toll_booth_rows(items, x0, y0))
             props.extend(buildingsmod.beacon_rows(items, x0, y0))      # (red lights on towers)
+            if streetlifemod.ENABLED:   # mailboxes, carts, bus stops; the driveways' parking spots
+                props.extend(streetlifemod.tile_rows(
+                    anchor.frame, self.mapdata, roadsmod.cells_of_tile(anchor.frame, tx, ty, margin=0.0), drives, walks,
+                    lines, roadsmod.tile_bbox(tx, ty), tile_ground,
+                    us=bool(self.mph(anchor)) and str(self.lamp_region(anchor) or "").startswith("na"),
+                    town=bool(town), left_hand=self.left_hand(anchor), props=props, spots=park))
             drives.extend(buildingsmod.garage_drives(items, lines, x0, y0))
             chunks += drives
             park = parkingmod.clear_of(park, props, drives)

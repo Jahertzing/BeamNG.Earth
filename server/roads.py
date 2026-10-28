@@ -6039,6 +6039,11 @@ def build_tile(frame, tx, ty, cells, elev, urban_fn=None, walks=None, bridges=No
                                      speeds={k: v for k, v in speeds.items() if v is not None}, mph=mph,
                                      decks=decks, signals=signals, buried=buried, region=lamp_region,
                                      lits=lits))
+        import streetlife
+        if streetlife.ENABLED:                      # a dense core's blue boxes, bike racks and planters
+            props.extend(streetlife.clear_of(
+                streetlife.downtown_rows(roads, walks, (x0, y0, x1, y1), us=bool(mph) and furniture._na(lamp_region),
+                                         town=town is None or bool(town)), props))
     if park is not None and walks is not None:      # curbside parking spots (parking.py)
         import parking
         dirs = {}
