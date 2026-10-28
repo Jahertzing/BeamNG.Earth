@@ -166,6 +166,33 @@ do
   local _, _, _, _, _, h4 = N.aheadSpot(0, 700, 0, 30, box)
   T.check(h4 and h4 == 323 - room, 'aheadSpot: north, limited by the box too: ' .. tostring(h4))
 end
+-- the cut test walks the car's own road on (bench4: the 45-degree cone respawned cars for cut side streets and junctions)
+do
+  local function nd(x, y) return { pos = vec3(x, y, 0), radius = 7, links = {} } end
+  local g = { a = nd(0, 0), b = nd(80, 0), c = nd(160, 0), d = nd(240, 0), s = nd(80, 60), t = nd(-40, 40), u = nd(-40, 120) }
+  local function link(p, q, oneWay)
+    local e = { oneWay = oneWay, inNode = p, outNode = q }
+    g[p].links[q] = e
+    g[q].links[p] = e
+  end
+  link('a', 'b', true) link('b', 'c', true) link('c', 'd', true) link('b', 's', false) link('a', 't', false)
+  link('t', 'u', false)
+  -- d and s lost roads to the clip; u is a real dead end (a cul-de-sac)
+  local cutSet = N.cutSet({ { 240, 0, name = 'd' }, { 80, 60, name = 's' }, { 0, 0 } })
+  T.check(cutSet.d and cutSet.s and not cutSet.u, 'cutSet: the named cuts')
+  T.check(N.cutAhead(g, cutSet, 'a', 'b', 10, 0, 1, 0, 300) == true, 'cutAhead: the motorway itself ends at a cut ahead')
+  T.check(N.cutAhead(g, cutSet, 'a', 'b', 10, 0, 1, 0, 150) == false, '... but farther than reach: not yet')
+  T.check(N.cutAhead(g, cutSet, 'b', 'a', 10, 0, 1, 0, 300) == true, '... the stock search gave the nodes the other way round')
+  -- d continues: the junction b whose side street s is cut is no dead end for a car going on
+  g.e = nd(320, 0) link('d', 'e', true)
+  cutSet.d = nil
+  T.check(N.cutAhead(g, cutSet, 'a', 'b', 10, 0, 1, 0, 300) == false, 'cutAhead: a junction whose cross street was cut: not')
+  T.check(N.cutAhead(g, cutSet, 't', 'u', -40, 50, 0, 1, 300) == false, 'cutAhead: a real dead end (no cut): left to the AI')
+  T.check(N.cutAhead(g, cutSet, 'x', 'y', 0, 0, 1, 0, 300) == nil, 'cutAhead: not on this graph: nil (the cone decides)')
+  local adj = N.adjacency(g)
+  g.b.links = { a = g.b.links.a }       -- (map.reset's convertToSingleSided gives each node a new links table)
+  T.check(adj.b.links.c and adj.b.links.s and adj.b.pos == g.b.pos, 'adjacency: the links as they were before the reset')
+end
 -- a car keeps its route across a new map when every node of it is still there, in place and linked (keepRouteLua);
 -- ai.lua is stood in for by a closure with its two upvalues, run through the same debug-library calls
 do
@@ -178,8 +205,11 @@ do
     link('c1', 's5_1') link('s5_1', 's5_2') link('s5_2', 'c2') link('c2', 'c3')
     return { positions = pos, graph = g }
   end
-  local function run(newMap, route, mode)
-    local mapData, currentRoute = graphOf(0), route
+  -- aiMap: the map ai.lua last saw (default: the map being replaced; false: none, a car respawned since)
+  local function run(newMap, route, mode, aiMap)
+    local current = graphOf(0)
+    local mapData, currentRoute = current, route
+    if aiMap ~= nil then mapData = aiMap or nil end
     local reports = {}
     _G.ai = { mode = mode or 'traffic' }
     _G.ai.updateGFX = function()
@@ -187,30 +217,43 @@ do
       mapData = mapmgr.mapData
       return currentRoute
     end
-    _G.mapmgr = { mapData = mapData, setMap = function() mapmgr.mapData = newMap end }
+    _G.mapmgr = { mapData = current, setMap = function() mapmgr.mapData = newMap end }
     _G.obj = { queueGameEngineLua = function(_, s) reports[#reports + 1] = s end }
     _G.objectId = 42
     assert(loadstring(N.keepRouteLua()))()
     mapmgr.setMap(7)
     return ai.updateGFX(), reports
   end
-  local route = { path = { 'c1', 's5_1', 's5_2', 'c2' } }
+  local route = { path = { 'c1', 's5_1', 's5_2', 'c2' }, plan = { { pathidx = 1 } } }
   local kept, rep = run(graphOf(0), route)
   T.check(kept == route, 'keepRoute: the same nodes in the new map: the route kept')
-  T.check(#rep == 1 and rep[1]:find('routeKept(42, true)', 1, true), 'keepRoute: reported kept: ' .. tostring(rep[1]))
-  T.check(run(graphOf(0.1), route) == route, 'keepRoute: nodes 0.1 m off (rounding): kept')
+  T.check(#rep == 1 and rep[1]:find('routeKept(42, "kept")', 1, true), 'keepRoute: reported kept: ' .. tostring(rep[1]))
+  T.check(run(graphOf(0.3), route) == route, 'keepRoute: nodes 0.3 m off (rounding): kept')
+  local zg = graphOf(0)
+  for _, p in pairs(zg.positions) do p.z = p.z + 1.5 end
+  T.check(run(zg, route) == route, 'keepRoute: the ground under the nodes 1.5 m higher (streamed in): kept')
   local moved, rep2 = run(graphOf(15000), route)
-  T.check(moved == nil and rep2[1]:find('routeKept(42, false)', 1, true), 'keepRoute: a rebase moved every node: dropped')
-  T.check(run(graphOf(0, 's5_2'), route) == nil, 'keepRoute: a node of the route clipped away: dropped')
+  T.check(moved == nil and rep2[1]:find('"moved"', 1, true), 'keepRoute: a rebase moved every node: dropped, moved')
+  local _, rep4 = run(graphOf(0, 's5_2'), route)
+  T.check(rep4[1]:find('"missing"', 1, true), 'keepRoute: a node of the route clipped away: dropped, missing')
   local g = graphOf(0)
   g.graph.s5_1.s5_2, g.graph.s5_2.s5_1 = nil, nil
-  T.check(run(g, route) == nil, 'keepRoute: a link of the route gone: dropped')
+  local _, rep5 = run(g, route)
+  T.check(rep5[1]:find('"link"', 1, true), 'keepRoute: a link of the route gone: dropped, link')
+  -- bench4: the route's nodes behind the car (up to ten) clipped away as the block moved on: they do not count
+  local behind = { path = { 'c1', 's5_1', 's5_2', 'c2', 'c3' }, plan = { { pathidx = 3 } } }
+  T.check(run(graphOf(0, 'c1'), behind) == behind, 'keepRoute: a node behind the start of the car plan clipped away: kept')
+  -- ai.lua's map older than the one replaced (two maps in a row before its next frame): checked against its own
+  local older = graphOf(0)
+  T.check(run(graphOf(0), route, nil, older) == route, 'keepRoute: against the map the route was made on: kept')
+  local _, rep6 = run(graphOf(0), route, nil, false)
+  T.check(#rep6 == 0, 'keepRoute: a car respawned since (ai.lua has no map): nothing to keep, nothing reported')
   T.check(run(graphOf(0), route, 'manual') == nil, 'keepRoute: only traffic mode (the GPS autodrive is left alone)')
   local _, rep3 = run(graphOf(0), nil)
   T.check(#rep3 == 0, 'keepRoute: no route yet: nothing to keep, nothing reported')
-  N.routeKept(1, true) N.routeKept(2, false) N.routeKept(3, true)
+  N.routeKept(1, 'kept') N.routeKept(2, 'missing') N.routeKept(3, 'kept') N.routeKept(4, 'missing')
   local st = N.status()
-  T.check(st.routesKept >= 2 and st.routesDropped >= 1, 'routeKept: counted in status')
+  T.check(st.routesKept >= 2 and st.routesDropped >= 2 and st.routeDrops.missing >= 2, 'routeKept: counted in status, by reason')
   _G.ai, _G.mapmgr, _G.obj, _G.objectId = nil, nil, nil, nil
 end
 -- a rebase (core finishRebase): the graph in the new frame, its signals' stop points, directions and heads too

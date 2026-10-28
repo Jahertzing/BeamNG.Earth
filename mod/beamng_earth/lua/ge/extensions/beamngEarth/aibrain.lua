@@ -211,9 +211,11 @@ local function roadAt(s)
   if map.findBestRoad then n1, n2 = map.findBestRoad(pos, vec3(s.fx, s.fy, 0)) end
   if not n1 and map.findClosestRoad then n1, n2 = map.findClosestRoad(pos) end
   if not (n1 and n2) then return nil end
-  local nodes = map.getMap().nodes
+  -- (navgraph's copy has every edge on both its nodes; the game's map keeps each on one of them only)
+  local okN, nav = pcall(require, 'beamngEarth/navgraph')
+  local nodes = okN and nav.graphNodes and nav.graphNodes() or map.getMap().nodes
   local a, b = nodes[n1], nodes[n2]
-  local e = a and a.links and a.links[n2]
+  local e = a and a.links and a.links[n2] or b and b.links and b.links[n1]
   if not (a and b and e) then return nil end
   local inN, outN = nodes[e.inNode or n1] or a, nodes[e.outNode or n2] or b
   local ex, ey = outN.pos.x - inN.pos.x, outN.pos.y - inN.pos.y
