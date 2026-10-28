@@ -1191,6 +1191,17 @@ class ColorMatch:
                 except Exception:
                     log.exception("colormatch listener")
 
+    def build(self, rk):
+        """Compute and keep rk's field now, in the calling thread, unless it is on disk (the world folder's or the
+        cache's; tools/preload.py's derive lane, its bound imagery the pre-load's). True when computed."""
+        if self._on_disk(rk) is not None:
+            return False
+        t0 = time.perf_counter()
+        F, info = self._compute_field(rk)
+        info["seconds"] = round(time.perf_counter() - t0, 2)
+        self._store(rk, "field", F, info)
+        return True
+
     def _log_region(self, rk, F, m, cached):
         """Once per region: seams in reach (count, length, step %), time, cache hit."""
         if rk in self._logged:
