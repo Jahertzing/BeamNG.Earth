@@ -293,6 +293,7 @@ class Cursor:
         self.max_m = float(max_m)
         self.pins = {(round(float(a[0]), 7), round(float(a[1]), 7)) for a in pins}
         self.route = None           # [(lat, lon), ...] the GPS route from the car, or None (the heading)
+        self._line = None           # its resample (lats, lons, s)
         self.rebase_m = DEFAULT_DISTANCE
         self.pinned_rule = False    # the mod applies the pinned-anchor rule to the anchors we send (route "pins")
         self.items = []             # the plan, by due
@@ -313,6 +314,7 @@ class Cursor:
     def set_route(self, points, pinned_rule=False, rebase_m=None):
         """A GPS route from the car ([[lat, lon], ...], None: none): planned again at the next tick."""
         self.route = [(float(p[0]), float(p[1])) for p in points] if points and len(points) >= 2 else None
+        self._line = resample(self.route, STEP_M) if self.route else None     # (sampled once: locate() per tick)
         self.pinned_rule = bool(pinned_rule)
         if rebase_m:
             self.rebase_m = max(2000.0, min(16000.0, float(rebase_m)))
@@ -330,7 +332,7 @@ class Cursor:
         heading = math.atan2(vy, vx) if v > 1.0 else (self.plan_at[3] if self.plan_at else 0.0)
         line, s0, self.off_route = None, 0.0, False
         if self.route:
-            la_s, lo_s, s_s = resample(self.route, STEP_M)
+            la_s, lo_s, s_s = self._line
             e, n, _ = frame.geodetic_to_enu(la_s, lo_s, 0.0)
             d = np.hypot(np.asarray(e, float) - x, np.asarray(n, float) - y)
             i = int(np.argmin(d))
@@ -405,7 +407,7 @@ class Cursor:
         """The car's distance along the route (m) when within OFF_ROUTE_M of it, else None."""
         if not self.route:
             return None
-        la_s, lo_s, s_s = resample(self.route, STEP_M)
+        la_s, lo_s, s_s = self._line
         e, n, _ = frame.geodetic_to_enu(la_s, lo_s, 0.0)
         d = np.hypot(np.asarray(e, float) - x, np.asarray(n, float) - y)
         i = int(np.argmin(d))
