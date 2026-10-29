@@ -128,4 +128,38 @@ getDesktopVideoMode = function() return '2560 1440 Borderless 32 144 0' end
 T.check(P.gameRefresh() == 144, 'gameRefresh falls back to the desktop mode')
 getDesktopVideoMode = nil
 T.check(P.gameRefresh() == nil, 'gameRefresh: nothing known')
+-- the budget: the longer of the refresh period and the cap's (a 97 cap under 100 Hz: 10.31 ms, lap 3 2026-10-29)
+T.check(P.capFrom({ fpsCap = 97, foregroundCap = 97, foregroundActive = true, backgroundCap = 60, backgroundActive = false, vsync = true }) == 97, 'the cap in force')
+T.check(P.capFrom({ fpsCap = 0, foregroundCap = 85, foregroundActive = false, backgroundCap = 30, backgroundActive = true }) == 30, 'the background cap while it is active')
+T.check(P.capFrom('vsync') == nil and P.capFrom({ fpsCap = 0 }) == nil, 'no cap: nil')
+GFXDevice = { getVideoMode = function() return { refreshRate = 100 } end }
+Engine = { getCurrentFpsLimitReason = function() return { fpsCap = 97, foregroundCap = 97, foregroundActive = true } end }
+T.near(P.gameBudgetMs(), 1000 / 97, 1e-9, 'budget: the cap under the refresh')
+Engine = { getCurrentFpsLimitReason = function() return { fpsCap = 144 } end }
+T.near(P.gameBudgetMs(), 10, 1e-9, 'budget: the refresh under the cap')
+Engine = nil
+T.near(P.setBudget(P.gameBudgetMs()), 10, 1e-9, 'setBudget')
+GFXDevice = nil
+T.check(P.gameBudgetMs() == nil, 'budget: nothing known')
+P.setRefresh(85)
+-- a drop's line carries the GPU passes' means over its window when the caller gives them
+lines = {}
+P.reset()
+now = 0
+ctx = function() return { lat = 39.7, lon = -105, mph = 100 } end
+local gpuCalls = 0
+local function gpu() gpuCalls = gpuCalls + 1; return { Shadows = 9.5, Main = 4.2, Tiny = 0.1 } end
+local function runG(seconds, ms)
+  local t_end = now + seconds
+  while now < t_end do
+    now = now + ms / 1000
+    for _, l in ipairs(P.frame(ms, now, ctx, nil, nil, function() return { Render = 2 } end, gpu)) do lines[#lines + 1] = l end
+  end
+end
+runG(30, 1000 / 90)
+runG(10, 1000 / 55)
+local dl = find('perf drop')
+T.check(#dl == 1 and dl[1]:find('gpu per frame: Shadows 9.5, Main 4.2', 1, true) and not dl[1]:find('Tiny', 1, true),
+  'the drop line: the GPU passes over the window (the small ones left out): ' .. tostring(dl[1]))
+T.check(gpuCalls > 0 and gpuCalls * P.ENGINE_EVERY <= 40 * 90 + 10, 'the GPU timings sampled with the engine, every ENGINE_EVERY frames')
 T.done('test_perflog')

@@ -83,6 +83,40 @@ function M.gameRefresh()
   return M.refreshFrom(okV and vm or nil, okD and dm or nil)
 end
 
+-- Pure: the fps cap in force from Engine.getCurrentFpsLimitReason()'s table (0.40: fpsCap, foregroundCap with
+-- foregroundActive, backgroundCap with backgroundActive) or nil (no cap, a string, nothing).
+function M.capFrom(lim)
+  if type(lim) ~= 'table' then return nil end
+  local best = nil
+  local function take(v, on)
+    v = tonumber(v)
+    if on ~= false and v and v > 0 and (not best or v < best) then best = v end
+  end
+  take(lim.fpsCap, true)
+  take(lim.foregroundCap, lim.foregroundActive)
+  take(lim.backgroundCap, lim.backgroundActive)
+  return best
+end
+
+-- The frame budget (ms) from the game: the longer of the refresh period and the fps cap's period (a cap under the
+-- refresh makes an on-time frame the cap's; lap 3 of 2026-10-29: a 97 cap under 100 Hz VRR, 10.31 ms), or nil.
+function M.gameBudgetMs()
+  local hz = M.gameRefresh()
+  local okL, lim = pcall(function() local f = rawget(_G, 'Engine') and Engine.getCurrentFpsLimitReason; return f and f() end)
+  local cap = okL and M.capFrom(lim) or nil
+  local ms = nil
+  if hz then ms = 1000 / hz end
+  if cap then ms = math.max(ms or 0, 1000 / cap) end
+  return ms
+end
+
+-- The frame budget (ms) set directly (gameBudgetMs); REFRESH_HZ follows it.
+function M.setBudget(ms)
+  ms = tonumber(ms)
+  if ms and ms > 0 then M.BUDGET_MS, M.REFRESH_HZ = ms, 1000 / ms end
+  return M.BUDGET_MS
+end
+
 -- The largest numeric entry of a {name = ms} table: name, ms (nil when none).
 local function largest(t)
   local bk, best = nil, 0
@@ -158,7 +192,10 @@ end
 -- (called only when a line is made); hitch: core's hitch record for this frame ({mod = {}, engine = {}}) or nil;
 -- mod: the mod's parts this frame {name = ms} (summed over the window); engine(): the engine's breakdown {name = ms}
 -- (sampled every ENGINE_EVERY frames). Returns a list of lines (often empty).
-function M.frame(ms, now, ctx, hitch, mod, engine)
+-- gpu(): the engine's GPU pass timings {name = ms} (core.gpuTimings; sampled with the engine's every ENGINE_EVERY
+-- frames for the drop line's means: lap 3 of 2026-10-29 dropped to 60 fps for 25 s with 6 ms of present wait a
+-- frame and nothing in the mod's parts, which pass grew is what the line now says).
+function M.frame(ms, now, ctx, hitch, mod, engine, gpu)
   local out = {}
   if type(ms) ~= 'number' or ms ~= ms or ms <= 0 then return out end
   -- a clock that went back (core's st.clock starts at 0 again with each level start): the old marks would hold every
@@ -233,6 +270,12 @@ function M.frame(ms, now, ctx, hitch, mod, engine)
       w.engN = w.engN + 1
       for k, v in pairs(e) do if type(v) == 'number' then w.eng[k] = (w.eng[k] or 0) + v end end
     end
+    local g = gpu and gpu()
+    if g then
+      w.gpu = w.gpu or {}
+      w.gpuN = (w.gpuN or 0) + 1
+      for k, v in pairs(g) do if type(v) == 'number' then w.gpu[k] = (w.gpu[k] or 0) + v end end
+    end
   end
   if now - w.t0 >= M.WINDOW_S then
     local fps = w.n / (w.ms / 1000)
@@ -250,6 +293,12 @@ function M.frame(ms, now, ctx, hitch, mod, engine)
         if m ~= '' then line = line .. ' | mod over the window (ms): ' .. m end
         local e = top(engMean, 5, 1)
         if e ~= '' then line = line .. ' | engine per frame: ' .. e end
+        if w.gpu and (w.gpuN or 0) > 0 then
+          local gpuMean = {}
+          for k, v in pairs(w.gpu) do gpuMean[k] = v / w.gpuN end
+          local g = top(gpuMean, 5, 0.5)
+          if g ~= '' then line = line .. ' | gpu per frame: ' .. g end
+        end
         if c.doing and c.doing ~= '' then line = line .. ' | doing: ' .. c.doing end
         out[#out + 1] = line
         drop = { since = w.t0, low = fps }

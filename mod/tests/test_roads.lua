@@ -255,6 +255,25 @@ roads.update(gov, 2)
 T.check(#statics() == 1, 'made once the car is clear')
 roads.onDrop({ anchorId = 2, key = '0_0' })
 roads.update(gov, 2)
+-- a deck in pieces (server meshpieces.py: "deck", "deck2", ... each a unit the governor spreads; 2026-10-29): colliders
+-- like the deck, sharing the deck's boxes (held together), all gone with the tile
+files['/t/dp.json'] = '{ chunks = { }, deck = { shape = "/t/deck_2_9_9.cdae", pos = { 0, 0, 0 } }, ' ..
+  'deck2 = { shape = "/t/deck_2_9_9_2.cdae", pos = { 0, 0, 0 } }, deck3 = { shape = "/t/deck_2_9_9_3.cdae", pos = { 0, 0, 0 } }, ' ..
+  'colliders = { deck = { { 100, 100, 7.8, 120, 110, 12 } } } }'
+car.pos = vec3(110, 105, 9.0)          -- in the deck's slab
+roads.onTile({ anchorId = 2, key = '0_0', path = '/t/dp.json', n = 0 }, 2)
+roads.update(gov, 2)
+T.check(#statics() == 0, "pieces: every piece held with the car in the deck's slab")
+car.pos = vec3(200, 105, 0.5)
+roads.update(gov, 2)
+local pieces = statics()
+local pieceCols = 0
+for _, o in ipairs(pieces) do if o.fields.collisionType == 'Visible Mesh Final' then pieceCols = pieceCols + 1 end end
+T.check(#pieces == 3 and pieceCols == 3, 'pieces: three colliding units once the car is clear (' .. #pieces .. ')')
+T.check(roads.kindOf('deck2') == 'deck' and roads.kindOf('bldcol12') == 'bldcol' and roads.kindOf('walk') == 'walk', 'kindOf')
+roads.onDrop({ anchorId = 2, key = '0_0' })
+roads.update(gov, 2)
+T.check(#statics() == 0, 'pieces: all gone with the tile')
 -- with a lean collision mesh the drawn sidewalk is render-only: made with the car in its box (it cannot catch the car;
 -- held, a roundabout's island band was never drawn, 2026-10-17); the collision mesh still waits
 files['/t/hl.json'] = '{ chunks = { }, walk = { shape = "/t/walks_2_8_8.cdae", pos = { 0, 0, 0 } }, ' ..

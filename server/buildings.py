@@ -3064,6 +3064,28 @@ def garage_sound_boxes(items, x0, y0, kind):
 BLD_LOD_PX = 2700.0
 
 
+def write_collision_pieces(path, mesh, max_tris, max_pieces):
+    """write(collision_only=True) in pieces (meshpieces.split: at most max_tris triangles each): the files' names, the
+    first at path, the others <stem>_<i>.cdae; one file when the mesh is small enough. A tile's lean building
+    collision mesh registered in one 1.3 s step on the game's main thread (2026-10-29)."""
+    import cdae
+    import meshpieces
+    P, UV, T, M, mats, C = mesh[:6]
+    T = np.asarray(T)
+    if len(T) <= max_tris:
+        write(path, mesh, collision_only=True)
+        return [os.path.basename(path)]
+    P, UV, M = np.asarray(P), np.asarray(UV), np.asarray(M)
+    C = np.asarray(C) if C is not None else None
+    names = []
+    for i, ((lo, hi), ids, Ti) in enumerate(meshpieces.split(T, max_tris, max_pieces), 1):
+        p = meshpieces.piece_path(path, i)
+        cdae.write(p, P[ids], Ti, uvs=UV[ids], material=list(mats), tri_materials=M[lo:hi], object_name="buildings",
+                   colors=C[ids] if C is not None else None, collision_only=True)
+        names.append(os.path.basename(p))
+    return names
+
+
 def write(path, mesh, collision_only=False):
     """The tile's .cdae (cdae.encode with one primitive per material; collision_only: a never-drawn collision detail).
     A mesh with a 7th element (build_parts with_lod) gets that lite mesh as its coarse detail below BLD_LOD_PX."""

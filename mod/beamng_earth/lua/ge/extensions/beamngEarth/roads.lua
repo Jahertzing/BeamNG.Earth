@@ -266,6 +266,34 @@ local function noteUnit(kind, ms, shape, info)
   if ms > u.max then u.max = ms end
 end
 
+-- A colliding mesh comes in pieces when it is big (server meshpieces.py: COLLIDER_PIECE_TRIS triangles each, the
+-- engine's collision set-up at registration being ~50 us a triangle on the main thread, 2026-10-29: a deck 53 ms, a
+-- railway 112 ms, a building collision mesh 1.3 s in one unit): "deck", "deck2", ... up to PIECES, each a unit of
+-- its own that the governor spreads. kindOf('deck2') == 'deck': the rules go by the kind, the bookkeeping (t[what],
+-- colWant, colAt, cq) by the name. The drawn buildings keep their own "bld2".."bld4" (the engine's index limit).
+M.PIECES = 12
+local PIECE_KINDS = { deck = true, tunnel = true, rail = true, bldcol = true, walkcol = true }
+local function kindOf(what) return type(what) == 'string' and what:match('^%a+') or what end
+M.kindOf = kindOf
+local function withPieces(kinds)
+  local out = {}
+  for _, k in ipairs(kinds) do
+    out[#out + 1] = k
+    if PIECE_KINDS[k] then for i = 2, M.PIECES do out[#out + 1] = k .. i end end
+  end
+  return out
+end
+local DROP_WHATS = withPieces({ 'deck', 'bld', 'bld2', 'bld3', 'bld4', 'bldcol', 'walkcol', 'tunnel', 'rail', 'sign', 'signcol' })
+local SLOT_WHATS = withPieces({ 'road', 'deck', 'walk', 'walkcol', 'bld', 'bld2', 'bld3', 'bld4', 'bldcol', 'wire', 'tunnel',
+  'rail', 'sign', 'signcol' })
+local COLLIDER_WHATS = withPieces({ 'walk', 'deck', 'bld', 'bld2', 'bld3', 'bld4', 'bldcol', 'walkcol', 'tunnel', 'rail', 'signcol' })
+-- the collider boxes of a unit: its own, or its kind's (the pieces share the kind's boxes)
+local function boxesOf(t, what)
+  local c = t and t.colliders
+  if type(c) ~= 'table' then return nil end
+  return c[what] or c[kindOf(what)]
+end
+
 local function dropTile(key)
   local t = tiles[key]
   if not t then return end
@@ -273,8 +301,7 @@ local function dropTile(key)
   for _, id in ipairs(t.objs) do deleteQ[#deleteQ + 1] = id end
   if t.walk then deleteQ[#deleteQ + 1] = t.walk end
   if t.road then deleteQ[#deleteQ + 1] = t.road end
-  if t.deck then deleteQ[#deleteQ + 1] = t.deck end
-  for _, w in ipairs({ 'bld', 'bld2', 'bld3', 'bld4', 'bldcol', 'walkcol', 'tunnel', 'rail', 'sign', 'signcol' }) do if t[w] then deleteQ[#deleteQ + 1] = t[w] end end
+  for _, w in ipairs(DROP_WHATS) do if t[w] then deleteQ[#deleteQ + 1] = t[w] end end
   if t.wire then deleteQ[#deleteQ + 1] = t.wire end
   -- and its meshes not made yet (from KyzoFox's 1.5.4, PR #64): a tile sent again under the same key left its old
   -- walkQ / held / createQ entries, which were then made for the new tile from pooled shape paths that had just been
@@ -515,8 +542,7 @@ function M.onTile(msg, currentAnchor)
   end
   -- pooled shape files: the server's slot paths instead of the tile's own files
   local slots = {}
-  for _, what in ipairs({ 'road', 'deck', 'walk', 'walkcol', 'bld', 'bld2', 'bld3', 'bld4', 'bldcol', 'wire', 'tunnel', 'rail',
-                          'sign', 'signcol' }) do
+  for _, what in ipairs(SLOT_WHATS) do
     local sl = msgSlot(msg, what)
     if sl then
       if type(data[what]) == 'table' and type(data[what].pos) == 'table' then
@@ -574,11 +600,12 @@ function M.onTile(msg, currentAnchor)
   local lean = type(data.bldcol) == 'table' and data.bldcol.shape ~= nil
   local leanWalk = type(data.walkcol) == 'table' and data.walkcol.shape ~= nil
   -- tunnels (server roadmesh.tunnel: tubes and portals) and railway tracks (server railways.py) collide like the decks
-  for _, what in ipairs({ 'walk', 'deck', 'bld', 'bld2', 'bld3', 'bld4', 'bldcol', 'walkcol', 'tunnel', 'rail', 'signcol' }) do
+  for _, what in ipairs(COLLIDER_WHATS) do
     local w = data[what]
     if type(w) == 'table' and w.shape and type(w.pos) == 'table' then
+      local kind = kindOf(what)
       local q = { key = key, walk = w, what = what, tile = tiles[key],
-        renderOnly = (lean and what:sub(1, 3) == 'bld' and what ~= 'bldcol') or (leanWalk and what == 'walk') }
+        renderOnly = (lean and kind:sub(1, 3) == 'bld' and kind ~= 'bldcol') or (leanWalk and kind == 'walk') }
       if not q.renderOnly then tiles[key].colWant[what] = true end
       if q.renderOnly or M.collideNear(tiles[key]) then walkQ[#walkQ + 1] = q else parked[#parked + 1] = q end
     end
@@ -1014,8 +1041,8 @@ local ghostCols = nil       -- { {x, y, what = {kind = true}} } of the rebase's 
                             -- until a rebuild)
 local ghostColsEnd = false
 
-local WHATS = { 'walk', 'road', 'deck', 'bld', 'bld2', 'bld3', 'bld4', 'bldcol', 'walkcol', 'wire', 'tunnel', 'rail', 'sign',
-  'signcol' }
+local WHATS = withPieces({ 'walk', 'road', 'deck', 'bld', 'bld2', 'bld3', 'bld4', 'bldcol', 'walkcol', 'wire', 'tunnel', 'rail',
+  'sign', 'signcol' })
 
 function M.transform(xf, geodesy)
   local bx, by, bz, bw = xf:beamngQuat()
@@ -1276,7 +1303,7 @@ function M.update(gov, currentAnchor, player, view, cam)
     -- (only a colliding mesh waits: a render-only one (q.renderOnly: the drawn sidewalks and buildings beside their lean
     -- collision meshes) cannot catch the car, and holding it hid a whole tile's sidewalks while the car stood in their
     -- box: a roundabout's island band was never drawn, 2026-10-17 Harbor Point)
-    if t and q.what ~= 'road' and not q.renderOnly and playerIn(t.colliders[q.what], q.what) then
+    if t and q.what ~= 'road' and not q.renderOnly and playerIn(boxesOf(t, q.what), q.what) then
       held[#held + 1] = q           -- the car is on it: made once the car is clear (playerIn)
       t = nil
     end
@@ -1285,9 +1312,11 @@ function M.update(gov, currentAnchor, player, view, cam)
       loadMaterials()
       local isRoad = q.what == 'road' or q.what == 'wire' or q.renderOnly   -- render-only meshes
       -- the buildings' and sidewalks' lean meshes are a collision detail (server cdae collision_only): never drawn
-      local ok, id = pcall(createWalk, q.walk, (q.what == 'bldcol' or q.what == 'walkcol' or q.what == 'signcol') and 'Collision Mesh' or not isRoad)
+      local kind = kindOf(q.what)
+      local leanCol = kind == 'bldcol' or kind == 'walkcol' or kind == 'signcol'
+      local ok, id = pcall(createWalk, q.walk, leanCol and 'Collision Mesh' or not isRoad)
       if ok then slotMade(id, q.walk.shape) end
-      if ok and not (q.what == 'bldcol' or q.what == 'walkcol' or q.what == 'signcol') then   -- (drawn: popin.lua)
+      if ok and not leanCol then   -- (drawn: popin.lua)
         popin.noteBox(q.what, t.cx, t.cy, M.TILE_M / 2)
       end
       if ok then
@@ -1363,6 +1392,7 @@ playerIn = function(boxes, what)
   local veh = getPlayerVehicle and getPlayerVehicle(0)
   if not veh then return false end
   local p = veh:getPosition()
+  what = kindOf(what)
   local r, dz = (what == 'walk' or what == 'walkcol') and M.WALK_PLAYER_R or M.PLAYER_R, M.PLAYER_DZ
   for _, b in ipairs(boxes) do
     if p.x >= b[1] - r and p.x <= b[4] + r and p.y >= b[2] - r and p.y <= b[5] + r then
@@ -1386,7 +1416,7 @@ releaseHeld = function()
   for _, q in ipairs(held) do
     local t = tiles[q.key]
     if t then
-      if playerIn(t.colliders[q.what], q.what) then keep[#keep + 1] = q else walkQ[#walkQ + 1] = q end
+      if playerIn(boxesOf(t, q.what), q.what) then keep[#keep + 1] = q else walkQ[#walkQ + 1] = q end
     end
   end
   held = keep
@@ -1397,7 +1427,7 @@ noteNewColliders = function()
   for _, c in ipairs(newColliders) do
     local q = c[2]
     local t = tiles[q.key]
-    if t and t[q.what] == c[1] and playerIn(t.colliders[q.what], q.what) then
+    if t and t[q.what] == c[1] and playerIn(boxesOf(t, q.what), q.what) then
       local o = scenetree.findObjectById(c[1])
       if o then o:delete() end
       t[q.what] = nil
@@ -1446,7 +1476,8 @@ function M.nextWalk(q)
       end
     end
     if e.renderOnly or e.what == 'wire' then k = k + 1e6 end
-    if e.what == 'deck' or e.what == 'tunnel' then k = math.max(0, k - M.DRIVE_FIRST_M) end
+    local ek = kindOf(e.what)
+    if ek == 'deck' or ek == 'tunnel' then k = math.max(0, k - M.DRIVE_FIRST_M) end
     if k < bestKey then best, bestKey = i, k end
   end
   return best
@@ -1460,7 +1491,8 @@ function M.urgentWalk(q)
   local reach = math.max(150, lastSpeed * M.URGENT_S) + M.TILE_M * 0.71
   local best, bd = nil, math.huge
   for i, e in ipairs(q) do
-    if e.what == 'deck' or e.what == 'tunnel' then
+    local ek = kindOf(e.what)
+    if ek == 'deck' or ek == 'tunnel' then
       local t = tiles[e.key]
       if t and t.cx and not t.ghost and (not e.tile or e.tile == t) then
         local dx, dy = t.cx - p.x, t.cy - p.y
