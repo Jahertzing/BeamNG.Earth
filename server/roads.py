@@ -4730,20 +4730,29 @@ class BridgeProfiles:
         return zs
 
     def _joint_solve(self, comp, lines, zs, ground, pool):
-        """zs with every abutment a ground road goes on from (a deck end no other part of the chain shares, a road's
-        end within END_M) solved with that road as one line (profilesolve.joint_solve): the deck's half applied here,
-        the road's kept in self.approach for the grading's JointLayer."""
+        """zs with every deck end a ground road goes on from (its end within END_M; the road that carries on most
+        nearly straight, the way a car crosses the joint) solved with that road as one line (profilesolve.joint_solve):
+        the deck's half applied here, the road's kept in self.approach for the grading's JointLayer. Where decks share
+        the end (a joint of decks with a road going on, a fork), the first solve sets the road's half and the other
+        decks are eased onto it (joint_solve with the road held)."""
         nk = _EndJoin()
-        deg = {}
-        for ln in lines:
-            for p in (ln[0], ln[-1]):
-                deg[nk(p)] = deg.get(nk(p), 0) + 1
         roads_ = [(k[0], np.asarray(gl, np.float64)[:, :2]) for k, v in sorted(ground.items()) if k[1] == "g"
                   for gl in v if len(gl) >= 2]
         hws = self.__dict__.get("road_hw", {})
         step, jm = profilesolve.STEP_M, profilesolve.JOINT_M
+        solved = {}         # (joint node, road fid) -> the road's solved profile toward the joint (approach z)
+        inwards = {}        # joint node -> [(line index, unit vector into that deck)]
+        for i, ln in enumerate(lines):
+            xy = np.asarray(ln, np.float64)[:, :2]
+            if len(xy) < 2:
+                continue
+            L = float(np.hypot(*np.diff(xy, axis=0).T).sum())
+            for at_end in (False, True):
+                p = xy[-1] if at_end else xy[0]
+                u = profilesolve._along(xy, np.array([min(10.0, L)]), at_end)[0] - p
+                inwards.setdefault(nk(p), []).append((i, u / max(1e-9, float(np.hypot(*u)))))
         out = []
-        for key, ln, z in zip(comp, lines, zs):
+        for li, (key, ln, z) in enumerate(zip(comp, lines, zs)):
             xy = np.asarray(ln, np.float64)[:, :2]
             z = np.asarray(z, np.float64).copy()
             s = np.r_[0.0, np.cumsum(np.hypot(*np.diff(xy, axis=0).T))]
@@ -4752,18 +4761,23 @@ class BridgeProfiles:
                 continue
             for at_end in (False, True):
                 p = xy[-1] if at_end else xy[0]
-                if deg.get(nk(p), 0) != 1:
-                    continue
-                road = None
+                inward = profilesolve._along(xy, np.array([min(10.0, s[-1])]), at_end)[0] - p   # into the deck
+                inward /= max(1e-9, float(np.hypot(*inward)))
+                # a car leaving this deck here goes on along the deck or road heading most nearly the opposite way
+                deck_on = max((float(-np.dot(u, inward)) for i, u in inwards.get(nk(p), ()) if i != li), default=-2.0)
+                road, best = None, -2.0
                 for fid, gl in roads_:
                     for r_end in (True, False):
-                        if np.hypot(*(gl[-1 if r_end else 0] - p)) < profilesolve.END_M:
-                            road = (fid, gl if r_end else gl[::-1])      # (toward the joint)
-                            break
-                    if road is not None:
-                        break
-                if road is None:
-                    continue
+                        if np.hypot(*(gl[-1 if r_end else 0] - p)) >= profilesolve.END_M:
+                            continue
+                        g = gl if r_end else gl[::-1]                    # (toward the joint)
+                        back = profilesolve._along(g, np.array([10.0]), True)[0]
+                        come = p - back                                   # the road's heading onto the joint
+                        c = float(np.dot(come, inward) / max(1e-9, float(np.hypot(*come))))
+                        if c > best:
+                            road, best = (fid, g), c
+                if road is None or best < 0.5 or deck_on >= best:     # (no road carrying on within 60 degrees,
+                    continue                                            # or the decks carry on: a deck joint)
                 fid, gl = road
                 gs = np.r_[0.0, np.cumsum(np.hypot(*np.diff(gl, axis=0).T))]
                 sa = np.arange(min(2 * jm, gs[-1]), -1e-9, -step)        # m from the joint, far first
@@ -4773,13 +4787,22 @@ class BridgeProfiles:
                 za = self._ground(xa)
                 sd = np.arange(0.0, min(2 * jm, s[-1]) + 1e-9, step)    # m into the deck
                 zd = np.interp(s[-1] - sd if at_end else sd, s, z)
-                na_, nd_ = profilesolve.joint_solve(za, zd, profilesolve.speed_of(pool[key][0].cls))
+                sk = (nk(p), fid)
+                if sk in solved:            # (another deck at this joint set the road: this one meets it)
+                    za_s = solved[sk]
+                    if len(za_s) != len(za):
+                        continue
+                    _, nd_ = profilesolve.joint_solve(za_s, zd, profilesolve.speed_of(pool[key][0].cls),
+                                                      hold_approach=True)
+                else:
+                    na_, nd_ = profilesolve.joint_solve(za, zd, profilesolve.speed_of(pool[key][0].cls))
+                    solved[sk] = na_
+                    with self.lock:
+                        self.approach[(key[0], key[1], int(at_end))] = (xa, na_ - za, hws.get(fid, 4.0) + 1.0, fid)
                 dd = nd_ - zd
                 pos = s[-1] - sd if at_end else sd
                 order = np.argsort(pos)
                 z = z + np.interp(s, pos[order], dd[order], left=0.0, right=0.0)
-                with self.lock:
-                    self.approach[(key[0], key[1], int(at_end))] = (xa, na_ - za, hws.get(fid, 4.0) + 1.0, fid)
             out.append(z)
         return out
 
