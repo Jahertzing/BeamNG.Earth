@@ -237,6 +237,10 @@ M.GROUP_MAX_M.bussign, M.GROUP_MAX_M.busshelter = 400, 400
 M.CARS_DIR = BNE .. 'cars/'
 M.STATIC_CARS = {}
 M.FIXED_SCALE = {}
+-- ... and in one spelling of their paths only (no SHAPE_VARIANTS: a model's few items need no split, and each spelling is
+-- a shape the engine loads again: the 3 variants preloadCars never made loaded mid-drive, 40 hitches of mod.trees up to
+-- 514 ms in a 20 km ghost drive, G6 2026-10-29)
+M.NO_VARIANT = {}
 M.CAR_MAX_M = 160
 function M.installCars(cars)
   if type(cars) ~= 'table' then return 0 end
@@ -252,6 +256,7 @@ function M.installCars(cars)
         if not M.CATALOG[g] then M.STATIC_CARS[#M.STATIC_CARS + 1] = g; n = n + 1 end
         M.CATALOG[g] = list
         M.FIXED_SCALE[g] = true
+        M.NO_VARIANT[g] = true
         M.GROUP_MAX_M[g] = M.CAR_MAX_M
         M.NO_COLLIDE[g] = true
       end
@@ -524,8 +529,9 @@ local function shapeOf(t, i)
   local s = t.shapes[i]
   if s then return s, t.scales[i] end
   local f, b, sc = t.f, (i - 1) * t.s, nil
-  s, sc = M.pick((t.groups or GROUPS)[f[b + F_GROUP] + 1] or 'deciduous', f[b + F_HEIGHT], f[b + F_RANK])
-  s = spelled(s, t.variant)
+  local g = (t.groups or GROUPS)[f[b + F_GROUP] + 1] or 'deciduous'
+  s, sc = M.pick(g, f[b + F_HEIGHT], f[b + F_RANK])
+  if not M.NO_VARIANT[g] then s = spelled(s, t.variant) end
   t.shapes[i], t.scales[i] = s, sc
   return s, sc
 end

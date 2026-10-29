@@ -449,6 +449,21 @@ do  -- static cars come in a few shapes a frame (CAR_SHAPES_PER_FRAME), the rest
   for _ = 1, 4 do trees.update(14, { x = 10, y = 10 }) end
   T.check(count() - before == 5, 'all five after a few frames: ' .. (count() - before))
   trees.clear()
+  -- in every tile the one spelling preloadCars loaded (a variant is a shape loaded again, mid-drive)
+  T.check(trees.NO_VARIANT and trees.NO_VARIANT.car_m1, 'static cars: no shape variants')
+  local shown = count()
+  local keys = { 'p0_0', 'p-1_0', 'p0_-1' }   -- (tiles of variants 0, 1 and 3 by the player)
+  for k, key in ipairs(keys) do
+    trees.onRows(14, key, { { 0, 10 + k * 7, 20, 0, 0, 1, 1.5, 0.1 } }, groups)
+  end
+  for _ = 1, 10 do trees.update(14, { x = 10, y = 10 }) end
+  local base, others = trees.CARS_DIR .. 'bne_car_m1_white', 0
+  for v = 1, trees.SHAPE_VARIANTS - 1 do
+    if scenetree.findObject(trees.typeName(trees.variant(base, v), false)) then others = others + 1 end
+  end
+  T.check(count() - shown == 3 and others == 0,
+    'static cars: one spelling across tiles of every variant: ' .. (count() - shown) .. ' made, ' .. others .. ' others')
+  trees.clear()
 end
 trees.FRAME_MS, trees.POOL_SPARE = FRAME_MS, POOL_SPARE
 T.done('test_trees')
