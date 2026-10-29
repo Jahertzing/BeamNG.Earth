@@ -10,8 +10,12 @@ a jittered grid hashed from world position (the same cards whichever anchor), su
 ground tiles round off the DEM by up to a metre: better half a card hidden than one floating).
 
 Sent as `grfar_tile` / `grfar_drop` by a vegetation.Tracker (kind "grfar"); the mod draws them as the far building
-tiles (roads.lua onFarTile kind 'G'), never hidden. Not under the 3D grass: tiles whose square comes within SKIP_M of
-the player are not built.
+tiles (roads.lua onFarTile kind 'G'). Each tile is also written as SUB x SUB squares (`subs`, 64 m): a second Tracker
+(kind "grsub") sends the tiles within SUB_SEND_M again as `grsub_tile` (their squares' shapes pooled: matslots.py, the
+game's frame cost grows with every shape file it ever loaded) and `grsub_drop` past SUB_DROP_M; the mod draws a near
+tile's squares instead of it, each hidden only while the player comes close to it (roads.lua grassUpdate). (Before 2026-10-29 the whole tile hid
+within 48 m: 256 m of cards, out to ~300 m from the car where the 3D short grass ends at 80 m, came and went at once,
+and tiles within SKIP_M of the player were never built, a hole round the car after every teleport and rebase.)
 """
 import json
 import math
@@ -24,7 +28,12 @@ import staging
 VERSION = 1
 SEND_M = float(os.environ.get("BNE_GRASSCARD_SEND_M", "1000"))     # tiles whose square comes this close are built
 DROP_M = SEND_M + 300.0
-SKIP_M = 128.0              # ... but not those this close (Chebyshev): the 3D grass is there
+SKIP_M = 0.0                # ... but not those this close (Chebyshev; 0: all, the mod hides the squares under the car)
+SUB = 4                     # the tile is also written as SUB x SUB squares (`subs`): drawn near the player
+SUB_SEND_M = 192.0          # tiles whose square comes this close: their squares sent (grsub_tile; the mod draws them
+                            # within roads.lua GRASS_SUB_M, 128 m)
+SUB_DROP_M = 384.0          # ... dropped past this
+SUB_PER_POSE = 4
 PER_POSE = 2                # tiles building at once
 MATERIAL = "bngEarthGrassCard"      # levels/beamng_earth/art/shapes/beamngEarth/grasscards.materials.json
 SPACING_M = 3.0             # the candidate grid (one card each at most)
@@ -136,8 +145,30 @@ def build(frame, x0, y0, size, mask, ground, photo=None, origin_xy=(0.0, 0.0)):
     return P, UV, T, C, N
 
 
-def write_tile(mesh, out_dir, vfs_dir, aid, tx, ty, x0, y0):
-    """The tile's shape and JSON in the session folder: (vfs path of the JSON, card count)."""
+def split(mesh, size, sub=SUB):
+    """cards()'s mesh of a tile square of side size (positions relative to its corner) in sub x sub squares by each
+    card's foot centre: [(i, j, mesh with positions relative to square (i, j)'s corner)], squares with no card left
+    out."""
+    P, UV, T, C, N = mesh
+    n = len(P) // 8
+    s = size / sub
+    foot = P.reshape(n, 8, 3)[:, :2, :2].mean(1)        # the first quad's foot: the card's centre
+    ij = np.clip(np.floor(foot / s).astype(np.int64), 0, sub - 1)
+    out = []
+    for i in range(sub):
+        for j in range(sub):
+            k = np.nonzero((ij[:, 0] == i) & (ij[:, 1] == j))[0]
+            if len(k) == 0:
+                continue
+            v = (k[:, None] * 8 + np.arange(8)[None, :]).reshape(-1)
+            t = T.reshape(n, 4, 3)[k] - (k * 8)[:, None, None] + (np.arange(len(k)) * 8)[:, None, None]
+            out.append((i, j, (P[v] - np.array([i * s, j * s, 0.0]), UV[v], t.reshape(-1, 3), C[v], N[v])))
+    return out
+
+
+def write_tile(mesh, out_dir, vfs_dir, aid, tx, ty, x0, y0, size=256.0):
+    """The tile's shapes (whole and its squares, split) and JSON in the session folder: (vfs path of the JSON, card
+    count)."""
     import cdae
     P, UV, T, C, N = mesh
     data = {"v": VERSION}
@@ -146,6 +177,14 @@ def write_tile(mesh, out_dir, vfs_dir, aid, tx, ty, x0, y0):
                object_name="grass")
     data["shape"] = f"{vfs_dir}/{shape}"
     data["pos"] = [x0, y0, 0.0]
+    s = size / SUB
+    data["subSize"] = s
+    data["subs"] = []
+    for i, j, (p, uv, t, c, nm) in split(mesh, size):
+        name = f"grfar_{aid}_{tx}_{ty}_{i}{j}.cdae"
+        cdae.write(os.path.join(out_dir, name), p, t, normals=nm, uvs=uv, material=MATERIAL, colors=c,
+                   object_name="grass")
+        data["subs"].append({"shape": f"{vfs_dir}/{name}", "pos": [x0 + i * s, y0 + j * s, 0.0]})
     name = f"grfar_{aid}_{tx}_{ty}.json"
     path = os.path.join(out_dir, name)
     tmp = staging.tmp_for(path)
