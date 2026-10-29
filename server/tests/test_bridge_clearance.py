@@ -151,6 +151,70 @@ class MergeJointTest(TestCase):
         self.assertLess(float(first), 0.25)
 
 
+class JoinNodesTest(TestCase):
+    def test_short_part_between_raised_joints_has_no_sag(self):
+        # a 7 m part between two joints, each raised to a higher part's end (US-36 at I-25: it sagged 0.44 m mid-part)
+        a = np.c_[np.arange(-40.0, 0.1, 4.0), np.zeros(11)]
+        b = np.array([[0.0, 0.0], [3.5, 0.0], [7.0, 0.0]])
+        c = np.c_[np.arange(7.0, 47.1, 4.0), np.zeros(11)]
+        zs = [np.full(11, 11.0), np.array([10.0, 10.2, 10.4]), np.full(11, 11.4)]
+        out = roads._join_nodes([a, b, c], zs)
+        self.assertAlmostEqual(float(out[1][0]), 11.0)
+        self.assertAlmostEqual(float(out[1][-1]), 11.4)
+        self.assertAlmostEqual(float(out[1][1]), 11.2, places=6)
+
+    def test_long_part_keeps_its_middle(self):
+        a = np.c_[np.arange(-40.0, 0.1, 4.0), np.zeros(11)]
+        b = np.c_[np.arange(0.0, 120.1, 4.0), np.zeros(31)]
+        c = np.c_[np.arange(120.0, 160.1, 4.0), np.zeros(11)]
+        zs = [np.full(11, 11.0), np.full(31, 10.0), np.full(11, 11.0)]
+        out = roads._join_nodes([a, b, c], zs)
+        self.assertAlmostEqual(float(out[1][15]), 10.0)
+        self.assertAlmostEqual(float(out[1][0]), 11.0)
+
+
+class RoundCrestsTest(TestCase):
+    def test_tent_cap_rounded_to_the_curve(self):
+        """Two abutments' DECK_MAX_GRADE caps meeting in a point (+6 % to -6 %): no 300 m curve fits under it, so
+        _curve_deck kept the tent (I-25 at 39.8056, a 3.3 g crest); rounded, one does, lower by about R dg^2 / 8."""
+        s = np.arange(0.0, 68.1, 4.0)
+        cap = np.minimum(1588.02 + 0.06 * s, 1586.84 + 0.06 * (s[-1] - s))
+        self.assertFalse(roads._curved(s, cap))
+        r = roads._round_crests(s, cap)
+        self.assertTrue((r <= cap + 1e-9).all())
+        self.assertTrue(roads._curved(s, r))
+        self.assertAlmostEqual(r[0], cap[0])
+        self.assertAlmostEqual(r[-1], cap[-1])
+        self.assertLess(cap.max() - r.max(), 0.12 ** 2 * roads.DECK_CREST_CAP_R / 8 + 0.1)
+        out = roads._curve_deck(s, np.minimum(cap, r), cap, r)
+        self.assertTrue(roads._curved(s, out))
+
+    def test_gentle_cap_kept(self):
+        s = np.arange(0.0, 200.1, 5.0)
+        cap = 10.0 + 0.02 * s - s * s / (2 * 1000.0)
+        np.testing.assert_allclose(roads._round_crests(s, cap), cap, atol=1e-9)
+        cap2 = cap.copy()
+        cap2[:3] = np.inf
+        r = roads._round_crests(s, cap2)
+        self.assertTrue(np.isinf(r[:3]).all())
+        np.testing.assert_allclose(r[3:], cap[3:], atol=1e-9)
+
+
+class HeldReachTest(TestCase):
+    def test_unmeasured_points_curve_off_the_measured_stretch(self):
+        s = np.arange(0.0, 60.1, 3.0)
+        z = np.r_[np.linspace(10.0, 10.6, 11), np.full(10, 12.0)]       # measured to s 30 rising 2 %, then 1.4 m up
+        held = np.r_[np.ones(11, bool), np.zeros(10, bool)]
+        cap = roads._held_reach(s, z, held, 0.3)
+        self.assertTrue(np.isinf(cap[:11]).all())
+        d = s[11:] - 30.0
+        np.testing.assert_allclose(cap[11:], 10.6 + 0.3 + 0.02 * d + d * d / (2 * roads.DECK_HELD_R))
+        self.assertLess(cap[11] - 10.6, 0.45)                           # no step off the last measured point
+
+    def test_nothing_held(self):
+        self.assertTrue(np.isinf(roads._held_reach(np.arange(5.0), np.zeros(5), np.zeros(5, bool))).all())
+
+
 class TwinLiftTest(TestCase):
     def test_a_lift_to_a_twin_fades_no_steeper_than_a_deck_climbs(self):
         # two ramps of one level side by side from a joint, parting after 120 m (the High Five, Dallas: one lifted 11 m

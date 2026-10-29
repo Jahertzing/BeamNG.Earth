@@ -196,7 +196,8 @@ end
 -- only their way), a node with no way on that is a cut, i.e. a dead end the clip made? nil when the edge is not in nodes.
 -- The cone test (headingToCut) respawned cars for any cut node ahead within 45 degrees: a side street cut at the block's
 -- edge beside the motorway, or a motorway junction whose cross street was cut while the motorway went on. On I-25 that
--- was one respawn every ~2 s (bench4, 2026-10-28: 163 in 4 min), each car popping out and in again ahead.
+-- was one respawn every ~2 s (bench4, 2026-10-28: 163 in 4 min), each car popping out and in again ahead. A one-way road
+-- that ends counts as a cut too (the server graph's edge).
 function M.cutAhead(nodes, cutSet, a, b, px, py, dx, dy, reach)
   local na, nb = nodes[a], nodes[b]
   local e = na and nb and na.links[b]
@@ -225,7 +226,12 @@ function M.cutAhead(nodes, cutSet, a, b, px, py, dx, dy, reach)
         if dot > bestDot then best, bestDot = o, dot end
       end
     end
-    if not best then return cutSet[to] == true end
+    if not best then
+      -- a cut; or a one-way road that just ends, which is the end of the server's map data, not a real dead end (a car
+      -- does not turn round on a motorway): bench8 (2026-10-29) piled every car on I-25 southbound up there for 45 s
+      local inEdge = nodes[from].links[to]
+      return cutSet[to] == true or (inEdge ~= nil and inEdge.oneWay == true)
+    end
     d = d + math.sqrt((nodes[best].pos.x - t.x) ^ 2 + (nodes[best].pos.y - t.y) ^ 2)
     from, to = to, best
   end
@@ -988,6 +994,18 @@ local function ownAmount(gt)
   if okB and tonumber(base) then base = math.max(tonumber(base), M.cpuFloor(physicalCores())) end
   local okV, vs = pcall(function() return require('beamngEarth/collisionfoci').vehicles() end)
   return M.autoAmount(okB and tonumber(base) or nil, okV and vs or {}, playerId())
+end
+
+-- The number of traffic cars startTraffic sets up in traffic mode `mode` (default: the setting's), and the own amount
+-- it comes from (cpuFloor included): for tools that set traffic up themselves (traffic_bench.py), so they run what a
+-- player gets. (bench8, 2026-10-29: the bench asked the game for its own pick, 7, and normal ran 7 cars, not 10.)
+function M.plannedAmount(mode)
+  local gt = trafficSystem()
+  if not gt then return 0, nil end
+  local auto = ownAmount(gt)
+  local n = M.modeAmount(mode or M.MODE, auto)
+  if n < 0 then n = auto or -1 end
+  return n, auto
 end
 
 -- Pure: base (the setting's amount; nil unknown) less the 'player' vehicles (collisionfoci.vehicles) other than me.

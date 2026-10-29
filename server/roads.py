@@ -468,19 +468,26 @@ def _structure_width(feats, i):
     return carriageway(cls, kind, False, rule_w, ow, lanes)
 
 
-def _bridge_reach(feats, i):
+def _bridge_reach(feats, i, light=False):
     """Bridge feature i's ranges lengthened over the ground roads crossing under them (SKEW_*), and how far past each
     end of the feature they would reach: {"ranges": [...], "over": [m past its start, m past its end]} (_skew_decks
-    puts that on the road joined there). Remembered on feats. Pure given feats."""
-    memo = feats.__dict__.setdefault("_bridge_reach", {})
+    puts that on the road joined there). Remembered on feats. Pure given feats. light: from the map's own ranges and
+    the roads' carriageways (_structure_width) alone, the next cells unasked: a neighbour's bridge (_reach_beyond),
+    whose full ranges would ask its neighbours in turn."""
+    memo = feats.__dict__.setdefault("_bridge_reach_light" if light else "_bridge_reach", {})
     got = memo.get(i)
     if got is not None:
         return got
-    rngs = raw_level_ranges(feats, i)
+    rngs = tag_level_ranges(feats, i) if light else raw_level_ranges(feats, i)
     got = {"ranges": rngs, "over": [0.0, 0.0]}
     memo[i] = got
-    specs = road_specs(feats)
-    up_w = specs[i].width if specs[i] is not None else _structure_width(feats, i)
+    if light:
+        width = _structure_widths(feats)
+        up_w = width[i]
+    else:
+        specs = road_specs(feats)
+        width = [None if sp is None else sp.width for sp in specs]
+        up_w = width[i] if width[i] is not None else _structure_width(feats, i)
     rings = [np.asarray(r, np.float64) for part in feats.parts(i) for r in part if len(r) >= 2]
     if up_w is None or not rings or not any(k == "bridge" for _, _, k in rngs):
         return got
@@ -509,20 +516,23 @@ def _bridge_reach(feats, i):
                                   (boxes[:, 3] >= blo[1]))
             gl, gj = [], []
             for j in near:
-                if j == i or specs[j] is None:
+                if j == i or width[j] is None:
                     continue
-                for g in _raw_ground_parts(feats, j):
+                for g in (_tag_ground_parts if light else _raw_ground_parts)(feats, j):
                     gl.append((np.asarray(g, np.float64) - ring[0]) * [kx, ky])
-                    gj.append(j)
+                    gj.append(width[j])
+            for nf, j, w in ([] if light else _roads_beyond(feats, blo, bhi)):
+                for g in _tag_ground_parts(nf, j):
+                    gl.append((np.asarray(g, np.float64) - ring[0]) * [kx, ky])
+                    gj.append(w)
             lo0, hi0 = lo_m, hi_m           # (arcs along sub: from lo0; a crossing at either end of it does not count)
             for g, sc, sin in (_seg_hits(sub, gl) if gl else ()):
                 sc += lo0
                 if not lo0 < sc < hi0:
                     continue
-                j = gj[g]
                 sin = max(sin, SKEW_MIN_SIN)
                 cos = math.sqrt(max(0.0, 1.0 - sin * sin))
-                h = (specs[j].width / 2 + SKEW_MARGIN_M + SKEW_SLOPE_M) / sin + (up_w / 2) * cos / sin
+                h = (gj[g] / 2 + SKEW_MARGIN_M + SKEW_SLOPE_M) / sin + (up_w / 2) * cos / sin
                 lo_m = min(lo_m, max(a0 * L - SKEW_MAX_M, sc - h))
                 hi_m = max(hi_m, min(b0 * L + SKEW_MAX_M, sc + h))
             prev = out[-1][1] if out else 0.0   # (never into a neighbouring range; past the feature's ends: "over")
@@ -537,20 +547,123 @@ def _bridge_reach(feats, i):
     return got
 
 
-def _bridge_ends(feats):
-    """(indices (k,), end points lon/lat (k, 2, 2)) of the features with a bridge range, once per cell."""
-    got = feats.__dict__.get("_bridge_ends")
+def _roads_beyond(feats, lo, hi):
+    """[(neighbour cell's layer, feature, its carriageway m)] of the drawn roads in the cells round feats' (mapdata's _bnge_neighbours) whose
+    boxes meet lon/lat box lo..hi, when it reaches past feats' cell (a road crossing under a bridge there may lie in
+    the next cell alone), none feats has itself. The two cells either side of an edge lengthened one I-25 bridge onto
+    the road joined there differently: 30 m of deck in one, of ground 9 m under it in the other (2026-10-29)."""
+    hook = feats.__dict__.get("_bnge_neighbours")
+    if hook is None:
+        return []
+    (x0, y0, x1, y1), get = hook
+    if lo[0] >= x0 and lo[1] >= y0 and hi[0] <= x1 and hi[1] <= y1:
+        return []
+    try:
+        others = get()
+    except Exception as ex:             # (a cell that will not load: the lengthening as this cell sees it)
+        log.debug("bridge reach: neighbours: %s: %s", type(ex).__name__, ex)
+        return []
+    mine = feats.__dict__.get("_ids_set")
+    if mine is None:
+        mine = feats.__dict__["_ids_set"] = {str(x) for x in feats.ids}
+    out, seen = [], set()
+    for nf in others:
+        if nf is None or not len(nf):
+            continue
+        boxes = _feature_boxes(nf)
+        hit = np.flatnonzero((boxes[:, 0] <= hi[0]) & (boxes[:, 2] >= lo[0]) & (boxes[:, 1] <= hi[1]) &
+                             (boxes[:, 3] >= lo[1]))
+        if not len(hit):
+            continue
+        width = _structure_widths(nf)
+        for j in hit:
+            fid = str(nf.ids[j])
+            if width[j] is None or fid in mine or fid in seen:
+                continue
+            seen.add(fid)
+            out.append((nf, int(j), width[j]))
+    return out
+
+
+def _structure_widths(feats):
+    """_structure_width of every feature, remembered on feats."""
+    got = feats.__dict__.get("_structure_widths")
+    if got is None:
+        got = feats.__dict__["_structure_widths"] = [_structure_width(feats, j) for j in range(len(feats))]
+    return got
+
+
+def _tag_ground_parts(feats, j):
+    """Feature j's on-ground pieces by the map's own ranges (tag_level_ranges: a neighbour cell's roads, whose
+    raw_level_ranges would read its neighbours)."""
+    pieces, at = [], 0.0
+    for a, b, _ in tag_level_ranges(feats, j):
+        if a - at > MIN_PART:
+            pieces.append((at, a))
+        at = max(at, b)
+    if 1.0 - at > MIN_PART:
+        pieces.append((at, 1.0))
+    return [ring if (a, b) == (0.0, 1.0) else sub_polyline(ring, a, b)
+            for part in feats.parts(j) for ring in part if len(ring) >= 2 for a, b in pieces]
+
+
+def _ends_beyond(feats, ring, kx, ky, edge_m=2.0):
+    """(start, end): does each end of ring (lon/lat) lie past, or within edge_m of, the edge of feats' cell (mapdata's
+    _bnge_neighbours; never without it)?"""
+    hook = feats.__dict__.get("_bnge_neighbours")
+    if hook is None:
+        return (False, False)
+    x0, y0, x1, y1 = hook[0]
+    mx, my = edge_m / kx, edge_m / ky
+    return tuple(bool(p[0] < x0 + mx or p[0] > x1 - mx or p[1] < y0 + my or p[1] > y1 - my) for p in (ring[0], ring[-1]))
+
+
+def _reach_beyond(feats, p, kx, ky, tol):
+    """m the bridges of the cells round feats' (none of feats' own) whose end lies within tol m of p (lon/lat) reach
+    past it (_bridge_reach's "over", as their own cell makes it): _skew_decks for a road whose end is in the next
+    cell, where the bridge joined there may be alone."""
+    hook = feats.__dict__.get("_bnge_neighbours")
+    if hook is None:
+        return 0.0
+    try:
+        others = hook[1]()
+    except Exception as ex:
+        log.debug("bridge reach: neighbours: %s: %s", type(ex).__name__, ex)
+        return 0.0
+    mine = feats.__dict__.get("_ids_set")
+    if mine is None:
+        mine = feats.__dict__["_ids_set"] = {str(x) for x in feats.ids}
+    best = 0.0
+    for nf in others:
+        if nf is None or not len(nf):
+            continue
+        nb, ne = _bridge_ends(nf, light=True)
+        if not len(nb):
+            continue
+        d = np.hypot((ne[:, :, 0] - p[0]) * kx, (ne[:, :, 1] - p[1]) * ky)
+        for r, e2 in zip(*np.nonzero(d < tol)):
+            b = int(nb[r])
+            if str(nf.ids[b]) not in mine:
+                best = max(best, _bridge_reach(nf, b, light=True)["over"][int(e2)])
+    return best
+
+
+def _bridge_ends(feats, light=False):
+    """(indices (k,), end points lon/lat (k, 2, 2)) of the features with a bridge range, once per cell (light: by the
+    map's own ranges, tag_level_ranges)."""
+    name = "_bridge_ends_light" if light else "_bridge_ends"
+    got = feats.__dict__.get(name)
     if got is None:
         idx, ends = [], []
         for b in range(len(feats)):
-            if not any(k == "bridge" for _, _, k in raw_level_ranges(feats, b)):
+            if not any(k == "bridge" for _, _, k in (tag_level_ranges if light else raw_level_ranges)(feats, b)):
                 continue
             rings = [r for part in feats.parts(b) for r in part if len(r) >= 2]
             if rings:
                 idx.append(b)
                 ends.append((rings[0][0], rings[0][-1]))
         got = (np.asarray(idx, np.int64), np.asarray(ends, np.float64).reshape(-1, 2, 2))
-        feats.__dict__["_bridge_ends"] = got
+        feats.__dict__[name] = got
     return got
 
 
@@ -598,28 +711,32 @@ def _skew_decks(feats, i, rngs):
     if any(k == "bridge" for _, _, k in rngs):
         rngs = _bridge_reach(feats, i)["ranges"]
     bidx, bends = _bridge_ends(feats)
-    if not len(bidx):
-        return rngs
-    near = _near_bridge_ends(feats)
-    if near is not None and not near[i]:
-        return rngs                             # (no end of it near a bridge's end: nothing joins it)
     rings = [np.asarray(r, np.float64) for part in feats.parts(i) for r in part if len(r) >= 2]
     if not rings:
         return rngs
     ring = rings[0]
     kx, ky = 111320.0 * math.cos(math.radians(float(ring[0, 1]))), 111320.0
+    away = _ends_beyond(feats, ring, kx, ky)    # (an end in the next cell: the bridge joined there may be its alone)
+    if not len(bidx) and not any(away):
+        return rngs
+    near = _near_bridge_ends(feats)
+    if near is not None and not near[i] and not any(away):
+        return rngs                             # (no end of it near a bridge's end: nothing joins it)
     tol = 0.75
     add = []
     L = None
     for end, p in ((0, ring[0]), (1, ring[-1])):
         if any((a <= 1e-9 if end == 0 else b >= 1.0 - 1e-9) for a, b, _ in rngs):
             continue                            # off the ground at that end already
-        d = np.hypot((bends[:, :, 0] - p[0]) * kx, (bends[:, :, 1] - p[1]) * ky)     # (k, 2) to each bridge's ends
         best = 0.0
-        for r, e2 in zip(*np.nonzero(d < tol)):
-            b = int(bidx[r])
-            if b != i:
-                best = max(best, _bridge_reach(feats, b)["over"][int(e2)])
+        if len(bidx):
+            d = np.hypot((bends[:, :, 0] - p[0]) * kx, (bends[:, :, 1] - p[1]) * ky)     # (k, 2) to each bridge's ends
+            for r, e2 in zip(*np.nonzero(d < tol)):
+                b = int(bidx[r])
+                if b != i:
+                    best = max(best, _bridge_reach(feats, b)["over"][int(e2)])
+        if away[end]:
+            best = max(best, _reach_beyond(feats, p, kx, ky, tol))
         if best > 0:
             if L is None:
                 L = float(np.hypot(*(np.diff(ring, axis=0) * [kx, ky]).T).sum())
@@ -1946,7 +2063,14 @@ def _join_nodes(lines, zs, pins=None):
     out = []
     for k, (a, b, s) in enumerate(edges):
         z = np.array(zs[k], np.float64)
-        if np.isfinite(z).all() and s[-1] > 0:
+        if np.isfinite(z).all() and s[-1] > 0 and a in target and b in target and s[-1] < 2.0 * JOIN_FADE_M:
+            # both ends moved on a short part: one smoothstep between their changes over all of it (each faded over
+            # half the part, its middle kept where it was: a 7 m part between I-25's ramps at US-36 sagged 0.44 m
+            # under its raised ends, a 12 g jolt, 2026-10-29)
+            u = s / s[-1]
+            w = u * u * (3.0 - 2.0 * u)
+            z += (target[a] - zs[k][0]) * (1.0 - w) + (target[b] - zs[k][-1]) * w
+        elif np.isfinite(z).all() and s[-1] > 0:
             reach = min(JOIN_FADE_M, s[-1] / 2.0)
             for node, d, e in ((a, s, 0), (b, s[-1] - s, -1)):
                 if node in target:
@@ -2161,6 +2285,10 @@ def deck_profile_once(lines, ground_fn, crossings=(), clear=None, grade=None, li
         if meas[k] is not None:     # measured: the lidar's height, whatever the rules above want (it is as built)
             import decklidar
             cap[k] = np.where(meas[k], np.maximum(z + decklidar.OBS_TOL_M, g), cap[k])
+            # ... and off the measured stretches no higher than a vertical curve of DECK_HELD_R goes on from them: a
+            # stacked deck's clearance stood the unmeasured points of the Mousetrap's top ramp 1 m over its last
+            # measured one, 3 m before (no curve held: a step, 2026-10-29)
+            cap[k] = np.minimum(cap[k], np.maximum(_held_reach(s, z, meas[k], decklidar.OBS_TOL_M), g))
         zz = np.maximum(np.minimum(np.maximum(z, req[k]), cap[k]), g)
         if deg[a] == 1:                         # an abutment keeps the ground's height
             zz[0] = z[0]
@@ -2191,8 +2319,71 @@ def deck_profile_once(lines, ground_fn, crossings=(), clear=None, grade=None, li
                 floor = np.maximum(np.minimum(floor, z + DECK_END_FLOOR_GRADE * off), g)
             zz = np.maximum(sm, floor)
             zz[0], zz[-1] = sm[0], sm[-1]
-            zz = _curve_deck(s, zz, floor, cap[k])
+            got = _curve_deck(s, zz, floor, cap[k])
+            if not _curved(s, got):
+                # no curve held: the cap itself turned too sharply (two abutments' DECK_MAX_GRADE meeting over a road
+                # it could not clear, I-25's 4581afec: +6 % to -6 % at one point, a 3.3 g crest at 65 mph,
+                # 2026-10-29): the cap rounded to the curve, a little headroom given up for it
+                crest = np.maximum(_round_crests(s, cap[k]), g)
+                low = np.minimum(zz, crest)
+                low[0], low[-1] = zz[0], zz[-1]
+                got = _curve_deck(s, low, floor, crest)
+                if not _curved(s, got):
+                    got = zz
+            zz = got
         out.append(zz)
+    return out
+
+
+DECK_HELD_R = 300.0     # m: the vertical radius a deck curves away from its measured stretches at most (_curve_deck's)
+
+
+DECK_CREST_CAP_R = 320.0    # m: _round_crests' radius (a little over _curve_deck's 300 m, room for its tolerance)
+
+
+def _round_crests(s, cap, radius=DECK_CREST_CAP_R):
+    """The highest profile under cap (at arcs s) whose grade falls no faster than 1 / radius per metre: cap's crests
+    rounded to vertical curves (the lower convex hull of cap + s^2 / 2r, less it; infinite past cap's first and last
+    finite points). _curve_deck's curve (300 m) fits under it. Pure."""
+    s, cap = np.asarray(s, np.float64), np.asarray(cap, np.float64)
+    q = s * s / (2.0 * radius)
+    ok = np.flatnonzero(np.isfinite(cap))
+    out = np.full(len(s), np.inf)
+    if not len(ok):
+        return out
+    hull = []
+    for i in ok:
+        y = cap[i] + q[i]
+        while len(hull) >= 2:
+            (x1, y1), (x2, y2) = hull[-2], hull[-1]
+            if (x2 - x1) * (y - y1) - (y2 - y1) * (s[i] - x1) <= 0:     # hull[-1] over the chord: dropped
+                hull.pop()
+            else:
+                break
+        hull.append((s[i], y))
+    hx, hy = zip(*hull)
+    span = slice(ok[0], ok[-1] + 1)
+    out[span] = np.interp(s[span], hx, hy) - q[span]
+    return out
+
+
+def _held_reach(s, z, held, tol=0.0, radius=DECK_HELD_R):
+    """Per point (at arcs s) the highest the deck z may stand off its held (measured) stretches: from each stretch's
+    end on along its grade there, curving up at most 1 / radius per m, tol over it; inf on the held points and with
+    none. Pure."""
+    s = np.asarray(s, np.float64)
+    z = np.asarray(z, np.float64)
+    held = np.asarray(held, bool)
+    out = np.full(len(s), np.inf)
+    if not held.any() or held.all():
+        return out
+    edges = np.flatnonzero(np.diff(np.r_[False, held, False].astype(np.int8)))
+    for a, b in zip(edges[::2], edges[1::2] - 1):       # held runs [a, b]
+        for end, nxt, ahead in ((b, b - 1, s > s[b]), (a, a + 1, s < s[a])):
+            d = np.abs(s - s[end])
+            g = (z[end] - z[nxt]) / max(abs(s[end] - s[nxt]), 1e-9) if nxt != end and 0 <= nxt < len(s) else 0.0
+            out = np.where(ahead, np.minimum(out, z[end] + tol + g * d + d * d / (2.0 * radius)), out)
+    out[held] = np.inf
     return out
 
 
@@ -2254,6 +2445,17 @@ def _curve_deck(s, z, floor, cap):
     f64 = np.float64
     return fast._ef.curve_deck(np.ascontiguousarray(s, f64), np.ascontiguousarray(z, f64),
                                np.ascontiguousarray(floor, f64), np.ascontiguousarray(cap, f64))
+
+
+def _curved(s, z):
+    """Does profile z (at arcs s) change grade no faster than _curve_deck allows (1/300 per metre)? Pure."""
+    s, z = np.asarray(s, np.float64), np.asarray(z, np.float64)
+    if len(s) < 3:
+        return True
+    ds = np.diff(s)
+    if (ds <= 0).any() or not np.isfinite(z).all():
+        return False
+    return bool((np.abs(np.diff(np.diff(z) / ds)) <= (ds[:-1] + ds[1:]) / 600.0 + 1e-6).all())
 
 
 def _no_sag(s, z):

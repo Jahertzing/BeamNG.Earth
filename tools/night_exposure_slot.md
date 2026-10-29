@@ -1,20 +1,20 @@
-# Night exposure + headlights slot (about 30 min)
+# Night slot, round 3 (about 25 min): the night exposure by hand, headlights
 
-Game already in the level on main 9916f27e or later. Don't relaunch or install. Keep the game window focused (unfocused caps at 30 fps).
+Game in the level on a main that has feature/night-exposure3 (nightambient NIGHT_EV, headlights x2.5/x2). Don't relaunch or install. Keep the game window focused. Set the time only through `sky.setLocalHour` (live, not saved) and `sky.restoreLive` at the end, never raw `core_environment.setTimeOfDay`.
 
-1. `cd C:\beamng-earth\BeamNG.Earth; git fetch origin feature/cats-eyes; git worktree add ..\wt-night-exp origin/feature/cats-eyes` (if it exists: `git checkout --detach origin/feature/cats-eyes` there). Use the main `.venv\Scripts\python.exe`. Run tools from the worktree; the game runs main's mod.
-2. Build check: `python tools\mcp.py lua "return jsonEncode(require('beamngEarth/nightambient').status())"` > `C:\beamng-earth\night-tune\ne_status0.json`. It must have `fill` and `nightExposure` fields; if not, stop (wrong build).
-3. `python tools\probe_look.py run --set tools\night_ambient_bench.json --variants tools\night_exposure_variants.json --out C:\beamng-earth\night-tune\exposure1 --perf 5` (about 15 min; Ctrl-C at 20 min, it restores).
-4. Headlights (5 min):
+0. If the game still has round 2's stuck target: `python tools\mcp.py lua "local o=scenetree.findObject('PostEffectLocalExposureObject') o.autoTargetLuminance=true o.targetLuminance=0.7 return 1"` (a level reload also clears it).
+1. Tools from the main checkout (or a worktree on that main), main `.venv\Scripts\python.exe`.
+2. Build check to `C:\beamng-earth\night-tune\ne3_status0.json`:
+   `python tools\mcp.py lua "return jsonEncode({na=require('beamngEarth/nightambient').status(), hl=require('beamngEarth/headlights').status()})"`
+   It must show `wantEV` (a number at night) and `hl.lamps` >= 1.
+3. `python tools\probe_look.py run --set tools\night_ambient_bench.json --variants tools\night_exposure3_variants.json --out C:\beamng-earth\night-tune\exposure3 --perf 5` (about 14 min). Variants: auto (stock auto exposure, as before), ev_default (EV 5.0 city / 1.5 country by the city share), ev_brighter (4.5 / 0.5), ev_darker (5.5 / 2.5), ev_bright_setting (default with the Night ambient setting on Bright, 0.75 EV brighter).
+4. Headlights (5 min), 4th St Frederick, with the default night EV:
    - `python tools\mcp.py lua "return tostring(require('beamngEarth/core').teleport(40.0995,-104.9375,nil,{record=false}))"`, wait 20 s.
-   - `python tools\mcp.py lua "local t=core_environment.getTimeOfDay() t.time=0.5 t.play=false core_environment.setTimeOfDay(t) be:getPlayerVehicle(0):queueLuaCommand('electrics.setLightsState(2)') core_camera.setByName(0,'driver') return 'ok'"`, wait 8 s, `python tools\mcp.py call screenshot "{\"jpg\":true}"` (normal).
-   - `python tools\mcp.py lua "require('beamngEarth/nightambient').setMode('off') return 1"`, wait 8 s, screenshot (off).
-   - `python tools\mcp.py lua "local na=require('beamngEarth/nightambient') na.setMode('normal') na.NIGHT_BIAS_EV=1.5 return 1"`, wait 8 s, screenshot (ev1.5).
-   - `core_camera.setByName(0,'orbit')`, wait 5 s, screenshot.
-   - Restore: `local na=require('beamngEarth/nightambient') na.NIGHT_BIAS_EV=0.75 na.setMode('normal') be:getPlayerVehicle(0):queueLuaCommand('electrics.setLightsState(0)')`.
-5. Stock sign materials (1 min, for the next round of reflective signs): `python tools\mcp.py lua "local r={} for _,n in ipairs({'signs_usa','ut_roadsigns','bne_rr_crossbuck'}) do local m=scenetree.findObject(n) r[n]=m and {v=m:getField('version',0), ef=m:getField('emissiveFactor',0), em=m:getField('emissive',0), nits=m:getField('emissiveIntensityNits',0)} or 'none' end return jsonEncode(r)"` > `C:\beamng-earth\night-tune\sign_mats.txt`.
-6. Report honestly:
-   - Per place and view: which variant (off, normal, ev1.5, fill_x3, fill_x0.3, hp0) looks most like a real city or suburb at night? Are walls, yards and trees visible between lamp pools? Is the sky over the city warm or black? Any halos, hard light circles or flicker?
-   - Headlights: does the beam visibly light the road 30 to 60 m ahead, comparing off, normal and ev1.5?
-   - fps and p95 per variant from run.json rows[].perf, and whether focused was true.
-   - All file paths.
+   - `python tools\mcp.py lua "require('beamngEarth/sky').setLocalHour(0,'night slot') be:getPlayerVehicle(0):queueLuaCommand('electrics.setLightsState(2)') return 'ok'"`, wait 12 s.
+   - For stock, bright, brighter: `python tools\mcp.py lua "local h=require('beamngEarth/headlights') h.setMode('stock') return jsonEncode(h.status())"`, wait 4 s, `python tools\mcp.py call screenshot "{\"jpg\":true}"`.
+   - Status to `ne3_status_fred.json` (same command as step 2): note heldEV and wantEV.
+   - Restore: `python tools\mcp.py lua "require('beamngEarth/headlights').setMode('bright') be:getPlayerVehicle(0):queueLuaCommand('electrics.setLightsState(0)') require('beamngEarth/sky').restoreLive('night slot') return 1"`.
+5. Report honestly:
+   - Per place and view: which variant looks most like a real night, in the city (16th, Broadway) and in the suburb (Frederick)? Walls, yards, trees, road surface visible? Washed out, flat or grey? Is the city blown out in any?
+   - Headlights: how far does the lit road reach now with stock, bright, brighter?
+   - fps/p95 per variant and focused; the status JSONs verbatim; file paths.

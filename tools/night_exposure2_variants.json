@@ -1,0 +1,44 @@
+[
+ {
+  "name": "off",
+  "lua": "local na = require('beamngEarth/nightambient') na.setMode('off')",
+  "undo": "local na = require('beamngEarth/nightambient') na.NIGHT_TARGET_X = nil na.NIGHT_PROPS = {} na.setMode('normal')",
+  "settle": 10
+ },
+ {
+  "name": "normal",
+  "lua": "local na = require('beamngEarth/nightambient') na.setMode('normal')",
+  "undo": "local na = require('beamngEarth/nightambient') na.NIGHT_TARGET_X = nil na.NIGHT_PROPS = {} na.setMode('normal')",
+  "settle": 10
+ },
+ {
+  "name": "tl_x2",
+  "lua": "local na = require('beamngEarth/nightambient') na.NIGHT_TARGET_X = 2",
+  "undo": "local na = require('beamngEarth/nightambient') na.NIGHT_TARGET_X = nil na.NIGHT_PROPS = {} na.setMode('normal')",
+  "settle": 10
+ },
+ {
+  "name": "tl_x4",
+  "lua": "local na = require('beamngEarth/nightambient') na.NIGHT_TARGET_X = 4",
+  "undo": "local na = require('beamngEarth/nightambient') na.NIGHT_TARGET_X = nil na.NIGHT_PROPS = {} na.setMode('normal')",
+  "settle": 10
+ },
+ {
+  "name": "tl_x8",
+  "lua": "local na = require('beamngEarth/nightambient') na.NIGHT_TARGET_X = 8",
+  "undo": "local na = require('beamngEarth/nightambient') na.NIGHT_TARGET_X = nil na.NIGHT_PROPS = {} na.setMode('normal')",
+  "settle": 10
+ },
+ {
+  "name": "manual_m2",
+  "lua": "local na = require('beamngEarth/nightambient') na.NIGHT_PROPS = { autoExposure = false, manualEV = -2 }",
+  "undo": "local na = require('beamngEarth/nightambient') na.NIGHT_TARGET_X = nil na.NIGHT_PROPS = {} na.setMode('normal')",
+  "settle": 10
+ },
+ {
+  "name": "manual_m4",
+  "lua": "local na = require('beamngEarth/nightambient') na.NIGHT_PROPS = { autoExposure = false, manualEV = -4 }",
+  "undo": "local na = require('beamngEarth/nightambient') na.NIGHT_TARGET_X = nil na.NIGHT_PROPS = {} na.setMode('normal')",
+  "settle": 10
+ }
+]

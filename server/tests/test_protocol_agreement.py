@@ -254,6 +254,13 @@ SERVER_TO_MOD = {
     "brfar_tile": {"anchorId": F(int), "key": F(str), "path": F(str), "n": F(int), "data": F(dict, OPT),
                    "slots": F(dict, OPT)},
     "brfar_drop": {"anchorId": F(int), "key": F(str)},
+    # grass cards past the 3D grass (grasscards.py), and a near tile's squares again (their shapes pooled "s<i>")
+    "grfar_tile": {"anchorId": F(int), "key": F(str), "path": F(str), "n": F(int), "data": F(dict, OPT),
+                   "slots": F(dict, OPT)},
+    "grfar_drop": {"anchorId": F(int), "key": F(str)},
+    "grsub_tile": {"anchorId": F(int), "key": F(str), "path": F(str), "n": F(int), "data": F(dict, OPT),
+                   "slots": F(dict, OPT)},
+    "grsub_drop": {"anchorId": F(int), "key": F(str)},
     # the AI road graph around the player (navgraph.py, --traffic on): a JSON file of nodes and edges
     "navgraph": {"anchorId": F(int), "path": F(str), "cx": F(NUM), "cy": F(NUM), "nodes": F(int), "edges": F(int),
                  "serial": F(int)},
@@ -284,6 +291,7 @@ EXERCISED_ELSEWHERE = {"far_retex", "roads_tile", "roads_drop",   # roads: needs
                        "bldfar_tile", "bldfar_drop",                 # --buildings on: needs map data
                        "skyline_tile", "skyline_drop",               # --buildings on: needs map data (test_skyline)
                        "bldsky_tile", "bldsky_drop", "brfar_tile", "brfar_drop",
+                       "grfar_tile", "grfar_drop", "grsub_tile", "grsub_drop",   # --grass-cards on: land cover
                        "navgraph",                                   # --traffic on: needs map data
                        "map_tiles_ready",                            # only when the world map asks (map_tiles)
                        "update",                                     # only when GitHub has a newer version (online)

@@ -97,13 +97,47 @@ T.check(#given.parkingSpots.sorted == 31 and given.parkingSpots.objects[occupied
   'dropped tile: its spots go but the occupied one stays')
 T.check(setupCalls == 1, 'started once')
 
--- teleport: scattered onto the new place's spots once there are enough
+-- teleport: the parked cars back on the new place's spots once there are enough, one a RESTORE_S (each activation puts
+-- the car on a spot; a stock scatter of all of them in one frame was 135 ms, south Denver 2026-10-29)
+local amounts = {}
+gameplay_parking.getParkingVars = function() return { activeAmount = 3 } end
+gameplay_parking.setActiveAmount = function(n) amounts[#amounts + 1] = n end
+gameplay_parking.getParkedCarsList = function() return { 1, 2, 3, 4 } end
 P.onTeleport()
+T.check(amounts[1] == 0, 'teleport: the parked cars inactive')
 P.onRows(2, '2:0_0', rows(40, 0, -10))
 clock = clock + 3
 P.update(2, player)
 T.check(#given.parkingSpots.sorted == 40, 'a new anchor: only its spots')
-T.check(scatterCalls == 1, 'parked cars scattered onto them')
+T.check(#amounts == 2 and amounts[2] == 1, 'restore: one car active first')
+local function nearBans()
+  local n = 0
+  for _, ps in pairs(given.parkingSpots.objects) do
+    if ps.pos.x < P.ACTIVATE_MIN_M and ps.customFields.tags.banned then n = n + 1 end
+  end
+  return n
+end
+T.check(nearBans() == 15, 'restore: the 15 spots within ACTIVATE_MIN_M banned meanwhile: ' .. nearBans())
+P.update(2, player)
+T.check(#amounts == 2, 'restore: the next one waits RESTORE_S')
+for _ = 1, 4 do clock = clock + P.RESTORE_S + 0.01; P.update(2, player) end
+T.check(#amounts == 4 and amounts[3] == 2 and amounts[4] == 3, 'restore: then one at a time up to the amount before: '
+  .. table.concat(amounts, ','))
+T.check(scatterCalls == 0, 'restore: no stock scatter of them all at once')
+T.check(nearBans() == 0, 'restore: done, the near spots free again')
+-- teleported again mid-way: the amount from before the first comes back
+P.onTeleport()
+P.onRows(3, '3:0_0', rows(40, 0, -10))
+clock = clock + 3
+P.update(3, player)
+P.onTeleport()
+P.onRows(4, '4:0_0', rows(40, 0, -10))
+clock = clock + 3
+P.update(4, player)
+for _ = 1, 5 do clock = clock + P.RESTORE_S + 0.01; P.update(4, player) end
+T.check(amounts[#amounts] == 3, 'restore: a second teleport mid-way still ends at the first amount: ' .. amounts[#amounts])
+gameplay_parking.getParkingVars, gameplay_parking.setActiveAmount = nil, nil
+gameplay_parking.getParkedCarsList = function() return {} end
 
 -- the block: spots EDGE_M inside its ground box only
 T.check(P.inside({ 0, 0, 100, 100 }, 50, 50, 10) and not P.inside({ 0, 0, 100, 100 }, 95, 50, 10) and P.inside(nil, 1e9, 0, 10),

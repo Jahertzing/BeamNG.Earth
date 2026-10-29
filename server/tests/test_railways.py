@@ -562,5 +562,45 @@ class MotorwayCutTest(unittest.TestCase):
         self.assertEqual(m.tolist(), [True, True, False, False])
 
 
+class UnderMotorwayTest(unittest.TestCase):
+    """A line in use the map has crossing a motorway on the ground passes under it: no track over the road's width and
+    MOTORWAY_CUT_M past it along the line; beside it, on a bridge, or not in use, the track stays."""
+    ROAD = MotorwayCutTest.ROAD
+
+    def _line(self, xy):
+        return railways._resample(np.asarray(xy, float), railways.STEP_M)
+
+    def test_cut_either_side_of_crossing(self):
+        xy = self._line([[-300.0, 0.0], [300.0, 0.0]])
+        out = railways._under_motorways([("a", "light_rail", "ground", xy)], {"a"}, self.ROAD)
+        self.assertEqual(len(out), 2)
+        gap = 15.0 + railways.MOTORWAY_CUT_M
+        for _fid, _c, kind, part in out:
+            self.assertEqual(kind, "ground")
+            self.assertGreater(np.abs(part[:, 0]).min(), gap)
+            self.assertLess(np.abs(part[:, 0]).min(), gap + railways.STEP_M + 1e-6)
+        # (the samples kept are the line's own: the same in every tile)
+        kept = np.concatenate([p[3] for p in out])
+        self.assertTrue(all(np.isclose(xy, q).all(1).any() for q in kept))
+
+    def test_shallow_crossing_cut_longer(self):
+        steep = self._line([[-300.0, -150.0], [300.0, 150.0]])      # sin 0.89 (27 degrees off square)
+        flat = self._line([[-50.0, -600.0], [50.0, 600.0]])         # nearly along the road: sin 0.08, taken as 0.25
+        gap = lambda parts: min(float(np.hypot(*q.T).min()) for *_x, q in parts)
+        a = railways._under_motorways([("a", "light_rail", "ground", steep)], {"a"}, self.ROAD)
+        b = railways._under_motorways([("b", "light_rail", "ground", flat)], {"b"}, self.ROAD)
+        self.assertEqual((len(a), len(b)), (2, 2))
+        self.assertGreater(gap(a), (15.0 + railways.MOTORWAY_CUT_M) / 0.9 - railways.STEP_M)
+        self.assertGreater(gap(b), (15.0 + railways.MOTORWAY_CUT_M) / railways.UNDER_MIN_SIN - railways.STEP_M)
+
+    def test_beside_bridge_and_old_line_kept(self):
+        side = self._line([[25.0, -300.0], [25.0, 300.0]])
+        over = self._line([[-300.0, 0.0], [300.0, 0.0]])
+        rails = [("a", "light_rail", "ground", side), ("b", "rail", "bridge", over), ("c", "rail", "ground", over)]
+        out = railways._under_motorways(rails, {"a"}, self.ROAD)
+        self.assertEqual([p[0] for p in out], ["a", "b", "c"])
+        self.assertIs(out[0][3], side)
+
+
 if __name__ == "__main__":
     unittest.main()

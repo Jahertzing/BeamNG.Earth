@@ -35,11 +35,21 @@ M.GONE_R = 3.0              -- ... and gone this many out
 M.BIG_R = 14000             -- (a place's weight: its glow radius over this, square-rooted: Denver 1, Boulder ~0.5)
 M.SHARE_STEP = 0.05
 -- the sky's light: urban (warm) and rural (cool) brightness and colour, mixed by the city share, times the setting
-M.SKYFILL = { height = 150, radius = 700, urban = 60, rural = 12, urbanColor = { 1.0, 0.74, 0.50 },
+M.SKYFILL = { height = 150, radius = 700, urban = 180, rural = 48, urbanColor = { 1.0, 0.74, 0.50 },
   ruralColor = { 0.62, 0.72, 1.0 } }
 -- the auto exposure at night (field = value; exposureBiasEV: added to the player's GraphicEVCompensation)
 M.NIGHT_EXPOSURE = { highlightProtectStrength = 0.2, darkPixelMaxLogLuminance = -8, darkPixelMinLogLuminance = -16 }
 M.NIGHT_BIAS_EV = 0.75
+-- ... and its properties at night (engine properties, read and written as o.name, not fields: autoExposure, manualEV,
+-- targetLuminance, ...), kept and put back by day.
+M.NIGHT_PROPS = {}
+-- The night's exposure, held by hand (autoExposure off, manualEV): the stock auto exposure clamps a dark scene's EV
+-- (its "Auto Min EV"), so a suburb at night stayed near black whatever its bias or target luminance, at EV ~4.4 (the
+-- night slots, 2026-10-29: bias +1.5 and target x8 changed nothing; a fixed EV -2 made Frederick read, too bright,
+-- and blew Denver out; downtown's auto EV was ~5.4). So by the city share: urban EV in a city's light, rural in the
+-- country and the suburbs, moved at most rate EV/s (driving into Denver closes it down over a few seconds), plus the
+-- setting's offset (lower EV: brighter). nil: the stock auto exposure all night.
+M.NIGHT_EV = { urban = 5.0, rural = 1.5, rate = 1.0, offset = { dim = 0.6, normal = 0, bright = -0.75 } }
 M.mode = 'normal'
 M.errors = 0
 
@@ -155,6 +165,30 @@ end
 
 -- The auto exposure's night values on (night) or the kept ones back; checked every CHECK_S (the graphics settings
 -- write the bias back when the player changes it).
+local dayProps = {}         -- the properties' own values, kept while ours are on
+local NONE = {}             -- (a property that read nil: nothing to put back)
+
+local function differs(a, b)
+  if type(a) == 'number' and type(b) == 'number' then return math.abs(a - b) > 1e-4 end
+  return a ~= b
+end
+
+-- The night's properties: NIGHT_PROPS.
+local function nightProps()
+  local want = {}
+  for k, v in pairs(M.NIGHT_PROPS) do want[k] = v end
+  return want
+end
+
+local function restoreProps(o, keep)
+  for k, v in pairs(dayProps) do
+    if not (keep and keep[k] ~= nil) then
+      if v ~= NONE then o[k] = v end
+      dayProps[k] = nil
+    end
+  end
+end
+
 local function stepExposure(night)
   local o = exposureObj()
   if not o then return end
@@ -168,11 +202,59 @@ local function stepExposure(night)
     end
     local want = playerBias() + M.NIGHT_BIAS_EV
     if math.abs((tonumber(o.exposureBiasEV) or 0) - want) > 1e-3 then o.exposureBiasEV = want end
+    local props = nightProps()
+    restoreProps(o, props)           -- (a property no longer ours: its own value back)
+    for k, v in pairs(props) do
+      if dayProps[k] == nil then local was = o[k]; if was == nil then was = NONE end; dayProps[k] = was end
+      if differs(o[k], v) then o[k] = v end
+    end
   elseif dayExposure then
     for k, v in pairs(dayExposure) do if v ~= nil then o:setField(k, 0, tostring(v)) end end
     o.exposureBiasEV = playerBias()
+    restoreProps(o, nil)
     dayExposure = nil
   end
+end
+
+-- Pure: the night's exposure EV at a city share (0..1) and setting mode, or nil (none: the stock auto exposure).
+function M.nightEV(share, mode)
+  local E = M.NIGHT_EV
+  if not E or mode == 'off' or share == nil then return nil end
+  local t = math.max(0, math.min(1, share))
+  return E.rural + (E.urban - E.rural) * t + ((E.offset or {})[mode] or 0)
+end
+
+-- Pure: from ev toward want by at most rate * dt.
+function M.easeEV(ev, want, rate, dt)
+  local step = math.max(0, rate or 1) * math.max(0, dt or 0)
+  if math.abs(want - ev) <= step then return want end
+  return ev + (want > ev and step or -step)
+end
+
+local heldEV = nil          -- the manual EV we hold (nil: the auto exposure's own)
+local lastEV = nil          -- (os.clockhp of the last step)
+
+-- Every frame: at night the exposure by hand, eased toward the share's EV from where the auto exposure stood (its
+-- manualEV follows the current EV while it is on); by day (or off, or no share yet) the auto exposure back.
+local function stepEV(lit, now)
+  if not lit and heldEV == nil then return end
+  local o = exposureObj()
+  if not o then return end
+  local want = lit and M.nightEV(M.share, M.mode) or nil
+  if want == nil then
+    if heldEV ~= nil then o.autoExposure = true; heldEV = nil end
+    return
+  end
+  local dt = lastEV and math.min(now - lastEV, 0.5) or 0
+  lastEV = now
+  if heldEV == nil then
+    heldEV = tonumber(o.manualEV) or want
+    if heldEV ~= heldEV or math.abs(heldEV) > 30 then heldEV = want end    -- (nan or nonsense)
+    o.autoExposure = false
+  end
+  local ev = M.easeEV(heldEV, want, M.NIGHT_EV.rate, dt)
+  if ev ~= heldEV or tonumber(o.manualEV) ~= ev then o.manualEV = ev end
+  heldEV = ev
 end
 
 -- Every frame (nightlights.update; the work every CHECK_S). anchor, anchorId: the frame of the places; night:
@@ -181,6 +263,8 @@ function M.update(anchor, anchorId, night)
   local k = M.STRENGTH[M.mode] or 1
   local lit = night == true and k > 0
   local okF = pcall(stepFill, lit, M.share, k)
+  local now0 = os.clockhp()
+  if not pcall(stepEV, lit, now0) then M.errors = M.errors + 1 end
   if not okF then M.errors = M.errors + 1 end
   local now = os.clockhp()
   if now - lastCheck < M.CHECK_S then return end
@@ -219,6 +303,8 @@ end
 -- back.
 function M.reset()
   pcall(stepExposure, false)
+  pcall(stepEV, false, 0)
+  lastEV, M.share = nil, nil
   local o = fillId and scenetree.findObjectById(fillId)
   if o then o:delete() end
   fillId, fillLook = nil, nil
@@ -227,8 +313,12 @@ function M.reset()
 end
 
 function M.status()
+  local o = exposureObj()
+  local ex = o and { bias = o.exposureBiasEV, target = o.targetLuminance, autoTarget = o.autoTargetLuminance,
+                     auto = o.autoExposure, manualEV = o.manualEV } or nil
   return { mode = M.mode, share = M.share, written = written, errors = M.errors, fill = fillLook,
-           nightExposure = dayExposure ~= nil }
+           nightExposure = dayExposure ~= nil, exposure = ex, heldEV = heldEV,
+           wantEV = M.nightEV(M.share, M.mode) }
 end
 
 return M

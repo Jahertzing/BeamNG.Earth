@@ -16,6 +16,7 @@ cell's map data and VERSION; its random choices (species, yaw, size, thinning ra
 - Groups: deciduous / conifer by a regional mix and height, shrub, rock (the mod maps groups to its
   stock shapes).
 """
+import json
 import logging
 import math
 import os
@@ -747,6 +748,15 @@ def write_tile(out_dir, vfs_dir, aid, tx, ty, rows, flat=False):
     return f"{vfs_dir}/{name}", rows.n if isinstance(rows, JsonRows) else len(rows)
 
 
+def _read_json(out_dir, vfs_path):
+    """A session file's JSON (its vfs path's file name in out_dir), {} when unreadable."""
+    try:
+        with open(os.path.join(out_dir or "", vfs_path.rsplit("/", 1)[-1])) as f:
+            return json.load(f)
+    except (OSError, ValueError, AttributeError):
+        return {}
+
+
 class Tracker:
     """Per connection: which tiles of a kind the mod has (as roads.Tracker): vegetation tiles by default
     (messages veg_tile / veg_drop); the far buildings use one too (buildings.FAR_*)."""
@@ -877,6 +887,11 @@ class Tracker:
         pool = getattr(getattr(conn, "s", None), "pool_shapes", None)
         if self.kind in ("bldfar", "bldsky", "brfar", "grfar") and pool is not None:     # its mesh at a pooled shape path (matslots.py)
             slots = pool(conn, {"shape": f"{self.kind}_{aid}_{key[0]}_{key[1]}.cdae"})
+            if slots:
+                m["slots"] = slots
+        if self.kind == "grsub" and pool is not None and n:      # its squares' meshes (grasscards.write_tile's subs): "s<i>"
+            subs = (data if data is not None else _read_json(out_dir, path)).get("subs") or ()
+            slots = pool(conn, {f"s{i}": e["shape"].rsplit("/", 1)[-1] for i, e in enumerate(subs)})
             if slots:
                 m["slots"] = slots
         conn.send(m)

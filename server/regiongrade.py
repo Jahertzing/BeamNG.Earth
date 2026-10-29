@@ -27,7 +27,8 @@ import mapcells
 ON = os.environ.get("BNE_REGION_GRADING", "on") != "off"
 REGION_DEG = 0.1            # region edge (degrees of latitude and of longitude): ~11 x 8.5 km at 40° N
 BAND_M = 40.0               # m across a region edge where the two regions' gradings are blended
-MAX_REGIONS = 6             # Graders kept (least recently used dropped): a block touches 1-4, the lookahead a few more
+SHARE_PLANS = os.environ.get("BNE_REGION_SHARE", "on") != "off"   # a cell planned once, in its centre's region
+MAX_REGIONS = 9             # Graders kept (least recently used dropped): a block touches 1-4, the lookahead a few more
 M_PER_DEG = 111320.0
 
 
@@ -57,6 +58,27 @@ def _axis_weights(f, m_per_unit):
     w[high] = 0.5 + (span - u[high]) / BAND_M
     nb[high] = own[high] + 1
     return own.astype(np.int64), nb.astype(np.int64), w
+
+
+def _mover(src, dst):
+    """xy (k, 2) in frame src -> the same ground points in frame dst (through latitude / longitude)."""
+    def move(xy):
+        xy = np.asarray(xy, np.float64)
+        la, lo, _ = src.enu_to_geodetic(xy[:, 0], xy[:, 1], 0.0)
+        e, n, _ = dst.geodetic_to_enu(np.asarray(la), np.asarray(lo), 0.0)
+        out = xy.copy()
+        out[:, 0], out[:, 1] = e, n
+        return out
+    return move
+
+
+def _moved_plan(p, move):
+    """A copy of grading.Plan p in another frame: its vertices moved; heights, widths, cuttings (offsets from the centre
+    line) and banking are the same in any frame."""
+    import grading
+    q = grading.Plan(move(p.xy), p.z, p.half, p.abut, p.cut, p.road_half)
+    q.rid, q.max_wall, q.bank = p.rid, p.max_wall, p.bank
+    return q
 
 
 class _Stats:
@@ -97,12 +119,34 @@ class RegionGrader:
                 self._regions.move_to_end(k)
                 return g
         g = self.make(geodesy.EnuFrame(*region_center(*k)))
+        if SHARE_PLANS and hasattr(g, "_make_cell"):     # (a grading.Grader; test doubles may lack it)
+            own_make = g._make_cell
+            g._make_cell = lambda key, g=g, k=k, own=own_make: self._make_cell(g, k, own, key)
         with self._lock:
             g = self._regions.setdefault(k, g)
             self._regions.move_to_end(k)
             while len(self._regions) > MAX_REGIONS:
                 self._regions.popitem(last=False)
             return g
+
+    def _make_cell(self, g, k, own, key):
+        """Grader g's (region k's) plans of a map cell: made by the region holding the cell's centre and moved into g's
+        frame, so each cell is planned once however many regions grade near it. Downtown Denver sits on the corner of
+        four regions (39.7, -105.0): every cell under the first block was planned four times, its processes waiting on
+        each other for each frame's copy (a first block 514 s in a bake, 2026-10-29)."""
+        la, lo = mapcells.CellKey(*key).center()
+        ok = region_of(la, lo)
+        if ok == k:
+            return own(key)
+        owner = self.grader(*ok)
+        plans = owner._cell_plans(key)
+        with owner.lock:
+            if key not in owner.cells:          # (its fetch failed: none here either, asked again later)
+                return None
+            keeps, covers, opens = owner.keeps.get(key, []), owner.covers.get(key, []), owner.opens.get(key, [])
+        move = _mover(owner.frame, g.frame)
+        return ([(fid, _moved_plan(p, move)) for fid, p in plans], [(move(xy), h) for xy, h in keeps],
+                [(move(xy), h) for xy, h in covers], [(move(xy), sp) for xy, sp in opens])
 
     def _weights(self, lat, lon):
         """Up to four (region i, region j, weight) per point: arrays ri (n, 4), rj (n, 4), w (n, 4)."""

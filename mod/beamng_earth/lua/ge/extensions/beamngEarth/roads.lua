@@ -112,6 +112,7 @@ local anchorId = nil
 local far = {}              -- far buildings (server buildings.far_tile): key "a:tx_ty" -> { anchor, id, shape, pos, hidden }
 local farSeen = {}          -- far tile keys that arrived (with buildings or none): the skyline tiles' test
 local farQ = {}             -- keys of far tiles to make
+local grassQ = {}           -- { key, i } of grass card squares to make (a far tile's subs)
 local sky = {}              -- skyline tiles (server skyline.py): key "a:x_y" -> entry (M.onSkyTile)
 local lastError = nil
 local sinceChange = stopwatch.new()  -- ms since a tile arrived / went or a road was made / deleted
@@ -236,7 +237,12 @@ function M.slotsHeld(sess)
   for _, t in pairs(tiles) do
     for _, sl in pairs(t.slots or {}) do if sl[3] == sess then out[#out + 1] = { sl[1], sl[2] } end end
   end
-  for _, f in pairs(far) do if f.slot and f.slot[3] == sess then out[#out + 1] = { f.slot[1], f.slot[2] } end end
+  for _, f in pairs(far) do
+    if f.slot and f.slot[3] == sess then out[#out + 1] = { f.slot[1], f.slot[2] } end
+    for _, sq in ipairs(f.subs or {}) do
+      if sq.slot and sq.slot[3] == sess then out[#out + 1] = { sq.slot[1], sq.slot[2] } end
+    end
+  end
   for n, d in pairs(slotDropped) do if d[2] == sess then out[#out + 1] = { n, d[1] } end end
   return out
 end
@@ -321,6 +327,17 @@ local function farLamps(key, f, on)
   end
 end
 
+-- A grass card tile's squares (f.subs) go: their objects deleted, and with gone their slots let go too.
+local function grassSubsDelete(f, gone)
+  if not f.subs then return end
+  for _, s in ipairs(f.subs) do
+    if s.id then deleteQ[#deleteQ + 1] = s.id; s.id = nil end
+    s.queued, s.hidden = nil, nil
+    if gone then slotDrop(s.slot) end
+  end
+  if gone then f.subs, f.subSize = nil, nil end
+end
+
 -- Every road not of anchor aid goes (a new anchor: the server re-sends its tiles).
 local function switchAnchor(aid)
   if aid == anchorId then return end
@@ -332,6 +349,7 @@ local function switchAnchor(aid)
     if f.anchor ~= aid and not f.ghost then
       farLamps(key, f, false)
       if f.id then deleteQ[#deleteQ + 1] = f.id end
+      grassSubsDelete(f, true)
       slotDrop(f.slot)
       far[key] = nil
     end
@@ -554,11 +572,17 @@ M.SKY_UNIT = 4
 -- `brfar_tile` (kind 'B'): a far bridge tile's decks (server buildings.far_bridge_tile), shown only while the road
 -- tile of the same square has no deck or road mesh of its own.
 -- `grfar_tile` (kind 'G'): a tile's grass cards past the 3D grass (server grasscards.py), shown while M.grassCards
--- (the setting grassCards) is on: never under the 3D grass (the server skips the squares near the player).
--- A tile is hidden too while the player or the camera comes within GRASS_CARD_NEAR_M of its square: a card up close is
--- a flat cross, and may lean over a road's edge (the grass mask has 2 m texels); there the 3D grass is.
+-- (the setting grassCards) is on. Cards are hidden while the player or the camera comes near them: a card up close is
+-- a flat cross, and may lean over a road's edge (the grass mask has 2 m texels); there the 3D grass is. A tile comes
+-- whole, and once near again as its squares (`grsub_tile` {anchorId, key, path, n, data {subSize, subs}, slots "s<i>"},
+-- 64 m; `grsub_drop` when away): within GRASS_SUB_M of the player or camera its squares are drawn instead, each hidden
+-- within GRASS_SUB_NEAR_M of its own square (the whole tile shows until all are made). Without squares (an older
+-- server, or not here yet) the whole tile hides within GRASS_CARD_NEAR_M: in Jeff's drive (2026-10-29) 256 m of cards
+-- out to ~300 m from the car came and went at once, past the 3D short grass's 80 m: "grass still pops in a lot weirdly".
 M.grassCards = true
 M.GRASS_CARD_NEAR_M = 48
+M.GRASS_SUB_M = 128         -- m (Chebyshev) from a tile's square: its squares drawn (the server sends them within 192 m)
+M.GRASS_SUB_NEAR_M = 24     -- m from a square: hidden (the 3D short grass is full to 40 m; a hole of 24-88 m at most)
 function M.onFarTile(msg, currentAnchor, kind)
   if kind == true then kind = 'S' end
   local sky = kind == 'S'
@@ -573,6 +597,7 @@ function M.onFarTile(msg, currentAnchor, kind)
   local old = far[key]
   if old then farLamps(key, old, false) end
   if old and old.id then deleteQ[#deleteQ + 1] = old.id end
+  if old then grassSubsDelete(old, true) end
   if old then slotDrop(old.slot) end
   far[key] = nil
   local sl = msgSlot(msg, 'shape')
@@ -600,8 +625,40 @@ function M.onFarDrop(msg, kind)
   if f and f.ghost then return end
   if f then farLamps(key, f, false) end
   if f and f.id then deleteQ[#deleteQ + 1] = f.id end
-  if f then slotDrop(f.slot) end
+  if f then grassSubsDelete(f, true); slotDrop(f.slot) end
   far[key] = nil
+end
+
+-- Server message `grsub_tile`: the squares of grass card tile `key` (its far entry: kind 'G'), pooled shapes.
+function M.onGrassSubs(msg, currentAnchor)
+  if not M.enabled then return false end
+  switchAnchor(currentAnchor)
+  if msg.anchorId ~= currentAnchor then return false end
+  local ok, data = true, msg.data
+  if type(data) ~= 'table' then ok, data = pcall(jsonDecode, readFile(msg.path) or '') end
+  local f = far[tileKey(msg.anchorId, 'G' .. msg.key)]
+  local subs = {}
+  if ok and type(data) == 'table' and type(data.subs) == 'table' then
+    for i, e in ipairs(data.subs) do
+      local sl = msgSlot(msg, 's' .. (i - 1))
+      if type(e) == 'table' and e.shape and type(e.pos) == 'table' then
+        subs[#subs + 1] = { shape = sl and sl.path or e.shape, pos = e.pos, slot = sl }
+      else slotDrop(sl) end
+    end
+  end
+  if not f or f.ghost or #subs == 0 or not tonumber(data.subSize) then     -- (nothing to draw them for)
+    for _, sq in ipairs(subs) do slotDrop(sq.slot) end
+    return false
+  end
+  grassSubsDelete(f, true)
+  f.subs, f.subSize = subs, tonumber(data.subSize)
+  return true
+end
+
+-- Server message `grsub_drop` {anchorId, key}: the tile's squares go (the whole tile stays).
+function M.onGrassSubsDrop(msg)
+  local f = far[tileKey(msg.anchorId, 'G' .. msg.key)]
+  if f and not f.ghost then grassSubsDelete(f, true) end
 end
 
 -- A far tile is hidden while its square's road tile shows buildings (they are the same, colliding).
@@ -616,17 +673,51 @@ function M.skyCovered(seen, aid, ux, uy)
   return true
 end
 
--- Pure: is a grass card tile at pos (its square's south-west corner) hidden, with the player and camera at player and
--- view (positions or nil)?
-function M.grassCardHidden(on, pos, player, view)
-  if not on then return true end
+-- Pure: m (Chebyshev) from the nearer of the player and camera (positions or nil) to the square of side size at pos (its
+-- south-west corner); math.huge with neither.
+function M.squareNearest(pos, size, player, view)
+  local best = math.huge
   for _, p in ipairs({ player or false, view or false }) do
     if p and p.x and type(pos) == 'table' and pos[1] then
-      local d = math.max(pos[1] - p.x, p.x - (pos[1] + M.TILE_M), pos[2] - p.y, p.y - (pos[2] + M.TILE_M))
-      if d < M.GRASS_CARD_NEAR_M then return true end
+      best = math.min(best, math.max(pos[1] - p.x, p.x - (pos[1] + size), pos[2] - p.y, p.y - (pos[2] + size)))
     end
   end
-  return false
+  return best
+end
+
+-- Pure: is a grass card tile (or a square of one: size, near) at pos (its square's south-west corner) hidden, with the
+-- player and camera at player and view (positions or nil)?
+function M.grassCardHidden(on, pos, player, view, size, near)
+  if not on then return true end
+  return M.squareNearest(pos, size or M.TILE_M, player, view) < (near or M.GRASS_CARD_NEAR_M)
+end
+
+-- A grass card tile f (made) with squares: its squares queued, shown or hidden; is the whole tile hidden?
+local function grassUpdate(key, f, player, view)
+  if not f.subs then return M.grassCardHidden(M.grassCards, f.pos, player, view) end
+  if f.ghost then return f.hidden or false end     -- (a rebase's: tile and squares as they were, until the new ones come)
+  local d = M.squareNearest(f.pos, M.TILE_M, player, view)
+  local want = M.grassCards and d < M.GRASS_SUB_M
+  local ready = want
+  for i, s in ipairs(f.subs) do
+    if want and not s.id and not s.queued then
+      s.queued = true
+      grassQ[#grassQ + 1] = { key, i }
+    end
+    if not s.id then ready = false end
+  end
+  for _, s in ipairs(f.subs) do
+    if s.id then
+      local hide = not ready or M.grassCardHidden(M.grassCards, s.pos, player, view, f.subSize, M.GRASS_SUB_NEAR_M)
+      if hide ~= (s.hidden or false) then
+        local o = scenetree.findObjectById(s.id)
+        if o then o:setHidden(hide) end
+        s.hidden = hide
+      end
+    end
+  end
+  if ready then return true end
+  return M.grassCardHidden(M.grassCards, f.pos, player, view)
 end
 
 local function updateFar(gov, player, view)
@@ -634,7 +725,7 @@ local function updateFar(gov, player, view)
     if f.id then
       local hide
       if f.grass then
-        hide = M.grassCardHidden(M.grassCards, f.pos, player, view)
+        hide = grassUpdate(key, f, player, view)
       elseif f.sky then
         hide = M.skyCovered(farSeen, f.anchor, f.sky[1], f.sky[2])
       elseif f.deckOf then
@@ -650,6 +741,28 @@ local function updateFar(gov, player, view)
       end
     end
     if f.lamps or f.beacons then farLamps(key, f, f.id ~= nil and not f.hidden) end
+  end
+  -- (the near grass squares before the far tiles: they are near the car, and small)
+  while #grassQ > 0 and #walkQ == 0 and gov:try('roadWalk') do
+    local q = table.remove(grassQ, 1)
+    local f = far[q[1]]
+    local s = f and f.subs and f.subs[q[2]]
+    if s and s.queued and not s.id then
+      s.queued = nil
+      local t0 = now()
+      loadMaterials()
+      local ok, id = pcall(createWalk, { shape = s.shape, pos = s.pos }, false)
+      if ok then
+        s.id = id
+        slotMade(id, s.shape)
+        local o = scenetree.findObjectById(id)            -- (shown by grassUpdate once its tile's squares are all made)
+        if o then o:setHidden(true) end
+        s.hidden = true
+      else lastError = tostring(id) end
+      local ms = now() - t0
+      gov:charge('roadWalk', ms)
+      noteUnit('bldfar', ms, s.shape)
+    end
   end
   while #farQ > 0 and #walkQ == 0 and gov:try('roadWalk') do
     local key = table.remove(farQ, 1)
@@ -918,8 +1031,16 @@ function M.transform(xf, geodesy)
       moveObj(f.id, f.q)
       f.ghost = true
       any = true
+      if f.grass and type(f.pos) == 'table' then
+        f.pos = { xf:apply(f.pos[1], f.pos[2], f.pos[3] or 0) }
+        for _, s in ipairs(f.subs or {}) do
+          if s.id then moveObj(s.id, f.q) end
+          s.queued = nil
+        end
+      end
     end
   end
+  grassQ = {}
   -- the skyline: a cell drawn merged moves along as a ghost (gone once the new anchor's is drawn: updateSky); one drawn
   -- in parts lies under the near tiers, whose squares change with the anchor: it goes now
   for key, e in pairs(sky) do
@@ -1010,6 +1131,7 @@ local function releaseGhosts(player)
       if all then
         farLamps(key, f, false)
         if f.id then deleteQ[#deleteQ + 1] = f.id end
+        grassSubsDelete(f, true)
         slotDrop(f.slot)
         far[key] = nil
       else left = true end
@@ -1360,7 +1482,7 @@ function M.requestCollision() collisionDirty = true end
 -- the frame after it (terrainpatch.groundReady).
 function M.reloads() return reloads end
 
-function M.hasWork() return #createQ > 0 or #deleteQ > 0 or #walkQ > 0 or #farQ > 0 or collisionDirty end
+function M.hasWork() return #createQ > 0 or #deleteQ > 0 or #walkQ > 0 or #farQ > 0 or #grassQ > 0 or collisionDirty end
 
 
 -- Somebody else just ran be:reloadCollision() (the terrain commit): the sidewalks made so far collide.
@@ -1406,9 +1528,10 @@ function M.clear()
   for key in pairs(tiles) do dropTile(key) end
   for _, f in pairs(far) do
     if f.id then deleteQ[#deleteQ + 1] = f.id end
+    grassSubsDelete(f, true)
     slotDrop(f.slot)
   end
-  far, farQ = {}, {}
+  far, farQ, grassQ = {}, {}, {}
   createQ, held, newColliders = {}, {}, {}
   for _, id in ipairs(deleteQ) do
     local o = scenetree.findObjectById(id)
@@ -1427,11 +1550,16 @@ end
 function M.reset()
   -- (the level took the objects: every slot goes)
   for _, t in pairs(tiles) do for _, sl in pairs(t.slots or {}) do slotsGone[#slotsGone + 1] = { sl[1], sl[2], sl[3] } end end
-  for _, f in pairs(far) do if f.slot then slotsGone[#slotsGone + 1] = { f.slot[1], f.slot[2], f.slot[3] } end end
+  for _, f in pairs(far) do
+    if f.slot then slotsGone[#slotsGone + 1] = { f.slot[1], f.slot[2], f.slot[3] } end
+    for _, sq in ipairs(f.subs or {}) do
+      if sq.slot then slotsGone[#slotsGone + 1] = { sq.slot[1], sq.slot[2], sq.slot[3] } end
+    end
+  end
   for n, d in pairs(slotDropped) do slotsGone[#slotsGone + 1] = { n, d[1], d[2] } end
   objSlot, slotLive, slotDropped = {}, {}, {}
   tiles, createQ, deleteQ, walkQ, anchorId, loadedMaterials = {}, {}, {}, {}, nil, false
-  far, farQ = {}, {}
+  far, farQ, grassQ = {}, {}, {}
   collisionDirty, deletesDirty = false, false
 end
 
@@ -1497,7 +1625,10 @@ function M.status()
     if t.bld then nb = nb + 1 end
   end
   local nf = 0
-  for _, f in pairs(far) do if f.id and not f.hidden then nf = nf + 1 end end
+  for _, f in pairs(far) do
+    if f.id and not f.hidden then nf = nf + 1 end
+    for _, sq in ipairs(f.subs or {}) do if sq.id and not sq.hidden then nf = nf + 1 end end
+  end
   local ns, nso = 0, 0          -- skyline cells, and their meshes drawn
   for _, e in pairs(sky) do
     ns = ns + 1
