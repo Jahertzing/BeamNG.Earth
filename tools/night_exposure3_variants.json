@@ -1,0 +1,32 @@
+[
+ {
+  "name": "auto",
+  "lua": "local na = require('beamngEarth/nightambient') na.NIGHT_EV = nil",
+  "undo": "local na = require('beamngEarth/nightambient') na.NIGHT_EV = { urban = 5.0, rural = 1.5, rate = 1.0, offset = { dim = 0.6, normal = 0, bright = -0.75 } } na.setMode('normal')",
+  "settle": 10
+ },
+ {
+  "name": "ev_default",
+  "lua": "local na = require('beamngEarth/nightambient') na.NIGHT_EV = { urban = 5.0, rural = 1.5, rate = 1.0, offset = { dim = 0.6, normal = 0, bright = -0.75 } }",
+  "undo": "local na = require('beamngEarth/nightambient') na.NIGHT_EV = { urban = 5.0, rural = 1.5, rate = 1.0, offset = { dim = 0.6, normal = 0, bright = -0.75 } } na.setMode('normal')",
+  "settle": 10
+ },
+ {
+  "name": "ev_brighter",
+  "lua": "local na = require('beamngEarth/nightambient') na.NIGHT_EV = { urban = 4.5, rural = 0.5, rate = 1.0, offset = {} }",
+  "undo": "local na = require('beamngEarth/nightambient') na.NIGHT_EV = { urban = 5.0, rural = 1.5, rate = 1.0, offset = { dim = 0.6, normal = 0, bright = -0.75 } } na.setMode('normal')",
+  "settle": 10
+ },
+ {
+  "name": "ev_darker",
+  "lua": "local na = require('beamngEarth/nightambient') na.NIGHT_EV = { urban = 5.5, rural = 2.5, rate = 1.0, offset = {} }",
+  "undo": "local na = require('beamngEarth/nightambient') na.NIGHT_EV = { urban = 5.0, rural = 1.5, rate = 1.0, offset = { dim = 0.6, normal = 0, bright = -0.75 } } na.setMode('normal')",
+  "settle": 10
+ },
+ {
+  "name": "ev_bright_setting",
+  "lua": "local na = require('beamngEarth/nightambient') na.NIGHT_EV = { urban = 5.0, rural = 1.5, rate = 1.0, offset = { dim = 0.6, normal = 0, bright = -0.75 } } na.setMode('bright')",
+  "undo": "local na = require('beamngEarth/nightambient') na.NIGHT_EV = { urban = 5.0, rural = 1.5, rate = 1.0, offset = { dim = 0.6, normal = 0, bright = -0.75 } } na.setMode('normal')",
+  "settle": 10
+ }
+]

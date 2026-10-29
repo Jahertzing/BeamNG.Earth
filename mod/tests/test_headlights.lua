@@ -43,13 +43,13 @@ core_vehicle_manager = { getVehicleData = function() return { vdata = vdata } en
 hl.reset()
 hl.setMode('bright')
 hl.update()
-T.check(lights[7].args[3] == 8 and lights[7].args[4] == 90, 'bright: the low beam twice as bright, half again as far')
+T.check(lights[7].args[3] == 10 and lights[7].args[4] == 120, 'bright: the low beam 2.5x as bright, twice as far')
 local col = lights[7].args[5]
 T.check(lights[7].args[1] == 10 and lights[7].args[2] == 30 and type(col) == 'table' and col[1] == 1
   and math.abs(col[2] - 0.8) < 1e-6 and col[4] == 1, '... its own cone and colour, a ColorF')
-T.check(lights[9].args[3] == 16 and lights[9].args[4] == 180, '... the high beam too')
+T.check(lights[9].args[3] == 20 and lights[9].args[4] == 240, '... the high beam too')
 T.check(lights[8] == nil, 'the brake light untouched')
-T.check(#cmds == 1 and cmds[1]:find('k=2.0000', 1, true), 'the vehicle side told: ' .. tostring(cmds[1]))
+T.check(#cmds == 1 and cmds[1]:find('k=2.5000', 1, true), 'the vehicle side told: ' .. tostring(cmds[1]))
 T.check(hl.status().lamps == 2, 'status: two lamps')
 
 clock = 5
@@ -58,8 +58,8 @@ T.check(#cmds == 1, 'nothing changed: nothing done again')
 
 hl.setMode('brighter')
 hl.update()
-T.check(lights[7].args[3] == 16 and lights[7].args[4] == 120, 'brighter: from the base, not the bright values')
-T.check(#cmds == 2 and cmds[2]:find('k=4.0000', 1, true), '... the vehicle side too')
+T.check(lights[7].args[3] == 20 and lights[7].args[4] == 180, 'brighter: from the base, not the bright values')
+T.check(#cmds == 2 and cmds[2]:find('k=5.0000', 1, true), '... the vehicle side too')
 
 hl.setMode('stock')
 clock = 10
@@ -77,7 +77,7 @@ v2.getProp = function(_, pid)
 end
 clock = 20
 hl.update()
-T.check(lights[7] and lights[7].args[3] == 8, 'a respawned car: scaled again')
+T.check(lights[7] and lights[7].args[3] == 10, 'a respawned car: scaled again')
 
 local hx = hl.colorOf('#ff800040')
 T.check(hx[1] == 1 and math.abs(hx[2] - 128 / 255) < 1e-6 and math.abs(hx[4] - 64 / 255) < 1e-6, 'colorOf: #rrggbbaa')
