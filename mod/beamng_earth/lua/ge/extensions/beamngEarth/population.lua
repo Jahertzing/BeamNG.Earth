@@ -420,7 +420,11 @@ local function place(id, g)
     tr.respawnVehicle(id, pos, rot)
   end)
   if not ok then return false end
-  pcall(function() require('beamngEarth/navgraph').fadeIn(id) end)    -- (faded in, not whole at once)
+  -- faded in, not whole at once; unless its far model stood there (farghosts.lua): then it just takes its place
+  local okF, far = pcall(require, 'beamngEarth/farghosts')
+  if not (okF and far.showing(g)) then
+    pcall(function() require('beamngEarth/navgraph').fadeIn(id) end)
+  end
   -- pushed to the ghost's speed once landed (navgraph's gentle push)
   P.pushes = P.pushes or {}
   P.pushes[id] = { v = g.v, at = os.clock() }
@@ -483,7 +487,12 @@ end
 M.STUCK_S = 60           -- a real car standing this long (40 m or more from the player) may be taken for another ghost
 
 -- Every frame (navgraph.update): move the ghosts, keep the real cars on the nearest ones.
-function M.update(b)
+-- A car's move (respawnVehicle: a safe teleport, a few ms) waits for a frame with this much room (the frame governor's
+-- roomFor), PLACE_WAIT_FRAMES at most (the streaming research, 2026-10-29: "make respawnVehicle a governor unit").
+M.PLACE_MS = 3.0
+M.PLACE_WAIT_FRAMES = 20
+
+function M.update(b, gov)
   local now = os.clock()
   if not P.enabled or not P.graph or now - P.lastTick < M.TICK_S then return end
   local dt = P.lastTick == -math.huge and 0 or math.min(1, now - P.lastTick)
@@ -528,6 +537,11 @@ function M.update(b)
     end
   end
   if now - P.lastSwap < M.SWAP_S then return end
+  if gov and gov.roomFor and (P.placeWaited or 0) < M.PLACE_WAIT_FRAMES and not gov:roomFor(M.PLACE_MS) then
+    P.placeWaited = (P.placeWaited or 0) + 1
+    return
+  end
+  P.placeWaited = 0
   P.lastSwap = now
   -- the game's own recycling stays off (a traffic set up again resets its vars)
   local tr = gameplay_traffic
@@ -559,7 +573,10 @@ function M.update(b)
       sw.demote.real = nil
       P.stats.demoted = P.stats.demoted + 1
     end
-    if place(sw.id, sw.ghost) then
+    local t0 = os.clock()
+    local placed = place(sw.id, sw.ghost)
+    if gov and gov.noteFrame then gov:noteFrame((os.clock() - t0) * 1000) end
+    if placed then
       sw.ghost.real = sw.id
       P.stillSince[sw.id] = nil
       P.stats.promoted = P.stats.promoted + 1
@@ -586,8 +603,13 @@ function M.update(b)
 end
 
 -- On / off (navgraph: the setting trafficPopulation). Off hands the recycling back to the game.
+-- The far ghosts' models (farghosts.lua) with the population: FAR (on by default with it).
+M.FAR = true
+
 function M.setEnabled(on, share, left)
   P.enabled = on and true or false
+  local okF, far = pcall(require, 'beamngEarth/farghosts')
+  if okF then far.setEnabled(P.enabled and M.FAR) end
   P.share, P.left = share or 1, left and true or false
   local tr = rawget(_G, 'gameplay_traffic')
   if tr and tr.setTrafficVars then pcall(tr.setTrafficVars, { spawnValue = on and 0 or 1 }) end
@@ -598,6 +620,8 @@ function M.enabled() return P.enabled == true end
 
 -- The player teleported, or the level reset: everything seeds again on the next graph.
 function M.reset()
+  local okF, far = pcall(require, 'beamngEarth/farghosts')
+  if okF then far.clear() end
   P.ghosts, P.graph, P.adj, P.pushes = {}, nil, nil, {}
   P.lastTick, P.lastSwap = -math.huge, -math.huge
 end
