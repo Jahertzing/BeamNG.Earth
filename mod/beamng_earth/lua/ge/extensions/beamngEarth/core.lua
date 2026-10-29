@@ -1909,7 +1909,7 @@ local function perfFrame(ms, hrec)
     local okB, ms = pcall(perflog.gameBudgetMs)
     if okB and ms then perflog.setBudget(ms) end
   end
-  local lines = perflog.frame(ms, st.clock, perfContext, hrec, marks, perfEngine)
+  local lines = perflog.frame(ms, st.clock, perfContext, hrec, marks, perfEngine, M.gpuTimings)
   if hrec then                             -- (the first long LuaGC: where the heap goes, census.lua)
     local cl = require('beamngEarth/census').afterHitch(hrec.engine)
     if cl then lines[#lines + 1] = cl end

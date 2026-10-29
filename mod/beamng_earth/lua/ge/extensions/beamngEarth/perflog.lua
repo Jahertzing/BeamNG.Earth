@@ -192,7 +192,10 @@ end
 -- (called only when a line is made); hitch: core's hitch record for this frame ({mod = {}, engine = {}}) or nil;
 -- mod: the mod's parts this frame {name = ms} (summed over the window); engine(): the engine's breakdown {name = ms}
 -- (sampled every ENGINE_EVERY frames). Returns a list of lines (often empty).
-function M.frame(ms, now, ctx, hitch, mod, engine)
+-- gpu(): the engine's GPU pass timings {name = ms} (core.gpuTimings; sampled with the engine's every ENGINE_EVERY
+-- frames for the drop line's means: lap 3 of 2026-10-29 dropped to 60 fps for 25 s with 6 ms of present wait a
+-- frame and nothing in the mod's parts, which pass grew is what the line now says).
+function M.frame(ms, now, ctx, hitch, mod, engine, gpu)
   local out = {}
   if type(ms) ~= 'number' or ms ~= ms or ms <= 0 then return out end
   -- a clock that went back (core's st.clock starts at 0 again with each level start): the old marks would hold every
@@ -267,6 +270,12 @@ function M.frame(ms, now, ctx, hitch, mod, engine)
       w.engN = w.engN + 1
       for k, v in pairs(e) do if type(v) == 'number' then w.eng[k] = (w.eng[k] or 0) + v end end
     end
+    local g = gpu and gpu()
+    if g then
+      w.gpu = w.gpu or {}
+      w.gpuN = (w.gpuN or 0) + 1
+      for k, v in pairs(g) do if type(v) == 'number' then w.gpu[k] = (w.gpu[k] or 0) + v end end
+    end
   end
   if now - w.t0 >= M.WINDOW_S then
     local fps = w.n / (w.ms / 1000)
@@ -284,6 +293,12 @@ function M.frame(ms, now, ctx, hitch, mod, engine)
         if m ~= '' then line = line .. ' | mod over the window (ms): ' .. m end
         local e = top(engMean, 5, 1)
         if e ~= '' then line = line .. ' | engine per frame: ' .. e end
+        if w.gpu and (w.gpuN or 0) > 0 then
+          local gpuMean = {}
+          for k, v in pairs(w.gpu) do gpuMean[k] = v / w.gpuN end
+          local g = top(gpuMean, 5, 0.5)
+          if g ~= '' then line = line .. ' | gpu per frame: ' .. g end
+        end
         if c.doing and c.doing ~= '' then line = line .. ' | doing: ' .. c.doing end
         out[#out + 1] = line
         drop = { since = w.t0, low = fps }

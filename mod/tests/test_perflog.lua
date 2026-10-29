@@ -142,4 +142,24 @@ T.near(P.setBudget(P.gameBudgetMs()), 10, 1e-9, 'setBudget')
 GFXDevice = nil
 T.check(P.gameBudgetMs() == nil, 'budget: nothing known')
 P.setRefresh(85)
+-- a drop's line carries the GPU passes' means over its window when the caller gives them
+lines = {}
+P.reset()
+now = 0
+ctx = function() return { lat = 39.7, lon = -105, mph = 100 } end
+local gpuCalls = 0
+local function gpu() gpuCalls = gpuCalls + 1; return { Shadows = 9.5, Main = 4.2, Tiny = 0.1 } end
+local function runG(seconds, ms)
+  local t_end = now + seconds
+  while now < t_end do
+    now = now + ms / 1000
+    for _, l in ipairs(P.frame(ms, now, ctx, nil, nil, function() return { Render = 2 } end, gpu)) do lines[#lines + 1] = l end
+  end
+end
+runG(30, 1000 / 90)
+runG(10, 1000 / 55)
+local dl = find('perf drop')
+T.check(#dl == 1 and dl[1]:find('gpu per frame: Shadows 9.5, Main 4.2', 1, true) and not dl[1]:find('Tiny', 1, true),
+  'the drop line: the GPU passes over the window (the small ones left out): ' .. tostring(dl[1]))
+T.check(gpuCalls > 0 and gpuCalls * P.ENGINE_EVERY <= 40 * 90 + 10, 'the GPU timings sampled with the engine, every ENGINE_EVERY frames')
 T.done('test_perflog')
