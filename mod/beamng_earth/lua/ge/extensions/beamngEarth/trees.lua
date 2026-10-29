@@ -9,6 +9,7 @@ local M = {}
 local vienna = require('beamngEarth/vienna_convention_speed_signs')
 
 M.PER_FRAME = 250       -- items made or removed per frame at most
+M.SLOW_TYPE_MS = 100     -- an item type's first making (its shape loaded) this slow: logged with its name
 M.ROWS_PER_FRAME = 12000 -- rows of changing tiles looked at per frame at most (Lua time: 30000 averaged 2.5 ms)
 -- 2026-10-14: was { 300, 1 }, { 550, 0.5 }, { 900, 0.25 }, { 1e9, 0.12 }; the engine already draws far trees as
 -- billboards (their LODs), so our extra thinning made far forest sparse. Columbia: 48k -> 78k items, no frame cost seen.
@@ -410,8 +411,12 @@ function itemType(shape, solid)
     d:setField('shapeFile', 0, shape .. '.dae')
     d:setField('collidable', 0, solid and '1' or '0')
     d:setField('windScale', 0, '0.4'); d:setField('branchAmp', 0, '0.1'); d:setField('detailAmp', 0, '0.2')
+    local t0 = M.clock()
     d:registerObject(name)
     if Sim and Sim.getDataBlockSet then Sim.getDataBlockSet():addObject(d) end
+    local ms = t0()
+    -- (a shape's first load is the engine's, in this frame: one slow enough to see is named in the log)
+    if ms >= M.SLOW_TYPE_MS then log('W', 'beamngEarth.trees', string.format('slow item type %s: %.0f ms', name, ms)) end
   end
   types[key] = d
   return d
