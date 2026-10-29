@@ -281,6 +281,9 @@ def store(cache_dir, kind, k, blobs, extra=None):
             z.writestr("meta.json", json.dumps({"names": list(blobs), "extra": extra}))
         os.replace(tmp, path)
         if pinned and GENS == "bake":
+            # (also for an item keyed by its modules (key(modules=)): a server whose only new items are such marks
+            # the anchor as baked by its code though its other kinds come from an older generation; harmless for the
+            # module-keyed kinds, which skip the generations, but the mark means "this code stored here", no more)
             _mark(cache_dir, k)
         return True
     except Exception:

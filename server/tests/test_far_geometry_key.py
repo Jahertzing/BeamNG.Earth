@@ -43,6 +43,31 @@ class FarGeometryKeyTest(unittest.TestCase):
         self.assertLessEqual(ran, set(blockworker.FAR_GEOMETRY_MODULES),
                              f"modules the build ran that its key does not hash: {ran - set(blockworker.FAR_GEOMETRY_MODULES)}")
 
+    def test_every_import_is_listed_or_io(self):
+        # the server modules the listed ones import, transitively: each is hashed, or an allowed I/O helper
+        import ast
+        have = {os.path.splitext(n)[0] for n in os.listdir(SERVER) if n.endswith(".py")}
+        listed, io = set(blockworker.FAR_GEOMETRY_MODULES), set(blockworker.FAR_GEOMETRY_IO)
+        todo, seen, bad = list(listed), set(), set()
+        while todo:
+            m = todo.pop()
+            if m in seen:
+                continue
+            seen.add(m)
+            with open(os.path.join(SERVER, m + ".py"), encoding="utf-8") as f:
+                tree = ast.parse(f.read())
+            for n in ast.walk(tree):
+                names = ([a.name for a in n.names] if isinstance(n, ast.Import) else
+                         [n.module] if isinstance(n, ast.ImportFrom) and n.module and n.level == 0 else [])
+                for name in names:
+                    top = name.split(".")[0]
+                    if top not in have or top in io:
+                        continue
+                    if top not in listed:
+                        bad.add(f"{m} imports {top}")
+                    todo.append(top)
+        self.assertFalse(bad, f"imported but neither hashed nor allowed: {sorted(bad)}")
+
     def test_key_hashes_only_its_modules(self):
         mods = blockworker.far_geometry_modules(2)
         self.assertIn("farfield", mods)
