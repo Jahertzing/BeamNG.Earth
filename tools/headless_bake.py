@@ -60,6 +60,17 @@ blockworker "worker <pid> cpu: ..."), and this tool samples the CPU of the serve
 own CPU (base photos, far textures, the event loop: the one interpreter lock) against its workers', and the
 workers' CPU by job kind (road tiles, far tiles, blocks, far buildings). What to speed up next is read off it.
 
+Incremental runs (2026-10-29, Jeff: a change should rebake only what it touches, in minutes, without heating the PC):
+  --near lat,lon --km R   only the stretches of the planned routes within R km of the spot (a leg each, with the
+                          split's overlap), so a fix is baked round where it is tested; the rest serves from the
+                          bake it has (revisit's generations)
+  --fly M                 the pace rises towards M m/s (FLY_SPEED) while nothing has to be built for FLY_AFTER_S,
+                          and falls back to --speed the moment something does: a kept stretch is read back, not
+                          rebuilt, and a kept 94 km leg takes about 8 min instead of 20
+  --power cool|normal|max cool (the default with --near): one server of COOL_WORKERS, the server tree pinned to
+                          half the CPUs (COOL_SHARE), below normal priority; normal (the default otherwise): the
+                          servers the memory allows, below normal; max: the same at normal priority
+
 The speed (SPEED, --speed) is the bake's pace, not a car's: the car stands wherever the server has not finished, so
 a faster car only shortens the stretches with nothing to wait for. At the ghost drive's 27 m/s a 94 km route took
 58 min with nothing to build, 53% of a 41 min run (2026-10-28 10:18; the terrain blocks took 96 s of it). The pose
@@ -93,6 +104,12 @@ IS_WIN = os.name == "nt"
 TICK_S = 0.1                # the client's frame
 POSE_S = 0.5                # core.lua POSE_INTERVAL
 SPEED = 80.0                # m/s along the road: the pace between waits (the ghost drive's 27 m/s capped the bake)
+FLY_SPEED = 200.0           # --fly: the pace while nothing is being built (kept items read back in milliseconds)
+FLY_AFTER_S = 3.0           # ... reached FLY_RAMP_S after the last wait ended
+FLY_RAMP_S = 5.0            # ... ramping up over this long (the server's road lead follows the pose's speed)
+POWERS = ("cool", "normal", "max")
+COOL_WORKERS = (2, 3)       # --power cool: one server with these far and road workers ...
+COOL_SHARE = 0.5            # ... pinned to this share of the CPUs (psutil cpu_affinity on the server tree)
 ROADS_Q = 1                 # road tiles round the car still to come, at most, to move on
 BACKLOG_Q = 4               # far tiles likewise (the ghost's --backlog-q)
 EDGE_M = 160.0              # the next block must be ready before the car is this near its block's edge
@@ -395,9 +412,18 @@ def profile_text(p):
             + (f"; jobs: {kinds}" if kinds else "") + mem_text)
 
 
-def start_server(cmd, log_path, timeout=START_S, mode="game", profile=False):
-    """(process, port): cmd started at idle priority (mode "alone": below normal), its output to log_path, once it
-    listens; profile: every worker logs its memory each minute (BNGE_TRACEMALLOC)."""
+def priority_class(mode, power="normal"):
+    """Windows: the server's priority class: idle with the game (mode game), below normal alone, normal for
+    --power max."""
+    if mode == "game":
+        return subprocess.IDLE_PRIORITY_CLASS
+    return subprocess.NORMAL_PRIORITY_CLASS if power == "max" else subprocess.BELOW_NORMAL_PRIORITY_CLASS
+
+
+def start_server(cmd, log_path, timeout=START_S, mode="game", profile=False, power="normal"):
+    """(process, port): cmd started at idle priority (mode "alone": below normal; power "max": normal), its output
+    to log_path, once it listens; profile: every worker logs its memory each minute (BNGE_TRACEMALLOC); power "cool":
+    the server tree pinned to cool_cpus() (its workers inherit the mask)."""
     # (BNE_REVISIT_GENS=bake: builds what an older generation baked anew and marks the anchors it bakes, revisit.py
     # "Generations"; not in the code key. BNGE_BUDGET=bake: the per-process caches clamped (budget.py BAKE_*; a BNGE_
     # switch, not in the key either), unless the shell chose a profile.)
@@ -407,14 +433,15 @@ def start_server(cmd, log_path, timeout=START_S, mode="game", profile=False):
         env["BNGE_TRACEMALLOC"] = "1"
     kw = {"cwd": ROOT, "env": env}
     if IS_WIN:
-        cls = subprocess.BELOW_NORMAL_PRIORITY_CLASS if mode == "alone" else subprocess.IDLE_PRIORITY_CLASS
-        kw["creationflags"] = cls | subprocess.CREATE_NEW_PROCESS_GROUP
+        kw["creationflags"] = priority_class(mode, power) | subprocess.CREATE_NEW_PROCESS_GROUP
     else:
         kw["start_new_session"] = True
     os.makedirs(os.path.dirname(log_path), exist_ok=True)
     out = open(log_path, "w", encoding="utf-8")
     proc = subprocess.Popen(cmd, stdout=out, stderr=subprocess.STDOUT, **kw)
     out.close()
+    if power == "cool":
+        pin_tree(proc.pid, cool_cpus())        # (at once: earthd and its workers come later and inherit it)
     end = time.monotonic() + timeout
     try:
         while time.monotonic() < end:
@@ -424,6 +451,8 @@ def start_server(cmd, log_path, timeout=START_S, mode="game", profile=False):
                 port = int(m.group(1))
                 if port == GAME_PORT:       # (never: --port 0; a guard against a changed command)
                     raise RuntimeError(f"the server took the game's port {GAME_PORT}")
+                if power == "cool":
+                    pin_tree(proc.pid, cool_cpus())    # (the tree as it stands once the server listens)
                 return proc, port
             if proc.poll() is not None:
                 raise RuntimeError(f"the server ended (exit {proc.returncode}): see {log_path}")
@@ -546,7 +575,8 @@ def rebase_hint(vx, vy, dist, distance, dx, dy, size, latency=None, pinned=False
     return modsim.follow_target(dx + px, dy + py, vx, vy, size)
 
 
-CAUSES = ("moving", "anchor", "block", "ground", "roads", "far")   # summary seconds_by: where a leg's time went
+CAUSES = ("moving", "flying", "anchor", "block", "ground", "roads", "far")   # seconds_by: where a leg's time went
+FLYING_OVER = 1.5           # ... "flying": the pace over this many times --speed
 
 
 def cause_of(why):
@@ -627,6 +657,8 @@ class Drive:
                       "discards": 0, "pinned": 0, "anchors": []}
         self.waits = []
         self.by = {k: 0.0 for k in CAUSES}      # seconds by cause: moving, or the first wait reason's (cause_of)
+        self.pace = float(a.speed)              # m/s now: a.speed, rising towards a.fly while nothing is built (fly)
+        self.fly_max = max(float(a.speed), float(getattr(a, "fly", 0.0) or 0.0))
 
     def rid(self):
         self.next_id += 1
@@ -729,7 +761,7 @@ class Drive:
         x, y = self.enu(self.frame, lat, lon)
         hx, hy = self.enu(self.frame, hlat, hlon)
         d = math.hypot(hx - x, hy - y) or 1.0
-        vx, vy = self.a.speed * (hx - x) / d, self.a.speed * (hy - y) / d
+        vx, vy = self.pace * (hx - x) / d, self.pace * (hy - y) / d
         # origin rebase first (core.lua updateWorld)
         p = st["pending"]
         stale = edge = None
@@ -760,7 +792,7 @@ class Drive:
             x, y = self.enu(self.frame, lat, lon)
             hx, hy = self.enu(self.frame, hlat, hlon)
             d = math.hypot(hx - x, hy - y) or 1.0
-            vx, vy = self.a.speed * (hx - x) / d, self.a.speed * (hy - y) / d
+            vx, vy = self.pace * (hx - x) / d, self.pace * (hy - y) / d
         elif act == "discard":
             st["pending"] = None
             self.stats["discards"] += 1
@@ -788,7 +820,7 @@ class Drive:
     def pose(self):
         x, y, vx, vy, lat, lon = self.pos
         msg = {"type": "pose", "anchorId": self.aid, "x": x, "y": y, "z": self.z, "vx": vx, "vy": vy, "lat": lat,
-               "lon": lon, "speed": self.a.speed, "follow": True, "held": [self.aid], "sessions": []}
+               "lon": lon, "speed": self.pace, "follow": True, "held": [self.aid], "sessions": []}
         if self.slots_gone:
             msg["slotsGone"], self.slots_gone = self.slots_gone, []
         self.c.send(msg)
@@ -800,6 +832,7 @@ class Drive:
         s, last = 0.0, 0.0
         pose_at = sample_at = 0.0
         wait = None             # the current wait: {"at_km": km, "t0": now, "why": [...]}
+        clear_at = 0.0          # since when nothing has had to be built (fly)
         free_until = -1.0       # gave up at a spot: on without standing until here (m)
         ground_t0 = None        # since when the ground is not final
         lat0, lon0 = self.route.point(0.0)
@@ -841,11 +874,16 @@ class Drive:
                         self.say(f"  gave up waiting at {wait['at_km']} km after {now - wait['t0']:.0f} s: "
                                  f"{'; '.join(why)}")
                     wait = None
-                self.by[cause_of(why) if why else "moving"] += dt
+                flying = self.pace > FLYING_OVER * self.a.speed
+                self.by[cause_of(why) if why else ("flying" if flying else "moving")] += dt
                 if s >= self.route.length and (not why or gave_up):
                     break
+                if why:
+                    self.pace, clear_at = float(self.a.speed), now
+                else:
+                    self.pace = self.fly(now - clear_at)
                 if not why or gave_up:
-                    s = min(self.route.length, s + self.a.speed * dt)
+                    s = min(self.route.length, s + self.pace * dt)
                 if now >= sample_at:
                     sample_at = now + SAMPLE_S
                     pr = self.st.get("progress") or {}
@@ -862,10 +900,18 @@ class Drive:
                 samples.close()
         return self.summary(now, s)
 
+    def fly(self, clear_s):
+        """The pace clear_s after the last wait ended: a.speed until FLY_AFTER_S, then up to a.fly over FLY_RAMP_S
+        (the server builds what the car passes at any pace; the waits hold it where something is not ready)."""
+        base = float(self.a.speed)
+        if self.fly_max <= base or clear_s < FLY_AFTER_S:
+            return base
+        return min(self.fly_max, base + (self.fly_max - base) * (clear_s - FLY_AFTER_S) / FLY_RAMP_S)
+
     def summary(self, seconds, s):
         return {"seconds": round(seconds, 1), "km": round(s / 1000, 2), "route_km": round(self.route.length / 1000, 2),
                 "complete": s >= self.route.length - 1, **{k: v for k, v in self.stats.items()},
-                "speed": self.a.speed, "seconds_by": {k: round(v, 1) for k, v in self.by.items()},
+                "speed": self.a.speed, "fly": self.fly_max, "seconds_by": {k: round(v, 1) for k, v in self.by.items()},
                 "waits": {"count": len(self.waits), "seconds": round(sum(w["s"] for w in self.waits), 1),
                           "gave_up": sum(1 for w in self.waits if w["gave_up"]),
                           "longest": sorted(self.waits, key=lambda w: -w["s"])[:10]}}
@@ -944,6 +990,57 @@ def stretch(route, i, n, overlap=SPLIT_OVERLAP_M, step=SPLIT_STEP_M):
     return gd.Route([route.point(s0 + (s1 - s0) * j / k) for j in range(k + 1)])
 
 
+def near_stretch(route, lat, lon, km, overlap=SPLIT_OVERLAP_M, step=SPLIT_STEP_M):
+    """The stretch of a ghost_drive Route within km of (lat, lon): from the first point within reach to the last,
+    reaching overlap m further either way; None when the route never comes within km."""
+    reach = float(km) * 1000.0
+    n = max(1, int(math.ceil(route.length / step)))
+    inside = [i for i in range(n + 1) if rb.horizontal((lat, lon), route.point(route.length * i / n)) <= reach]
+    if not inside:
+        return None
+    s0 = max(0.0, route.length * inside[0] / n - overlap)
+    s1 = min(route.length, route.length * inside[-1] / n + overlap)
+    k = max(1, int(math.ceil((s1 - s0) / step)))
+    return gd.Route([route.point(s0 + (s1 - s0) * j / k) for j in range(k + 1)])
+
+
+def parse_near(text):
+    """(lat, lon) of --near "lat,lon"."""
+    lat, lon = (float(v) for v in text.split(","))
+    return lat, lon
+
+
+def leg_route(routes_file, n, back, part, near=None):
+    """The ghost_drive Route of a leg: the route (back: reversed), its stretch part of split, and with near
+    ((lat, lon, km)) only its stretch round that spot; None when the leg never comes within near's km."""
+    route = gd.load_route(routes_file, n, back)
+    if part:
+        route = stretch(route, *part)
+    if near:
+        route = near_stretch(route, *near)
+    return route
+
+
+def cool_cpus(cpus=None, share=COOL_SHARE):
+    """The CPUs a --power cool server tree is pinned to: the first share of them (at least one)."""
+    cpus = list(range(os.cpu_count() or 1)) if cpus is None else list(cpus)
+    return cpus[:max(1, int(len(cpus) * share))]
+
+
+def pin_tree(pid, cpus, say=print):
+    """Pin a process and its descendants to cpus (psutil; children made later inherit it). Never raises."""
+    try:
+        import psutil
+        root = psutil.Process(pid)
+        for p in [root] + root.children(recursive=True):
+            try:
+                p.cpu_affinity(list(cpus))
+            except (psutil.Error, AttributeError, OSError):
+                pass
+    except Exception as e:      # (no psutil, or the process gone)
+        say(f"power cool: the server tree was not pinned ({type(e).__name__}: {e})", flush=True)
+
+
 def leg_lengths(legs, routes_file):
     """{leg label: its line's length (m)} from routes.json (a stretch: its share plus the overlaps); a route not in
     the file: 0."""
@@ -1002,7 +1099,7 @@ def leg_report(leg, summary):
 
 
 def drive_legs(a, legs, lines, routes_file, anchors, pin_m, distance, out, mode, workers=None, road_processes=None,
-               prefix="", on_leg=None):
+               prefix="", on_leg=None, near=None, power="normal"):
     """A server (unless a.connect) and the legs driven through it in turn, each leg's summary.json in out/<leg>;
     on_leg(record) after each. Returns (every leg complete, [records])."""
     say = saying(prefix)
@@ -1018,7 +1115,7 @@ def drive_legs(a, legs, lines, routes_file, anchors, pin_m, distance, out, mode,
             say("server: " + " ".join(cmd[1:]), flush=True)
             tag = ("-" + prefix.strip(": ")) if prefix else ""
             log_path = os.path.join(out, f"server{tag}.log")
-            proc, port = start_server(cmd, log_path, mode=mode, profile=getattr(a, "profile", False))
+            proc, port = start_server(cmd, log_path, mode=mode, profile=getattr(a, "profile", False), power=power)
             say(f"server listening on {port} (log {log_path})", flush=True)
             if getattr(a, "profile", False):
                 sampler = CpuSampler(proc.pid, os.path.join(out, f"cpu{tag}.jsonl"), say=say).start()
@@ -1032,10 +1129,11 @@ def drive_legs(a, legs, lines, routes_file, anchors, pin_m, distance, out, mode,
                 print(f"{prefix}{n}: not in {routes_file}", file=sys.stderr)
                 ok = False
                 continue
-            route = gd.load_route(routes_file, n, back)
-            if part:
-                route = stretch(route, *part)
-            leg = leg_label(n, back, part)
+            route = leg_route(routes_file, n, back, part, near)
+            leg = leg_label(n, back, part) + ("_near" if near else "")
+            if route is None:
+                say(f"{leg}: never within {near[2]:g} km of {near[0]:.4f},{near[1]:.4f}: skipped", flush=True)
+                continue
             lo = os.path.join(out, leg)
             os.makedirs(lo, exist_ok=True)
             say(f"{leg}: {route.length / 1000:.1f} km at {a.speed:g} m/s", flush=True)
@@ -1080,6 +1178,9 @@ def child_command(a, legs, out, mode, workers, road_processes):
             cmd += ["--" + opt.replace("_", "-"), str(v)]
     if getattr(a, "profile", False):
         cmd.append("--profile")
+    if getattr(a, "near", None):
+        cmd += ["--near", a.near, "--km", str(a.km)]
+    cmd += ["--power", getattr(a, "power", None) or "normal", "--fly", str(getattr(a, "fly", FLY_SPEED))]
     return cmd
 
 
@@ -1127,6 +1228,14 @@ def main(argv=None):
     ap.add_argument("--routes", default=None, help="comma list of the planned routes (default: all in routes.json)")
     ap.add_argument("--both-ways", action="store_true", help="each route back again too")
     ap.add_argument("--speed", type=float, default=SPEED, help="m/s along the road between waits (default %(default)g)")
+    ap.add_argument("--fly", type=float, default=FLY_SPEED,
+                    help="m/s the pace rises to while nothing has to be built (default %(default)g; 0: never faster "
+                         "than --speed)")
+    ap.add_argument("--near", default=None, help="lat,lon: only the routes' stretches within --km of this spot")
+    ap.add_argument("--km", type=float, default=5.0, help="--near's reach (default %(default)g km)")
+    ap.add_argument("--power", choices=POWERS, default=None,
+                    help="cool: one server of few workers pinned to half the CPUs (the default with --near); normal: "
+                         "the servers the memory allows, below normal priority (the default); max: at normal priority")
     ap.add_argument("--mode", choices=MODES, default="auto",
                     help="game: the game runs, one worker at idle priority; alone: servers and workers sized from the "
                          "memory free (plan_servers) below normal; auto (default): alone unless the game's process is found")
@@ -1181,11 +1290,22 @@ def main(argv=None):
     anchors = [tuple(map(float, x)) for x in data.get("anchors") or ()]
     pin_m = pin_metres(data, distance)
     mode = resolve_mode(a.mode)
+    near = None
+    if a.near:
+        try:
+            near = parse_near(a.near) + (float(a.km),)
+        except ValueError:
+            ap.error("--near: lat,lon")
+        legs = [lg for lg in legs if leg_route(routes_file, *lg, near) is not None] if not a.child else legs
+        if not legs:
+            print(f"no planned route comes within {a.km:g} km of {a.near}", file=sys.stderr)
+            return 2
+    power = a.power or ("cool" if near else "normal")
     if a.child:         # (a --jobs child: the parent's run folder and manifest entry)
         os.makedirs(a.out, exist_ok=True)
         prefix = ",".join(leg_label(*lg) for lg in legs) + ": "
         ok, _ = drive_legs(a, legs, lines, routes_file, anchors, pin_m, distance, a.out, mode, a.workers,
-                           a.road_processes, prefix=prefix)
+                           a.road_processes, prefix=prefix, near=near, power=power)
         return 0 if ok else 1
     code = revisit.code_key()
     stamp = time.strftime("%Y%m%d-%H%M%S")
@@ -1197,6 +1317,10 @@ def main(argv=None):
     workers = (1, 1)
     if a.connect:
         jobs = 1
+    elif mode == "alone" and power == "cool":
+        jobs = 1
+        workers = (a.workers if a.workers is not None else COOL_WORKERS[0],
+                   a.road_processes if a.road_processes is not None else COOL_WORKERS[1])
     elif mode == "alone" and (a.workers is None or a.road_processes is None):
         jobs, far, road, note = plan_servers(a.jobs, len(legs))
         workers = (a.workers if a.workers is not None else far, a.road_processes if a.road_processes is not None else road)
@@ -1205,14 +1329,16 @@ def main(argv=None):
     else:
         jobs = max(1, min(a.jobs, len(legs)))
         workers = (a.workers or 1, a.road_processes or 1)
-    print(f"headless bake: {', '.join(leg_label(*lg) for lg in legs)} at {a.speed:g} m/s, mode {mode}"
-          f"{' (auto)' if a.mode == 'auto' else ''}{f', {jobs} jobs' if jobs > 1 else ''}; "
+    print(f"headless bake: {', '.join(leg_label(*lg) for lg in legs)}"
+          f"{f' within {a.km:g} km of {a.near}' if near else ''} at {a.speed:g} m/s (flying up to {a.fly:g}), mode "
+          f"{mode}{' (auto)' if a.mode == 'auto' else ''}, power {power}{f', {jobs} jobs' if jobs > 1 else ''}; "
           f"code {code}, BNE env {bne_env() or 'none'}; bake {bd}")
     if prior and prior != code:
         print(f"note: the last bake run had code {prior}: a server/*.py change or other BNE_* switches since",
               flush=True)
     run = {"started": time.strftime("%Y-%m-%d %H:%M:%S"), "start_ts": time.time(), "code": code, "routes": names,
-           "driver": "headless", "mode": mode, "speed": a.speed, "jobs": jobs,
+           "driver": "headless", "mode": mode, "speed": a.speed, "fly": a.fly, "jobs": jobs, "power": power,
+           "near": [near[0], near[1], near[2]] if near else None,
            "workers": list(workers) if jobs > 1 or mode == "alone" else None, "complete": False, "legs": []}
     man.setdefault("runs", []).append(run)
     rb.write_json(man_path, man)
@@ -1226,7 +1352,7 @@ def main(argv=None):
             ok, run["legs"] = run_children(a, share_out(legs, jobs, leg_lengths(legs, routes_file)), out, mode, workers)
         else:
             ok, _ = drive_legs(a, legs, lines, routes_file, anchors, pin_m, distance, out, mode, a.workers,
-                               a.road_processes, on_leg=on_leg)
+                               a.road_processes, on_leg=on_leg, near=near, power=power)
     finally:
         run["ended"] = time.strftime("%Y-%m-%d %H:%M:%S")
         run["complete"] = ok

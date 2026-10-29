@@ -535,7 +535,7 @@ class ProfileTest(unittest.TestCase):
             self.assertEqual(hb.server_command(user, 0, "/c", win=True, profile=True)[-1], "-v")
         a = argparse.Namespace(speed=80.0, roads_q=1, backlog_q=4, edge_m=160.0, max_wait=180.0, ground_wait=20.0,
                                cache_dir=None, world_dir=None, user_dir=None, rebase_m=None, profile=True)
-        self.assertEqual(hb.child_command(a, [("i25", False, None)], "/o", "alone", 1, 1)[-1], "--profile")
+        self.assertIn("--profile", hb.child_command(a, [("i25", False, None)], "/o", "alone", 1, 1))
         a.profile = False
         self.assertNotIn("--profile", hb.child_command(a, [("i25", False, None)], "/o", "alone", 1, 1))
 
@@ -595,6 +595,110 @@ class ProfileTest(unittest.TestCase):
         p = s.summary(None)
         self.assertEqual((p["cpu_s"], p["by_pid"], p["by_role"], p["by_kind"], p["memory"]), (0.0, {}, {}, {}, {}))
         self.assertTrue(hb.profile_text(p).startswith("profile: 0.00 cores used"))
+
+
+class IncrementalTest(unittest.TestCase):
+    """Warm legs fly (the pace rises while nothing is built), --near (a route's stretch round a spot), --power (the
+    cool preset: CPUs, priority class, one small server)."""
+
+    def test_the_pace_rises_while_nothing_is_built(self):
+        d = hb.Drive.__new__(hb.Drive)
+        d.a = opts(speed=80.0, fly=200.0)
+        d.fly_max = 200.0
+        self.assertEqual(d.fly(0.0), 80.0)
+        self.assertEqual(d.fly(hb.FLY_AFTER_S - 0.1), 80.0, "not before FLY_AFTER_S")
+        mid = d.fly(hb.FLY_AFTER_S + hb.FLY_RAMP_S / 2)
+        self.assertTrue(80.0 < mid < 200.0, mid)
+        self.assertEqual(d.fly(hb.FLY_AFTER_S + hb.FLY_RAMP_S), 200.0)
+        self.assertEqual(d.fly(1000.0), 200.0, "capped")
+        d.fly_max = 80.0
+        self.assertEqual(d.fly(1000.0), 80.0, "--fly 0 (or under --speed): never faster")
+
+    def test_a_kept_leg_flies(self):
+        # the stand-in answers at once and its roads load 0.3 s after each anchor: a 6 km line at 40 m/s would take
+        # 150 s; flying at up to 400 m/s it takes a fraction, and the summary says so
+        line = [(40.0, -105.0), (40.0 + 6000 * DEG_N, -105.0)]
+        srv = StandIn()
+        srv.LOAD_S = 0.3
+        self.addCleanup(srv.close)
+        c = hb.Client(srv.port)
+        self.addCleanup(c.close)
+        hb.hello(c, 10)
+        d = hb.Drive(c, gd_route(line), [], 0.0, 15000.0, 1024, "/nonexistent", opts(speed=40.0, fly=400.0, max_wait=20.0),
+                     say=lambda *x, **k: None)
+        s = d.run()
+        self.assertTrue(s["complete"], s)
+        self.assertLess(s["seconds"], 90.0, s["seconds"])
+        self.assertGreater(s["seconds_by"]["flying"], 5.0, s["seconds_by"])
+        self.assertEqual(s["fly"], 400.0)
+        poses = [m for m in srv.got if m["type"] == "pose"]
+        self.assertGreater(max(p["speed"] for p in poses), 100.0, "the pose carries the pace")
+        self.assertEqual(min(p["speed"] for p in poses), 40.0, "... from --speed")
+
+    def test_near_stretch(self):
+        route = gd_route([(40.0, -105.0), (40.0 + 10000 * DEG_N, -105.0)])
+        at = (40.0 + 5000 * DEG_N, -105.0)
+        near = hb.near_stretch(route, at[0], at[1], 1.0)
+        self.assertAlmostEqual(near.length, 2000.0 + 2 * hb.SPLIT_OVERLAP_M, delta=120.0, msg="1 km either side, plus the overlaps")
+        self.assertAlmostEqual(near.point(0.0)[0], 40.0 + 3000 * DEG_N, delta=100 * DEG_N)
+        self.assertAlmostEqual(near.point(near.length)[0], 40.0 + 7000 * DEG_N, delta=100 * DEG_N)
+        first = hb.near_stretch(route, 40.0, -105.0, 0.5)
+        self.assertAlmostEqual(first.point(0.0)[0], 40.0, places=6, msg="clamped to the start")
+        self.assertIsNone(hb.near_stretch(route, 41.0, -105.0, 5.0), "never within reach")
+        self.assertEqual(hb.parse_near("39.74,-104.99"), (39.74, -104.99))
+        with self.assertRaises(ValueError):
+            hb.parse_near("39.74")
+
+    def test_the_cool_preset(self):
+        self.assertEqual(hb.cool_cpus(list(range(24))), list(range(12)))
+        self.assertEqual(hb.cool_cpus([0]), [0], "at least one")
+        self.assertEqual(hb.cool_cpus(list(range(24)), share=0.25), list(range(6)))
+        if hb.IS_WIN:
+            self.assertEqual(hb.priority_class("game"), subprocess.IDLE_PRIORITY_CLASS)
+            self.assertEqual(hb.priority_class("alone"), subprocess.BELOW_NORMAL_PRIORITY_CLASS)
+            self.assertEqual(hb.priority_class("alone", "cool"), subprocess.BELOW_NORMAL_PRIORITY_CLASS)
+            self.assertEqual(hb.priority_class("alone", "max"), subprocess.NORMAL_PRIORITY_CLASS)
+        try:
+            import psutil
+        except ImportError:
+            self.skipTest("psutil not installed")
+        proc = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(5)"])
+        self.addCleanup(lambda: proc.poll() is None and proc.kill())
+        cpus = hb.cool_cpus()
+        hb.pin_tree(proc.pid, cpus, say=lambda *x, **k: None)
+        self.assertEqual(sorted(psutil.Process(proc.pid).cpu_affinity()), sorted(cpus))
+        proc.kill()
+        hb.pin_tree(proc.pid, cpus, say=lambda *x, **k: None)     # (gone: never raises)
+        a = argparse.Namespace(speed=80.0, roads_q=1, backlog_q=4, edge_m=160.0, max_wait=180.0, ground_wait=20.0,
+                               cache_dir=None, world_dir=None, user_dir=None, rebase_m=None, profile=False,
+                               near="39.74,-104.99", km=5.0, power="cool", fly=200.0)
+        cmd = hb.child_command(a, [("i25", False, None)], "/o", "alone", 2, 3)
+        self.assertEqual(cmd[cmd.index("--near") + 1:cmd.index("--near") + 4], ["39.74,-104.99", "--km", "5.0"])
+        self.assertEqual(cmd[cmd.index("--power") + 1], "cool")
+        self.assertEqual(cmd[cmd.index("--fly") + 1], "200.0")
+
+    def test_a_run_round_a_spot(self):
+        line = [(40.0, -105.0), (40.0 + 2400 * DEG_N, -105.0)]
+        with tempfile.TemporaryDirectory() as d:
+            bd = CommandTest.plan(self, d, line, 900.0)
+            srv = StandIn()
+            self.addCleanup(srv.close)
+            rc = hb.main(["--connect", str(srv.port), "--rebase-m", "900", "--speed", "250", "--fly", "0",
+                          "--max-wait", "20", "--mode", "game", "--near", f"{40.0 + 1200 * DEG_N:.6f},-105.0",
+                          "--km", "0.3"] + CommandTest.args(self, d))
+            self.assertEqual(rc, 0)
+            run = rb.read_json(os.path.join(bd, rb.MANIFEST))["runs"][-1]
+            self.assertEqual(run["power"], "cool", "--near: cool unless told otherwise")
+            self.assertEqual(run["near"][2], 0.3)
+            s = run["legs"][0]["summary"]
+            self.assertTrue(s["complete"])
+            self.assertAlmostEqual(s["route_km"], 2.4, delta=0.05,
+                                   msg="300 m either side plus 1 km overlaps: the whole 2.4 km line (clamped)")
+            out = os.listdir(os.path.join(d, "out"))[0]
+            self.assertEqual(os.listdir(os.path.join(d, "out", out)), ["t_near"])
+            rc = hb.main(["--connect", str(srv.port), "--rebase-m", "900", "--mode", "game", "--near", "41.0,-105.0",
+                          "--km", "1"] + CommandTest.args(self, d))
+            self.assertEqual(rc, 2, "no route near the spot")
 
 
 if __name__ == "__main__":
