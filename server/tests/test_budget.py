@@ -55,6 +55,27 @@ class BudgetTest(unittest.TestCase):
         self.assertEqual(budget.road_processes(6, 16.0), 2)
         self.assertEqual(budget.road_processes(16, 8.0), 2)
 
+    def test_bake_profile_clamps_the_caches(self):
+        import dem
+        import imagery
+        import mapdata
+        import roadwidth
+        keep = (dem.MEM_TILES, mapdata.MEM_MB, imagery.MEM_TILES, roadwidth.WALL_CELLS)
+        try:
+            with unittest.mock.patch.dict(os.environ, {"BNGE_BUDGET": "bake"}):
+                self.assertTrue(budget.bake())
+                self.assertFalse(budget.small(8.0), "not the small profile, whatever the machine")
+                self.assertFalse(budget.large(64.0), "nor the large one")
+                self.assertFalse(budget.apply())
+                self.assertLessEqual(dem.MEM_TILES, budget.BAKE_DEM_TILES)
+                self.assertLessEqual(mapdata.MEM_MB, budget.BAKE_MAPDATA_MB)
+                self.assertLessEqual(imagery.MEM_TILES, budget.BAKE_IMAGERY_TILES)
+                self.assertLessEqual(roadwidth.WALL_CELLS, budget.BAKE_WALL_CELLS)
+            with unittest.mock.patch.dict(os.environ, {"BNGE_BUDGET": "desktop"}):
+                self.assertFalse(budget.bake())
+        finally:
+            dem.MEM_TILES, mapdata.MEM_MB, imagery.MEM_TILES, roadwidth.WALL_CELLS = keep
+
     def test_small_caches(self):
         self.assertFalse(budget.apply(False))
         self.assertEqual(dem.MEM_TILES, self.saved[0], "the desktop sizes stay")

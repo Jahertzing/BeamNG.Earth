@@ -49,6 +49,12 @@ What changed in each release of BeamNG.Earth, newest first.
   `--split M` cuts every leg into M overlapping stretches so more servers run at once; the servers and their workers
   are sized together from the memory free (the most workers in all), and the longest stretches are shared out first
   so the servers finish together.
+- **Bake servers use less memory and dispatch faster**: a headless bake's servers run the `bake` memory profile
+  (`BNGE_BUDGET=bake`: the per-process caches of DEM, map data and photo tiles clamped, since every one of a server's
+  processes grew to about 1.6 GB over an hour and four servers paged a 64 GB PC), one block process instead of two
+  (`--block-lanes 1`), loading progress every 0.1 s (`--progress-s`) and as many road tiles started per pose as they
+  have road processes (`--roads-per-pose`). An explicit `--road-processes 2` is now 2 (it was taken for the default
+  and became the machine's count). `--profile` also records each worker's memory (`BNGE_TRACEMALLOC`).
 - **Pinned anchors are deterministic**: with a baked route or area planned (`tools/route_bake.py plan`), the world's
   origin is the nearest planned anchor's, whichever way the car came (it moves as soon as another planned anchor is
   300 m nearer), instead of whichever anchor happened to be near when the 15 km line was crossed. A bake made in

@@ -245,7 +245,8 @@ ROUTE_RETRY_S = 2.0               # a deferred tile/cell backs off this long bef
 FAST_BASE_V = 70.0              # m/s (157 mph): faster, a block waits at most BASE_FAST_WAIT_S for its photo after its
 BASE_FAST_WAIT_S = 0.15         # heights, then goes without it (block_base later): blocks took 0.6-3 s at 600 mph on a
                                 # Steam Deck, mostly the photo (heights 0.1-0.4 s), and the game paused 11 times a minute
-PROGRESS_S = 0.5            # load_progress at most this often (Connection.send_progress)
+PROGRESS_S = 0.5            # load_progress at most this often (Connection.send_progress; --progress-s: a bake's client
+                            # moves on when the tiles round it are done, and learnt it up to this late, 2026-10-28)
 GROUND_WAIT_S = 90.0        # a block's photo still to be drawn again counts as loading this long at most
 PERF_LOG_LINES, PERF_LOG_CHARS = 40, 2000   # a perf_log message's lines and characters a line, at most
 SLOW_BASE_S = 3.0               # a base photo slower than this is logged with its stages
@@ -279,7 +280,16 @@ ROAD_PROCESSES = 2              # road-tile processes (--block-process on, --roa
 WORKERS = 3                     # far-tile workers (--workers)
 TRACE_S = 60.0                  # BNGE_TRACEMALLOC: seconds between the memory reports ...
 TRACE_TOP = 15                  # ... and the allocation sites in each
-LANE_REQUEST, LANE_PREFETCH = 0, 1     # Server.block_pools: the blocks the mod asks for / the prefetch
+LANE_REQUEST, LANE_PREFETCH = 0, 1     # Server.block_pools: the blocks the mod asks for / the prefetch (--block-lanes 1:
+                                       # one pool for both, lane_pool; a bake's client never waits on a prefetch)
+
+
+def lane_pool(block_pools, lane):
+    """The block process pool of lane (LANE_REQUEST / LANE_PREFETCH) among block_pools [(pool, warm queue)]: the last
+    one when there are fewer lanes (--block-lanes 1: one pool for both); None without block processes."""
+    if not block_pools:
+        return None
+    return block_pools[min(lane, len(block_pools) - 1)][0]
 HM_BUSY_TILE_WORKERS = 1    # far tiles built at once while a physics block is building in the server process (an
                             # anchor's first, or every one with --block-process off; the block processes' blocks do
                             # not share its interpreter: far tiles one at a time behind them were most of a Steam
@@ -1665,7 +1675,7 @@ class Server:
         elif self.near_visual == "detail" and self.imagery is not None:
             base = (self.urgent_base_pool if lane == LANE_REQUEST else self.base_pool).submit(
                 self._base_photo, anchor, cx, cy, self._base_process(lane), lane == LANE_REQUEST)
-        pool = self.block_pools[lane][0] if self.block_pools and progress is None else None
+        pool = self.lane_pool(lane) if self.block_pools and progress is None else None
         key = (anchor.id, cx, cy)
         try:
             if pool is not None:
@@ -1851,7 +1861,11 @@ class Server:
         analyses on (they live in this process) or without block processes."""
         if not self.block_pools or self.imagery is None or self.deshadow is not None or self.colormatch is not None:
             return None
-        return self.block_pools[LANE_PREFETCH if lane == LANE_REQUEST else LANE_REQUEST][0]
+        return lane_pool(self.block_pools, LANE_PREFETCH if lane == LANE_REQUEST else LANE_REQUEST)
+
+    def lane_pool(self, lane):
+        """The block process pool of lane (LANE_REQUEST / LANE_PREFETCH): lane_pool() over this server's."""
+        return lane_pool(self.block_pools, lane)
 
     def _base_photo(self, anchor, cx, cy, pool=None, urgent=False, quick=False):
         """base_pool: the block's base photo (write_base; in the block process pool when given and its imagery
@@ -4111,7 +4125,7 @@ class Connection:
 
         async def run():
             try:
-                pool = s.block_pools[LANE_PREFETCH][0] if s.block_pools else None     # its BC7 encode
+                pool = s.lane_pool(LANE_PREFETCH)                                     # its BC7 encode
                 f0 = revisitmod.faults()
                 name = await self.loop.run_in_executor(s.hm_pool, s.write_base, anchor, key[1], key[2], pool,
                                                        next(s.base_rev))
@@ -4729,8 +4743,10 @@ async def main_async(args):
     mapdata = (mapdatamod.MapData(args.cache_dir, fetcher=net)
                if "on" in (args.surface, args.roads, args.sea, args.trees) else None)
     pacer.DUTY = args.background_duty
-    global DETAIL_RING_M, AHEAD_ON, ROUTE_AHEAD_ON, ROUTE_AHEAD_MAX_M
+    global DETAIL_RING_M, AHEAD_ON, ROUTE_AHEAD_ON, ROUTE_AHEAD_MAX_M, PROGRESS_S
     DETAIL_RING_M = args.detail_ring
+    PROGRESS_S = max(0.02, float(args.progress_s))
+    roadsmod.BUILD_PER_POSE = max(1, int(args.roads_per_pose))     # (roads.Tracker reads it when made and per pose)
     AHEAD_ON = args.download_ahead == "on"
     ROUTE_AHEAD_ON = args.route_prefetch == "on" and args.route_prefetch_km > 0
     ROUTE_AHEAD_MAX_M = args.route_prefetch_km * 1000.0
@@ -4738,7 +4754,7 @@ async def main_async(args):
     plancachemod.start_run(args.cache_dir)      # (before the workers: they inherit the run's id)
     if args.block_process == "on":
         ctx = multiprocessing.get_context("spawn")
-        for _ in (LANE_REQUEST, LANE_PREFETCH):
+        for _ in range(args.block_lanes):        # (LANE_REQUEST and LANE_PREFETCH; one pool for both with 1)
             warm_q = ctx.Queue(maxsize=64)
             block_pools.append((poolsmod.RespawningPool(
                 "block", 1, mp_context=ctx, initializer=blockworker.init,
@@ -5225,7 +5241,7 @@ def main():
     ap.add_argument("--trees", choices=("on", "off"), default="off",
                     help="trees, bushes and rocks near the player (vegetation.py): from the canopy height model and "
                          "land cover, Forest items of stock shapes in the mod")
-    ap.add_argument("--road-processes", type=int, default=ROAD_PROCESSES,
+    ap.add_argument("--road-processes", type=int, default=None,
                     help="processes building the road tiles (--block-process on); 0 = threads in the server; left at "
                     "the default: 2-4 by the machine's threads and memory (budget.road_processes)")
     ap.add_argument("--download-ahead", choices=("on", "off"), default="on",
@@ -5276,6 +5292,16 @@ def main():
     ap.add_argument("--grading", choices=("on", "off"), default="on",
                     help="grade the ground under roads (grading.py: smooth along, flat across, 1:2 slopes back "
                          "to the natural ground) in the physics block and the near mesh tiles; needs --roads on")
+    ap.add_argument("--block-lanes", type=int, choices=(1, 2), default=2,
+                    help="block processes with --block-process on: 2 (default; the mod's requests and the prefetch "
+                         "in processes of their own, so a request never waits behind a prefetch) or 1 (one for both: "
+                         "1.1 GB less; a bake, whose client never waits on a prefetch)")
+    ap.add_argument("--progress-s", type=float, default=PROGRESS_S,
+                    help="load_progress at most every S seconds (default %(default)s; a bake's client moves on when "
+                         "the tiles round it are done and learns it this late: 0.1 there)")
+    ap.add_argument("--roads-per-pose", type=int, default=roadsmod.BUILD_PER_POSE,
+                    help="road tiles started per pose at most (default %(default)s: the game's road processes; a bake "
+                         "with more road processes dispatches as many)")
     ap.add_argument("--block-process", choices=("on", "off"), default="on",
                     help="build the follow / prefetch physics blocks in processes of their own (blockworker.py: one "
                          "for the mod's requests, one for the prefetch; their own cores, off this process's "
@@ -5366,7 +5392,7 @@ def main():
     if small:
         # a small machine (a Steam Deck): fewer worker processes, each with smaller caches (budget.py), where the
         # player left the defaults
-        if args.road_processes == ROAD_PROCESSES:
+        if args.road_processes is None:
             args.road_processes = budget.SMALL_ROAD_PROCESSES
         if args.workers == WORKERS:
             args.workers = budget.SMALL_FAR_WORKERS
@@ -5375,7 +5401,7 @@ def main():
         log.info("small machine (%.1f GB): %d far-tile and %d road-tile processes, smaller caches, imagery analyses "
                  "off (budget.py; BNGE_BUDGET=desktop for the desktop sizes)", budget.total_gb() or 0, args.workers,
                  args.road_processes)
-    elif args.road_processes == ROAD_PROCESSES:
+    elif args.road_processes is None:       # (a given count stays, 2 too: it was taken for the default, 2026-10-28)
         args.road_processes = budget.road_processes()
         log.info("road-tile processes: %d (%d threads, %.0f GB)", args.road_processes, os.cpu_count() or 0,
                  budget.total_gb() or 0)

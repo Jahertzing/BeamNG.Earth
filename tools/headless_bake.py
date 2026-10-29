@@ -110,18 +110,23 @@ LISTEN_RE = re.compile(r"earthd listening on 127\.0\.0\.1:(\d+)")
 MOD_VERSION = re.search(r"MOD_VERSION = '([^']+)'", (modsim.MOD_DIR / "core.lua").read_text()).group(1)
 # both modes: never the game's cores, no map tiles, and no AI road graph (navgraph: 1.2 s a block in the road processes,
 # a quarter of their CPU in the bake of 2026-10-28 13:18, and nothing keeps it: the game builds its own as it drives)
-QUIET = ["--load-boost", "off", "--map-tiles", "off", "--traffic", "off"]
+# ... one block process (the client never waits on a prefetch: 1.6 GB less a server), load_progress every 0.1 s (the
+# client moves on when the tiles round it are done; the game's 0.5 s made it learn that late)
+QUIET = ["--load-boost", "off", "--map-tiles", "off", "--traffic", "off", "--block-lanes", "1", "--progress-s", "0.1"]
 THROTTLE = ["--workers", "1", "--road-processes", "1"] + QUIET      # --mode game
 GAME_EXES = ("BeamNG.drive.x64.exe", "BeamNG.drive.x64")    # the game itself (not its launcher BeamNG.drive.exe)
 FAR_PER_JOB = (1, 3)        # --mode alone: far workers per server, least and most (geometry 20 ms a tile; textures
                             # render in the server process while de-shadowing is on: more workers buy nothing)
-ROAD_PER_JOB = (2, 4)       # ... road processes: 4 = roads.BUILD_PER_POSE, the tiles a pose dispatches at once
+ROAD_PER_JOB = (2, 6)       # ... road processes (the server's --roads-per-pose dispatches as many a pose)
 # Memory: every process of a server tree grows to about PROC_GB private over a bake (the caches of DEM, map cells and
 # imagery in each; a server of 3 far + 2 road workers, 9 processes, was 14 GB after an hour, 2026-10-28 evening: four of
 # them put the commit charge at 106 GB on a 64 GB machine, the pagefile at 42 GB, and the bake crawled), and
 # RESERVE_GB stays free for the OS and the page cache.
-PROC_GB = 1.6               # a process of a server tree, private, after an hour
-FIXED_PROCS = 4             # the server, two block lanes, the far-building worker
+PROC_GB = 1.2               # a process of a server tree, private, after an hour: 1.6 measured with the desktop caches
+                            # (dem 512 tiles, map data 768 MB, imagery 512 tiles), less with the bake profile's
+                            # (BNGE_BUDGET=bake, budget.py BAKE_*: 128 / 192 / 128); an estimate until a --profile run's
+                            # "memory pid" lines (BNGE_TRACEMALLOC) say
+FIXED_PROCS = 3             # the server, one block lane (--block-lanes 1), the far-building worker
 SERVER_FIXED_GB = FIXED_PROCS * PROC_GB
 WORKER_GB = PROC_GB         # a far or road worker
 RESERVE_GB = 8.0            # left free
@@ -239,8 +244,9 @@ def server_command(user_dir, port=0, cache_dir=None, win=IS_WIN, mode="game", wo
         cmd += THROTTLE
     else:
         far, road = (1, 1) if mode == "game" else alone_workers()     # (alone: the memory free now)
-        cmd += ["--workers", str(int(workers if workers is not None else far)),
-                "--road-processes", str(int(road_processes if road_processes is not None else road))] + QUIET
+        road = int(road_processes if road_processes is not None else road)
+        cmd += ["--workers", str(int(workers if workers is not None else far)), "--road-processes", str(road)] + QUIET
+        cmd += ["--roads-per-pose", str(max(4, road))]       # (a pose dispatches a tile per road process)
     if mode == "game":
         cmd += ["--nice", "0"] if win else ["--nice", "19", "--sched", "idle"]
     else:           # (Windows: the class is start_server's; --nice 0 keeps the server from changing it)
@@ -276,6 +282,25 @@ def cpu_by_kind(log_path):
         if by:
             roles[pid] = max(by, key=by.get)
     return kinds, roles
+
+
+MEMORY_RE = re.compile(r"memory pid (\d+): rss (\d+) MB, traced (\d+) MB; top: (.*)")     # blockworker._trace_memory
+
+
+def memory_lines(log_path):
+    """{pid: {"rss_mb", "traced_mb", "top"}} from the workers' last "memory pid" lines (BNGE_TRACEMALLOC, every minute:
+    the resident size, what Python and numpy hold of it, the top allocation sites); {} without them."""
+    out = {}
+    try:
+        with open(log_path, encoding="utf-8", errors="replace") as f:
+            for line in f:
+                m = MEMORY_RE.search(line)
+                if m:
+                    out[int(m.group(1))] = {"rss_mb": int(m.group(2)), "traced_mb": int(m.group(3)),
+                                            "top": m.group(4).strip()}
+    except OSError:
+        pass
+    return out
 
 
 class CpuSampler:
@@ -334,9 +359,11 @@ class CpuSampler:
             self.thread.join(self.every + 5.0)
 
     def summary(self, log_path=None):
-        """{seconds, cpu_s, by_pid: {pid: s}, by_role: {role: s}, by_kind: {job: [jobs, s]}}: the wall time, every
-        process's CPU seconds since the first sample, by role (the server process itself: "server"; its workers by
-        their jobs' kinds from log_path's -v lines, else "worker"), and the workers' jobs by kind."""
+        """{seconds, cpu_s, by_pid: {pid: s}, by_role: {role: s}, by_kind: {job: [jobs, s]}, memory: {pid: {rss_mb,
+        traced_mb, top}}}: the wall time, every process's CPU seconds since the first sample, by role (the server
+        process itself: "server"; its workers by their jobs' kinds from log_path's -v lines, else "worker"), the
+        workers' jobs by kind, and each worker's last "memory pid" line (BNGE_TRACEMALLOC: its resident size, what
+        Python holds, the top allocation sites)."""
         wall = time.monotonic() - self.t0
         by_pid = {pid: round(self.last[pid] - self.first.get(pid, 0.0), 1) for pid in self.last}
         kinds, roles = cpu_by_kind(log_path) if log_path else ({}, {})
@@ -349,7 +376,8 @@ class CpuSampler:
                                                               default=None) else "other"
             by_role[role] = round(by_role.get(role, 0.0) + s, 1)
         return {"seconds": round(wall, 1), "cpu_s": round(sum(by_pid.values()), 1), "by_pid": by_pid,
-                "by_role": by_role, "by_kind": {k: [n, round(s, 1)] for k, (n, s) in sorted(kinds.items())}}
+                "by_role": by_role, "by_kind": {k: [n, round(s, 1)] for k, (n, s) in sorted(kinds.items())},
+                "memory": memory_lines(log_path) if log_path else {}}
 
 
 def profile_text(p):
@@ -358,16 +386,25 @@ def profile_text(p):
     roles = ", ".join(f"{k} {v / wall:.2f}" for k, v in sorted(p.get("by_role", {}).items(), key=lambda kv: -kv[1]))
     kinds = ", ".join(f"{k} {n} in {s:.0f} s" for k, (n, s) in sorted(p.get("by_kind", {}).items(),
                                                                  key=lambda kv: -kv[1][1]))
+    mem = p.get("memory") or {}
+    mem_text = ""
+    if mem:
+        rss = sorted((m["rss_mb"] for m in mem.values()), reverse=True)
+        mem_text = f"; worker memory: {len(rss)} traced, rss {rss[0]} MB at most, {sum(rss) // len(rss)} MB median-ish"
     return (f"profile: {p.get('cpu_s', 0) / wall:.2f} cores used over {wall:.0f} s (by role: {roles or 'n/a'})"
-            + (f"; jobs: {kinds}" if kinds else ""))
+            + (f"; jobs: {kinds}" if kinds else "") + mem_text)
 
 
-def start_server(cmd, log_path, timeout=START_S, mode="game"):
+def start_server(cmd, log_path, timeout=START_S, mode="game", profile=False):
     """(process, port): cmd started at idle priority (mode "alone": below normal), its output to log_path, once it
-    listens."""
+    listens; profile: every worker logs its memory each minute (BNGE_TRACEMALLOC)."""
     # (BNE_REVISIT_GENS=bake: builds what an older generation baked anew and marks the anchors it bakes, revisit.py
-    # "Generations"; not in the code key)
+    # "Generations"; not in the code key. BNGE_BUDGET=bake: the per-process caches clamped (budget.py BAKE_*; a BNGE_
+    # switch, not in the key either), unless the shell chose a profile.)
     env = dict(os.environ, BNGEARTH_PARENT=str(os.getpid()), PYTHONUNBUFFERED="1", BNE_REVISIT_GENS="bake")
+    env.setdefault("BNGE_BUDGET", "bake")
+    if profile:
+        env["BNGE_TRACEMALLOC"] = "1"
     kw = {"cwd": ROOT, "env": env}
     if IS_WIN:
         cls = subprocess.BELOW_NORMAL_PRIORITY_CLASS if mode == "alone" else subprocess.IDLE_PRIORITY_CLASS
@@ -981,7 +1018,7 @@ def drive_legs(a, legs, lines, routes_file, anchors, pin_m, distance, out, mode,
             say("server: " + " ".join(cmd[1:]), flush=True)
             tag = ("-" + prefix.strip(": ")) if prefix else ""
             log_path = os.path.join(out, f"server{tag}.log")
-            proc, port = start_server(cmd, log_path, mode=mode)
+            proc, port = start_server(cmd, log_path, mode=mode, profile=getattr(a, "profile", False))
             say(f"server listening on {port} (log {log_path})", flush=True)
             if getattr(a, "profile", False):
                 sampler = CpuSampler(proc.pid, os.path.join(out, f"cpu{tag}.jsonl"), say=say).start()
