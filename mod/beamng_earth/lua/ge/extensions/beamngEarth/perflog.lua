@@ -83,6 +83,40 @@ function M.gameRefresh()
   return M.refreshFrom(okV and vm or nil, okD and dm or nil)
 end
 
+-- Pure: the fps cap in force from Engine.getCurrentFpsLimitReason()'s table (0.40: fpsCap, foregroundCap with
+-- foregroundActive, backgroundCap with backgroundActive) or nil (no cap, a string, nothing).
+function M.capFrom(lim)
+  if type(lim) ~= 'table' then return nil end
+  local best = nil
+  local function take(v, on)
+    v = tonumber(v)
+    if on ~= false and v and v > 0 and (not best or v < best) then best = v end
+  end
+  take(lim.fpsCap, true)
+  take(lim.foregroundCap, lim.foregroundActive)
+  take(lim.backgroundCap, lim.backgroundActive)
+  return best
+end
+
+-- The frame budget (ms) from the game: the longer of the refresh period and the fps cap's period (a cap under the
+-- refresh makes an on-time frame the cap's; lap 3 of 2026-10-29: a 97 cap under 100 Hz VRR, 10.31 ms), or nil.
+function M.gameBudgetMs()
+  local hz = M.gameRefresh()
+  local okL, lim = pcall(function() local f = rawget(_G, 'Engine') and Engine.getCurrentFpsLimitReason; return f and f() end)
+  local cap = okL and M.capFrom(lim) or nil
+  local ms = nil
+  if hz then ms = 1000 / hz end
+  if cap then ms = math.max(ms or 0, 1000 / cap) end
+  return ms
+end
+
+-- The frame budget (ms) set directly (gameBudgetMs); REFRESH_HZ follows it.
+function M.setBudget(ms)
+  ms = tonumber(ms)
+  if ms and ms > 0 then M.BUDGET_MS, M.REFRESH_HZ = ms, 1000 / ms end
+  return M.BUDGET_MS
+end
+
 -- The largest numeric entry of a {name = ms} table: name, ms (nil when none).
 local function largest(t)
   local bk, best = nil, 0
