@@ -659,3 +659,37 @@ class DehumpTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class MinorCrossingTest(unittest.TestCase):
+    """A service road mapped across a motorway (no junction at grade on one) no longer blends into its surface
+    (grading.cut_minor_crossings: a 0.7 m hump in E-470, 2026-10-29)."""
+
+    def test_service_road_cut_at_a_motorway(self):
+        major = grading.Plan(np.array([[-300.0, 0.0], [300.0, 0.0]]), np.array([5.0, 5.0]), 12.0)
+        minor = grading.Plan(np.array([[0.0, y] for y in range(-100, 101, 4)], np.float64), np.full(51, 8.0), 3.0)
+        specs = [types_spec("motorway"), types_spec("service")]
+        out, sp, cl = grading.cut_minor_crossings([("m", major), ("s", minor)], specs, [False, False])
+        self.assertEqual(len(out), 3, "the motorway and the service road's two ends")
+        for fid, p in out[1:]:
+            d = np.abs(np.asarray(p.xy)[:, 1])
+            self.assertTrue((d > 12.0 + grading.T_MAX).all(), "nothing within the core + T_MAX")
+        z = grading.grade_points(np.array([0.0, 0.0]), np.array([0.0, 6.0]), np.zeros(2), [p for _f, p in out])
+        np.testing.assert_allclose(z, 5.0, atol=1e-6, err_msg="the motorway's own height across it")
+
+    def test_trunks_links_and_parallel_roads_kept(self):
+        major = grading.Plan(np.array([[-300.0, 0.0], [300.0, 0.0]]), np.array([5.0, 5.0]), 12.0)
+        cross = grading.Plan(np.array([[0.0, -100.0], [0.0, 100.0]]), np.array([8.0, 8.0]), 3.0)
+        beside = grading.Plan(np.array([[-200.0, 20.0], [200.0, 20.0]]), np.array([8.0, 8.0]), 3.0)
+        for mcls, ccls, link in (("trunk", "service", False), ("motorway", "service", True), ("motorway", "primary", False)):
+            out, _s, _c = grading.cut_minor_crossings([("m", major), ("s", cross)],
+                                                      [types_spec(mcls), types_spec(ccls, link)], [False, False])
+            self.assertEqual(len(out), 2, (mcls, ccls, link))
+        out, _s, _c = grading.cut_minor_crossings([("m", major), ("b", beside)],
+                                                  [types_spec("motorway"), types_spec("service")], [False, False])
+        self.assertEqual(len(out), 2, "a service road beside the motorway: not crossing it")
+
+
+def types_spec(cls, link=False):
+    import types
+    return types.SimpleNamespace(cls=cls, link=link, kind="paved")
