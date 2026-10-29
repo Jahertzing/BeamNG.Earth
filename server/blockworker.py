@@ -551,6 +551,7 @@ def _roads_tile(aid, lat, lon, zoom, tx, ty, out_dir, vfs_dir, sidewalks, lift, 
         props.extend(buildingsmod.doors(items, lines, x0, y0, drives))
         props.extend(buildingsmod.toll_booth_rows(items, x0, y0))
         props.extend(buildingsmod.beacon_rows(items, x0, y0))      # (red lights on towers)
+        props.extend(buildingsmod.spill_rows(items, x0, y0))       # (shop windows' light at night)
         if streetlifemod.ENABLED:       # mailboxes, carts, bus stops; the driveways' parking spots
             props.extend(streetlifemod.tile_rows(
                 frame, _s.md, roadsmod.cells_of_tile(frame, tx, ty, margin=0.0), drives, walks, lines, box, tile_ground,
