@@ -41,6 +41,9 @@ M.OFF_SPOT_FAR_M = 60   -- ... once the player is this far from it (a car the pl
 -- GUARD_S, the spots within VIEW_M in front of the camera (within VIEW_DEG of its axis) are banned for a car to come to
 -- (the stock tag its spot search skips), and the parked cars there are not moved (the stock ignoreTeleport; this
 -- module's guard too, unless one falls).
+-- The stock reuse radius (gameplay/parking.lua radiusCoef: a car stays where it is within 50 m x this, plus speed, of
+-- the player, and the search runs again every 50 m x this of travel): fewer moves, each one farther out.
+M.RADIUS_COEF = 2.5
 M.VIEW_M = 600
 M.VIEW_DEG = 70
 M.VIEW_NEAR_M = 40      -- (this near, any direction: the side windows and mirrors)
@@ -250,24 +253,36 @@ local function holdView(data, list)
     local o = getObjectByID(id)
     if d and o and o:getActive() then
       local p = o:getPosition()
+      d.randomPaint = false           -- (a car moved to another spot keeps its paint: not "regenerated")
       if M.inView(p.x, p.y, cx, cy, fx, fy) then
-        if not d.ignoreTeleport then d.ignoreTeleport = true held[id] = true end
+        -- (ignoreTeleport: the stock reuse loop; ignoreForceTeleport: its forceTeleport, which the pool's
+        -- activation, the scatter and the stock fallbacks call)
+        if not d.ignoreTeleport then d.ignoreTeleport = true d.ignoreForceTeleport = true held[id] = true end
       elseif held[id] then
         d.ignoreTeleport = nil
+        d.ignoreForceTeleport = nil
         held[id] = nil
       end
     end
   end
 end
-function M.freeNear(player, rad)
+-- The free spots out of view (not banned: the stock search skips those) between minRad and rad of the player. A
+-- banned spot counted free sent cars to the stock forceTeleport with none it would take, and its fallback put them on
+-- any road of the map, in view or not.
+function M.freeNear(player, rad, minRad)
   local n = 0
-  local r2 = (rad or M.START_M) ^ 2
+  local r2, m2 = (rad or M.START_M) ^ 2, (minRad or 0) ^ 2
   for _, ps in pairs(objs) do
     local p = ps.pos
-    if p and not ps.vehicle and (p.x - player.x) ^ 2 + (p.y - player.y) ^ 2 < r2 then n = n + 1 end
+    local tags = ps.customFields and ps.customFields.tags
+    if p and not ps.vehicle and not (tags and tags.banned) then
+      local d2 = (p.x - player.x) ^ 2 + (p.y - player.y) ^ 2
+      if d2 < r2 and d2 >= m2 then n = n + 1 end
+    end
   end
   return n
 end
+M.ACTIVATE_MIN_M = 100  -- (the stock pool's activation moves a car to a spot this far from the player at least)
 
 local function guard(player)
   local gp = gameplay_parking
@@ -277,10 +292,12 @@ local function guard(player)
   if not okV then log('W', 'beamngEarth', 'parking view: ' .. tostring(errV)) end
   local cx, cy, fx, fy = camera()
   local free = M.freeNear(player)
+  local freeFar = M.freeNear(player, M.START_M, M.ACTIVATE_MIN_M)
   for _, id in ipairs(gp.getParkedCarsList() or {}) do
     local o = getObjectByID(id)
     if o and hidden[id] then
-      if free > 0 then                     -- spots near again: back, onto one of them
+      if freeFar > 0 and free > 0 then     -- spots near again: back, onto one of them
+        freeFar = freeFar - 1
         hidden[id] = nil
         o:setActive(1)
         pcall(gp.forceTeleport, id, vec3(player.x, player.y, player.z), 0, M.START_M)
@@ -297,6 +314,9 @@ local function guard(player)
       local off = d and M.offSpot(p, ps, player)
       local seen = M.inView(p.x, p.y, cx, cy, fx, fy)
       if falling or (not seen and (off or not M.inside(box, p.x, p.y, M.GUARD_M))) then
+        if d and held[id] then             -- (a falling car in view: rescued all the same)
+          d.ignoreTeleport, d.ignoreForceTeleport, held[id] = nil, nil, nil
+        end
         if free > 0 then
           pcall(gp.forceTeleport, id, vec3(player.x, player.y, player.z), 0, M.START_M)
           free = free - 1
@@ -383,6 +403,7 @@ function M.update(aid, player, blk, gov)
       local amount = (c.parkedAmount and c.parkedAmount > 0) and c.parkedAmount or -1
       local okS, err = pcall(gp.setupVehicles, amount, { pos = vec3(player.x, player.y, player.z) })
       if not okS then log('W', 'beamngEarth', 'parking: setupVehicles: ' .. tostring(err)) end
+      if okS and gp.setParkingVars then pcall(gp.setParkingVars, { radiusCoef = M.RADIUS_COEF }) end
     end
     scatterPending = false
   elseif scatterPending then
