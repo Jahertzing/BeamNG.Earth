@@ -98,6 +98,7 @@ import randomplace as randomplacemod  # noqa: E402
 import placepreview as placepreviewmod  # noqa: E402
 import pools as poolsmod  # noqa: E402
 import plancache as plancachemod  # noqa: E402
+import regiongrade  # noqa: E402
 import worldvol  # noqa: E402
 import grading as gradingmod  # noqa: E402
 import roadmesh as roadmeshmod  # noqa: E402
@@ -250,6 +251,7 @@ PROGRESS_S = 0.5            # load_progress at most this often (Connection.send_
 GROUND_WAIT_S = 90.0        # a block's photo still to be drawn again counts as loading this long at most
 PERF_LOG_LINES, PERF_LOG_CHARS = 40, 2000   # a perf_log message's lines and characters a line, at most
 SLOW_BASE_S = 3.0               # a base photo slower than this is logged with its stages
+FAR_ROOF_FILL = os.environ.get("BNE_FAR_ROOF_FILL", "on") != "off"     # Server.building_fill
 BASE_PX = 1024                  # detail mode: the block's base photo (1 km -> 1 m per texel; USGS is ~1.9 m)
 BASE_AO_VFS = "/levels/beamng_earth/art/terrains/bngEarth_base_ao.png"   # every surface layer's aoBaseTex
 BASE_AO = 251                   # its flat value (tools/make_level_assets.py)
@@ -783,6 +785,7 @@ class Server:
         if self.road_widths is not None and mapdata.drcog() is not None:  # the edges of pavement first (drcog.py)
             self.road_widths = roadsmod.pavement_first(mapdata.drcog().widths(None), self.road_widths)
         self.grader_lock = threading.Lock()
+        self.region_grader = None       # regiongrade.RegionGrader: every anchor's grading (grader_for)
         # The download cache's bookkeeping (cache.py): every producer reports its disk hits and writes
         self.cache = cache
         if cache is not None:
@@ -1504,15 +1507,23 @@ class Server:
             return None
         with self.grader_lock:
             if anchor.grader is None:
-                anchor.grader = gradingmod.Grader(anchor.frame, self.mapdata,
-                                                  lambda la, lo: self.dem.sample(la, lo, gradingmod.PROFILE_ZOOM),
-                                                  self.road_widths)
-                anchor.grader.wet = self.sea.depth if self.sea is not None else None    # (no dams: underwater tunnels)
-                anchor.grader.dem = self.dem                # (its urgent lane: _plan_missing)
-                anchor.grader.surface = decklidarmod.surface_for(self.mapdata, self.dem)  # (motorways as measured)
-                anchor.grader.shared = plancachemod.for_grader(self.cache_dir, anchor.grader, self.road_widths,
-                                                              anchor.grader.wet)
+                if regiongrade.ON:      # every anchor grades through the same regions' plans (regiongrade.py)
+                    if self.region_grader is None:
+                        self.region_grader = regiongrade.RegionGrader(self.make_grader)
+                    anchor.grader = self.region_grader
+                else:
+                    anchor.grader = self.make_grader(anchor.frame)
             return anchor.grader
+
+    def make_grader(self, frame):
+        """A grading.Grader in frame (a region's: regiongrade; an anchor's with BNE_REGION_GRADING=off)."""
+        g = gradingmod.Grader(frame, self.mapdata, lambda la, lo: self.dem.sample(la, lo, gradingmod.PROFILE_ZOOM),
+                              self.road_widths)
+        g.wet = self.sea.depth if self.sea is not None else None    # (no dams: underwater tunnels)
+        g.dem = self.dem                # (its urgent lane: _plan_missing)
+        g.surface = decklidarmod.surface_for(self.mapdata, self.dem)  # (motorways as measured)
+        g.shared = plancachemod.for_grader(self.cache_dir, g, self.road_widths, g.wet)
+        return g
 
     def warm_roads(self, anchor, x, y, vx, vy):
         """Queue the road plans of the cells the physics block will cover along the player's straight path
@@ -2358,7 +2369,7 @@ class Server:
                    "mask": (os.path.join(self.out_dir, surfacemod.road_mask_name(texture)),
                             self.road_mask_px(lvl)) if self.road_masks else None,
                    "chain": [s.name for s in im.chain], "tone": self.tone, "leaf_on": im.leaf_on,
-                   "season_mode": im.season_mode}
+                   "season_mode": im.season_mode, "fill": self.building_fill(lvl)}
             args = (blockworker.far_tile, anchor.id, anchor.lat, anchor.lon, tile, anchor.zooms[max(lvl, 0)], q,
                     ref_zoom, self.near_visual in BLOCK_DRAWN, self.layout, tex)
             built, got = self.far_pool.submit(*args).result()
@@ -2410,6 +2421,7 @@ class Server:
                     rgb, used = self.imagery.render(anchor.frame, *imagerymod.gutter_square(x0, y0, tile.size, px),
                                                     px, pending=pending)
                     rgb = self.rock_faces(anchor, tile, px, rgb, built.grid)
+                    rgb = self.building_faces(anchor, tile, px, rgb)
                     rgb = self.road_faces(anchor, tile, px, rgb)
                     self.write_road_mask(anchor, tile, px, texture)
                     self.write_grass_mask(anchor, tile, px, texture)
@@ -2495,6 +2507,28 @@ class Server:
             log.debug("rock faces of %s: %s", tile.key, e)
             return rgb
 
+    def building_fill(self, level):
+        """Whether a far tile of this level gets the drawn block's roof fill: the exact level and the next (the ring
+        around the drawn block, where the 3D buildings stand on it). Without it the ring kept the photo's roofs and
+        their baked shadows, dark smudges beside the buildings that the block next to it paints out: the block edge
+        read as a brightness step in town (the seam shots, 2026-10-29)."""
+        return (FAR_ROOF_FILL and self.buildings and self.mapdata is not None
+                and level <= self.layout.exact_level + 1)
+
+    def building_faces(self, anchor, tile, px, rgb):
+        """The far tile's photo with the building footprints filled from the ground around them (as write_base's),
+        on the levels building_fill names; as it was otherwise or if that fails."""
+        if not self.building_fill(tile.level):
+            return rgb
+        try:
+            x0, y0, _, _ = tile.bbox
+            sx, sy, size = imagerymod.gutter_square(x0, y0, tile.size, px)
+            mask = buildingsmod.photo_mask(anchor.frame, sx, sy, size, px, self.mapdata)
+            return buildingsmod.fill_photo(rgb, mask, size, px) if mask is not None else rgb
+        except Exception as e:          # the photo as it is
+            log.debug("building faces of %s: %s", tile.key, e)
+            return rgb
+
     def road_faces(self, anchor, tile, px, rgb):
         """The far tile's photo with the carriageways painted in (roads.ROADS_IN_GROUND, surface.paint_square: the
         near ring the drawn block does not cover); as it was otherwise or if that fails."""
@@ -2560,6 +2594,7 @@ class Server:
             log.debug("tile %s of anchor %d: texture not rendered again (%s)", tile.key, anchor.id, e)
             return prev
         rgb = self.rock_faces(anchor, tile, px, rgb, prev.grid)
+        rgb = self.building_faces(anchor, tile, px, rgb)
         rgb = self.road_faces(anchor, tile, px, rgb)
         texture = self.texture_name(anchor.id, tile.key, prev.rev + 1)
         self.write_road_mask(anchor, tile, px, texture)

@@ -30,6 +30,7 @@ import heightmap
 import mapdata as mapdatamod
 import netfetch
 import plancache
+import regiongrade
 import roadwidth as roadwidthmod
 import seacarve as seacarvemod
 import staging
@@ -91,18 +92,27 @@ class _State:
             if aid not in self.chunks:
                 frame = geodesy.EnuFrame(lat, lon)
                 self.chunks[aid] = heightmap.ChunkCache()
-                self.graders[aid] = (gradingmod.Grader(
-                    frame, self.md, lambda la, lo: self.dem.sample(la, lo, gradingmod.PROFILE_ZOOM), self.widths)
-                    if self.grading else None)
-                if self.graders[aid] is not None:
-                    self.graders[aid].wet = self.sea.depth if getattr(self, "sea", None) is not None else None
-                    self.graders[aid].dem = self.dem          # (its urgent lane: _plan_missing)
-                    self.graders[aid].surface = decklidar.surface_for(self.md, self.dem)  # (motorways as measured)
-                    self.graders[aid].shared = plancache.for_grader(self.cache_dir, self.graders[aid], self.widths,
-                                                                   self.graders[aid].wet)
+                if not self.grading:
+                    self.graders[aid] = None
+                elif regiongrade.ON:        # every anchor grades through the same regions' plans
+                    if getattr(self, "region", None) is None:
+                        self.region = regiongrade.RegionGrader(self.make_grader)
+                    self.graders[aid] = self.region
+                else:
+                    self.graders[aid] = self.make_grader(frame)
                 for old in sorted(self.chunks)[:-ANCHORS_KEPT]:
                     del self.chunks[old], self.graders[old]
             return self.graders[aid], self.chunks[aid]
+
+    def make_grader(self, frame):
+        """A grading.Grader in frame (a region's: regiongrade; an anchor's with BNE_REGION_GRADING=off)."""
+        g = gradingmod.Grader(frame, self.md, lambda la, lo: self.dem.sample(la, lo, gradingmod.PROFILE_ZOOM),
+                              self.widths)
+        g.wet = self.sea.depth if getattr(self, "sea", None) is not None else None
+        g.dem = self.dem          # (its urgent lane: _plan_missing)
+        g.surface = decklidar.surface_for(self.md, self.dem)  # (motorways as measured)
+        g.shared = plancache.for_grader(self.cache_dir, g, self.widths, g.wet)
+        return g
 
 
 ANCHORS_KEPT = 2
@@ -1012,6 +1022,14 @@ def _far_tile(aid, lat, lon, tile, zoom, q, ref_zoom, with_sink, layout, tex, ma
             rgb = rockfacemod.rock(rgb, frame, *sq, g, x0, y0, tile.size / (g.shape[1] - 1))
         except Exception as e:
             log.debug("rock faces of %s: %s", tile.key, e)
+    if tex.get("fill") and _s.md is not None:     # (earthd.Server.building_faces)
+        try:
+            import buildings as buildingsmod
+            m = buildingsmod.photo_mask(frame, *sq, px, _s.md)
+            if m is not None:
+                rgb = buildingsmod.fill_photo(rgb, m, sq[2], px)
+        except Exception as e:
+            log.debug("building faces of %s: %s", tile.key, e)
     import roads as roadsmod
     if roadsmod.ROADS_IN_GROUND:          # (earthd.Server.road_faces)
         try:
@@ -1052,7 +1070,7 @@ def _accounted(fn):
             now = time.monotonic()
             if now - _cpu_logged[0] >= CPU_LOG_S:
                 _cpu_logged[0] = now
-                shared = [g.shared.stats for g in list(getattr(_s, "graders", {}).values())
+                shared = [g.shared.stats for g in {id(g): g for g in getattr(_s, "graders", {}).values()}.values()
                           if g is not None and g.shared is not None]
                 log.debug("worker %d cpu: %s%s", os.getpid(),
                           ", ".join(f"{k} {v[0]} jobs {v[1]:.1f} s" for k, v in sorted(_cpu.items())),
