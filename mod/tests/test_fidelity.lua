@@ -164,4 +164,41 @@ T.check(not W({ speed = 0, dist = 700, since = 5 }), 'too soon after the last')
 T.check(F.insideCam('driver') and F.insideCam('onboard.hood') and F.insideCam(nil) and not F.insideCam('orbit')
   and not F.insideCam('chase') and not F.insideCam('free'), 'inside cameras')
 
+-- wet roads: the values, then against stub materials (written in steps, put back dry)
+local r, col = F.wetValues('1.5', '1 0.9 0.8 1', 1)
+T.near(tonumber(r), 1.5 * F.WET.rough, 1e-3, 'wet: rougher map scaled down')
+T.near(nums(col)[1], F.WET.dark, 1e-3, 'wet: darker'); T.near(nums(col)[4], 1, 1e-9, 'alpha kept')
+r, col = F.wetValues(nil, nil, 0)
+T.check(tonumber(r) == 1 and col == '1 1 1 1', 'dry, no own values: defaults')
+local reloads = 0
+local function mat(rough, color)
+  local m = { f = { roughnessFactor = rough, baseColorFactor = color } }
+  function m:getField(k) return self.f[k] end
+  function m:setField(k, _, v) self.f[k] = v end
+  function m:flush() end
+  function m:reload() reloads = reloads + 1 end
+  return m
+end
+local asphalt = mat('', '0.9 0.9 0.9 1')
+objects.road_asphalt_2lane = asphalt
+local weather = { rainNow = 0 }
+beamngEarth_weather = weather
+F.setMode('on')
+clock = 300; F.update(true)
+T.check(asphalt.f.baseColorFactor == '0.9 0.9 0.9 1' and reloads == 0, 'dry weather: untouched')
+weather.rainNow = 0.4
+for i = 1, 60 do clock = 300 + i * 2.5; F.update(true) end
+T.check(F.state().wet == 1 and tonumber(nums(asphalt.f.baseColorFactor)[1]) < 0.9 * F.WET.dark + 1e-3, 'raining: wet after inS')
+local n = reloads
+T.check(n >= 4 and n <= 12, 'written in steps, not every check (' .. n .. ')')
+F.update(false)
+T.check(asphalt.f.baseColorFactor == '0.9 0.9 0.9 1' and asphalt.f.roughnessFactor == '', 'leaving: own values back')
+weather.rainNow = 0
+F.setWet(1)
+clock = 600; F.update(true)
+T.check(F.state().wet == 1, 'forced wet')
+F.setWet(nil)
+clock = 610; F.update(true)
+T.check(F.state().wet == 0 and asphalt.f.baseColorFactor == '0.9 0.9 0.9 1', 'back to the weather: dry at once')
+
 T.done('test_fidelity')

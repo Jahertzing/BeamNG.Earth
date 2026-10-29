@@ -37,7 +37,7 @@ M.SHADERS = {
 }
 
 local mode = 'on'
-local features = { ao = true, shafts = true, reflect = false }   -- reflect: automatic captures (experimental)
+local features = { ao = true, shafts = true, wet = true, reflect = false }   -- reflect: automatic captures (experimental)
 local debug = false
 local lastCheck = -math.huge
 local aoSaved = nil       -- the player's AO values before ours (nil: not applied)
@@ -393,6 +393,82 @@ function M.restoreReflection()
 end
 
 ------------------------------------------------------------------------------------------
+-- wet roads (feature 'wet'): while it rains (weather.lua's rainNow), the road surfaces darken and turn glossy, so
+-- they mirror the street through the game's screen-space reflections; dry again slowly after. The materials are
+-- the stock ones roads.lua loads; their own values are read before the first change and put back.
+
+M.WET = { materials = { 'road_asphalt_2lane', 'm_gm_concrete_plain', 'sidewalk_concrete', 'italy_cobblestone' },
+  rough = 0.35, dark = 0.72, step = 0.1, inS = 90, outS = 900 }
+local wet = { k = 0, written = 0, saved = {}, override = nil, at = nil }
+
+-- Pure: a material's wet values from its own (roughness factor, base colour factor "r g b a") at wetness k (0..1).
+function M.wetValues(rough, color, k, p)
+  p = p or M.WET
+  k = math.min(math.max(tonumber(k) or 0, 0), 1)
+  local r = (tonumber(rough) or 1) * (1 + (p.rough - 1) * k)
+  local c = {}
+  for x in tostring(color or ''):gmatch('%S+') do c[#c + 1] = tonumber(x) or 1 end
+  for i = 1, 4 do c[i] = c[i] or 1 end
+  local d = 1 + (p.dark - 1) * k
+  return string.format('%.4g', r), string.format('%.4g %.4g %.4g %.4g', c[1] * d, c[2] * d, c[3] * d, c[4])
+end
+
+local function writeWet(k)
+  for _, name in ipairs(M.WET.materials) do
+    local m = scenetree.findObject(name)
+    if m then
+      local s = wet.saved[name]
+      if not s then
+        s = { rough = m:getField('roughnessFactor', 0), color = m:getField('baseColorFactor', 0) }
+        wet.saved[name] = s
+      end
+      local r, c = M.wetValues(s.rough ~= '' and s.rough or nil, s.color ~= '' and s.color or nil, k)
+      pcall(function()
+        if k <= 0 then
+          m:setField('roughnessFactor', 0, s.rough or '')
+          m:setField('baseColorFactor', 0, s.color or '')
+        else
+          m:setField('roughnessFactor', 0, r)
+          m:setField('baseColorFactor', 0, c)
+        end
+        m:flush()
+        m:reload()
+      end)
+    end
+  end
+  wet.written = k
+  if k <= 0 then wet.saved = {} end
+end
+
+local function updateWet()
+  local now = os.clock()
+  local dt = wet.at and math.min(now - wet.at, 10) or 0
+  wet.at = now
+  local target = wet.override
+  if target == nil then
+    local w = rawget(_G, 'beamngEarth_weather')
+    target = (w and tonumber(w.rainNow) or 0) > 0 and 1 or 0
+  end
+  if target > wet.k then wet.k = math.min(target, wet.k + dt / M.WET.inS)
+  elseif target < wet.k then wet.k = math.max(target, wet.k - dt / M.WET.outS) end
+  -- written in steps (each a flush and reload of a few materials)
+  local q = math.floor(wet.k / M.WET.step + 0.5) * M.WET.step
+  if math.abs(q - wet.written) >= M.WET.step * 0.5 then writeWet(q) end
+end
+
+local function dryNow()
+  wet.k, wet.at = 0, nil
+  if wet.written > 0 then writeWet(0) end
+end
+
+-- The look probe's (and a player's console) wet roads whatever the weather: 0..1, nil = the weather's again.
+function M.setWet(k)
+  wet.override = k and math.min(math.max(tonumber(k) or 0, 0), 1) or nil
+  wet.k = wet.override or 0      -- back to the weather's: from dry (it ramps in again if it rains)
+  lastCheck = -math.huge
+end
+
+------------------------------------------------------------------------------------------
 -- public
 
 function M.setMode(m)
@@ -417,7 +493,7 @@ function M.setDebug(on) debug = on and true or false; lastCheck = -math.huge end
 -- Every frame: in our level, the features on (checked every CHECK_S, the sun's constants with it); else off.
 function M.update(inOurLevel)
   if not inOurLevel then
-    if aoSaved or shaftsOn or reflect.savedEnv then M.restore() end
+    if aoSaved or shaftsOn or reflect.savedEnv or wet.written > 0 then M.restore() end
     return
   end
   updateReflection()
@@ -427,6 +503,7 @@ function M.update(inOurLevel)
   if mode ~= 'on' then M.restore() return end
   if features.ao then applyAo() else restoreAo() end
   if features.shafts then updateShafts() else stopShafts() end
+  if features.wet then updateWet() else dryNow() end
   if features.reflect then
     local _, el = sun()
     autoReflection(el)
@@ -438,11 +515,13 @@ function M.restore()
   lastCheck = -math.huge
   restoreAo()
   stopShafts()
+  dryNow()
   M.restoreReflection()
 end
 
 function M.state()
-  return { mode = mode, ao = aoSaved ~= nil, shafts = shaftsOn, debug = debug, reflection = reflect.savedEnv ~= nil }
+  return { mode = mode, ao = aoSaved ~= nil, shafts = shaftsOn, debug = debug, reflection = reflect.savedEnv ~= nil,
+    wet = wet.written }
 end
 
 return M
