@@ -674,6 +674,33 @@ class BuildTileTest(unittest.TestCase):
                       flags=[(0, "is_bridge", 0.2, 0.3), (0, "is_tunnel", 0.3, 0.8)])
         self.assertEqual([k for _, _, k in roads.level_ranges(f2, 0)], ["tunnel", "bridge", "tunnel"])
 
+    def test_bridge_lengthening_across_cells(self):
+        """A bridge lengthened over a road crossing under it near its end puts that deck on the road joined there; a
+        map cell holds only the features in it, so the cells either side of an edge must make the same lengthening from
+        their neighbours (_bnge_neighbours): I-25 at 39.805 was 30 m of deck in one cell, ground 9 m under it in the
+        next (2026-10-29)."""
+        B, U, R = [(0, 0), (60, 0)], [(5, -50), (105, 50)], [(60, 0), (400, 0)]
+        whole = features([B, U, R], ["motorway", "primary", "motorway"], flags=[(0, "is_bridge")], ids=["b", "u", "r"])
+        (a, b, k), = roads.level_ranges(whole, 2)
+        self.assertEqual((a, k), (0.0, "bridge"))
+        self.assertGreater(b * 340.0, 10.0, "the skewed crossing carries the deck onto the joined road")
+
+        def cell(lines, classes, ids, west, east, others, flags=()):
+            f = features(lines, classes, flags=list(flags), ids=ids)
+            f.__dict__["_bnge_neighbours"] = ((LON + west / M_LON, LAT - 0.01, LON + east / M_LON, LAT + 0.01),
+                                              lambda: others)
+            return f
+        # the bridge and the road under it in the next cell alone
+        near = features([B, U], ["motorway", "primary"], flags=[(0, "is_bridge")], ids=["b", "u"])
+        far = cell([R], ["motorway"], ["r"], 60.5, 900.0, [near])
+        self.assertEqual(roads.level_ranges(far, 0), roads.level_ranges(whole, 2))
+        # the road under the bridge in the next cell alone
+        under = features([U], ["primary"], ids=["u"])
+        here = cell([B, R], ["motorway", "motorway"], ["b", "r"], -900.0, 40.0, [under], flags=[(0, "is_bridge")])
+        self.assertEqual(roads.level_ranges(here, 1), roads.level_ranges(whole, 2))
+        # (no neighbours: as before)
+        self.assertEqual(roads.level_ranges(features([R], ["motorway"], ids=["r"]), 0), [])
+
     def test_partial_bridge_kept_and_decked(self):
         # 400 m street; level 1 on 40-60 % of it (a bridge in the middle): ground parts drawn, the
         # bridge part a deck between the two abutments' heights (the ground slopes 5 % east)

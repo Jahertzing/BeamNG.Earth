@@ -468,19 +468,26 @@ def _structure_width(feats, i):
     return carriageway(cls, kind, False, rule_w, ow, lanes)
 
 
-def _bridge_reach(feats, i):
+def _bridge_reach(feats, i, light=False):
     """Bridge feature i's ranges lengthened over the ground roads crossing under them (SKEW_*), and how far past each
     end of the feature they would reach: {"ranges": [...], "over": [m past its start, m past its end]} (_skew_decks
-    puts that on the road joined there). Remembered on feats. Pure given feats."""
-    memo = feats.__dict__.setdefault("_bridge_reach", {})
+    puts that on the road joined there). Remembered on feats. Pure given feats. light: from the map's own ranges and
+    the roads' carriageways (_structure_width) alone, the next cells unasked: a neighbour's bridge (_reach_beyond),
+    whose full ranges would ask its neighbours in turn."""
+    memo = feats.__dict__.setdefault("_bridge_reach_light" if light else "_bridge_reach", {})
     got = memo.get(i)
     if got is not None:
         return got
-    rngs = raw_level_ranges(feats, i)
+    rngs = tag_level_ranges(feats, i) if light else raw_level_ranges(feats, i)
     got = {"ranges": rngs, "over": [0.0, 0.0]}
     memo[i] = got
-    specs = road_specs(feats)
-    up_w = specs[i].width if specs[i] is not None else _structure_width(feats, i)
+    if light:
+        width = _structure_widths(feats)
+        up_w = width[i]
+    else:
+        specs = road_specs(feats)
+        width = [None if sp is None else sp.width for sp in specs]
+        up_w = width[i] if width[i] is not None else _structure_width(feats, i)
     rings = [np.asarray(r, np.float64) for part in feats.parts(i) for r in part if len(r) >= 2]
     if up_w is None or not rings or not any(k == "bridge" for _, _, k in rngs):
         return got
@@ -509,20 +516,23 @@ def _bridge_reach(feats, i):
                                   (boxes[:, 3] >= blo[1]))
             gl, gj = [], []
             for j in near:
-                if j == i or specs[j] is None:
+                if j == i or width[j] is None:
                     continue
-                for g in _raw_ground_parts(feats, j):
+                for g in (_tag_ground_parts if light else _raw_ground_parts)(feats, j):
                     gl.append((np.asarray(g, np.float64) - ring[0]) * [kx, ky])
-                    gj.append(j)
+                    gj.append(width[j])
+            for nf, j, w in ([] if light else _roads_beyond(feats, blo, bhi)):
+                for g in _tag_ground_parts(nf, j):
+                    gl.append((np.asarray(g, np.float64) - ring[0]) * [kx, ky])
+                    gj.append(w)
             lo0, hi0 = lo_m, hi_m           # (arcs along sub: from lo0; a crossing at either end of it does not count)
             for g, sc, sin in (_seg_hits(sub, gl) if gl else ()):
                 sc += lo0
                 if not lo0 < sc < hi0:
                     continue
-                j = gj[g]
                 sin = max(sin, SKEW_MIN_SIN)
                 cos = math.sqrt(max(0.0, 1.0 - sin * sin))
-                h = (specs[j].width / 2 + SKEW_MARGIN_M + SKEW_SLOPE_M) / sin + (up_w / 2) * cos / sin
+                h = (gj[g] / 2 + SKEW_MARGIN_M + SKEW_SLOPE_M) / sin + (up_w / 2) * cos / sin
                 lo_m = min(lo_m, max(a0 * L - SKEW_MAX_M, sc - h))
                 hi_m = max(hi_m, min(b0 * L + SKEW_MAX_M, sc + h))
             prev = out[-1][1] if out else 0.0   # (never into a neighbouring range; past the feature's ends: "over")
@@ -537,20 +547,123 @@ def _bridge_reach(feats, i):
     return got
 
 
-def _bridge_ends(feats):
-    """(indices (k,), end points lon/lat (k, 2, 2)) of the features with a bridge range, once per cell."""
-    got = feats.__dict__.get("_bridge_ends")
+def _roads_beyond(feats, lo, hi):
+    """[(neighbour cell's layer, feature, its carriageway m)] of the drawn roads in the cells round feats' (mapdata's _bnge_neighbours) whose
+    boxes meet lon/lat box lo..hi, when it reaches past feats' cell (a road crossing under a bridge there may lie in
+    the next cell alone), none feats has itself. The two cells either side of an edge lengthened one I-25 bridge onto
+    the road joined there differently: 30 m of deck in one, of ground 9 m under it in the other (2026-10-29)."""
+    hook = feats.__dict__.get("_bnge_neighbours")
+    if hook is None:
+        return []
+    (x0, y0, x1, y1), get = hook
+    if lo[0] >= x0 and lo[1] >= y0 and hi[0] <= x1 and hi[1] <= y1:
+        return []
+    try:
+        others = get()
+    except Exception as ex:             # (a cell that will not load: the lengthening as this cell sees it)
+        log.debug("bridge reach: neighbours: %s: %s", type(ex).__name__, ex)
+        return []
+    mine = feats.__dict__.get("_ids_set")
+    if mine is None:
+        mine = feats.__dict__["_ids_set"] = {str(x) for x in feats.ids}
+    out, seen = [], set()
+    for nf in others:
+        if nf is None or not len(nf):
+            continue
+        boxes = _feature_boxes(nf)
+        hit = np.flatnonzero((boxes[:, 0] <= hi[0]) & (boxes[:, 2] >= lo[0]) & (boxes[:, 1] <= hi[1]) &
+                             (boxes[:, 3] >= lo[1]))
+        if not len(hit):
+            continue
+        width = _structure_widths(nf)
+        for j in hit:
+            fid = str(nf.ids[j])
+            if width[j] is None or fid in mine or fid in seen:
+                continue
+            seen.add(fid)
+            out.append((nf, int(j), width[j]))
+    return out
+
+
+def _structure_widths(feats):
+    """_structure_width of every feature, remembered on feats."""
+    got = feats.__dict__.get("_structure_widths")
+    if got is None:
+        got = feats.__dict__["_structure_widths"] = [_structure_width(feats, j) for j in range(len(feats))]
+    return got
+
+
+def _tag_ground_parts(feats, j):
+    """Feature j's on-ground pieces by the map's own ranges (tag_level_ranges: a neighbour cell's roads, whose
+    raw_level_ranges would read its neighbours)."""
+    pieces, at = [], 0.0
+    for a, b, _ in tag_level_ranges(feats, j):
+        if a - at > MIN_PART:
+            pieces.append((at, a))
+        at = max(at, b)
+    if 1.0 - at > MIN_PART:
+        pieces.append((at, 1.0))
+    return [ring if (a, b) == (0.0, 1.0) else sub_polyline(ring, a, b)
+            for part in feats.parts(j) for ring in part if len(ring) >= 2 for a, b in pieces]
+
+
+def _ends_beyond(feats, ring, kx, ky, edge_m=2.0):
+    """(start, end): does each end of ring (lon/lat) lie past, or within edge_m of, the edge of feats' cell (mapdata's
+    _bnge_neighbours; never without it)?"""
+    hook = feats.__dict__.get("_bnge_neighbours")
+    if hook is None:
+        return (False, False)
+    x0, y0, x1, y1 = hook[0]
+    mx, my = edge_m / kx, edge_m / ky
+    return tuple(bool(p[0] < x0 + mx or p[0] > x1 - mx or p[1] < y0 + my or p[1] > y1 - my) for p in (ring[0], ring[-1]))
+
+
+def _reach_beyond(feats, p, kx, ky, tol):
+    """m the bridges of the cells round feats' (none of feats' own) whose end lies within tol m of p (lon/lat) reach
+    past it (_bridge_reach's "over", as their own cell makes it): _skew_decks for a road whose end is in the next
+    cell, where the bridge joined there may be alone."""
+    hook = feats.__dict__.get("_bnge_neighbours")
+    if hook is None:
+        return 0.0
+    try:
+        others = hook[1]()
+    except Exception as ex:
+        log.debug("bridge reach: neighbours: %s: %s", type(ex).__name__, ex)
+        return 0.0
+    mine = feats.__dict__.get("_ids_set")
+    if mine is None:
+        mine = feats.__dict__["_ids_set"] = {str(x) for x in feats.ids}
+    best = 0.0
+    for nf in others:
+        if nf is None or not len(nf):
+            continue
+        nb, ne = _bridge_ends(nf, light=True)
+        if not len(nb):
+            continue
+        d = np.hypot((ne[:, :, 0] - p[0]) * kx, (ne[:, :, 1] - p[1]) * ky)
+        for r, e2 in zip(*np.nonzero(d < tol)):
+            b = int(nb[r])
+            if str(nf.ids[b]) not in mine:
+                best = max(best, _bridge_reach(nf, b, light=True)["over"][int(e2)])
+    return best
+
+
+def _bridge_ends(feats, light=False):
+    """(indices (k,), end points lon/lat (k, 2, 2)) of the features with a bridge range, once per cell (light: by the
+    map's own ranges, tag_level_ranges)."""
+    name = "_bridge_ends_light" if light else "_bridge_ends"
+    got = feats.__dict__.get(name)
     if got is None:
         idx, ends = [], []
         for b in range(len(feats)):
-            if not any(k == "bridge" for _, _, k in raw_level_ranges(feats, b)):
+            if not any(k == "bridge" for _, _, k in (tag_level_ranges if light else raw_level_ranges)(feats, b)):
                 continue
             rings = [r for part in feats.parts(b) for r in part if len(r) >= 2]
             if rings:
                 idx.append(b)
                 ends.append((rings[0][0], rings[0][-1]))
         got = (np.asarray(idx, np.int64), np.asarray(ends, np.float64).reshape(-1, 2, 2))
-        feats.__dict__["_bridge_ends"] = got
+        feats.__dict__[name] = got
     return got
 
 
@@ -598,28 +711,32 @@ def _skew_decks(feats, i, rngs):
     if any(k == "bridge" for _, _, k in rngs):
         rngs = _bridge_reach(feats, i)["ranges"]
     bidx, bends = _bridge_ends(feats)
-    if not len(bidx):
-        return rngs
-    near = _near_bridge_ends(feats)
-    if near is not None and not near[i]:
-        return rngs                             # (no end of it near a bridge's end: nothing joins it)
     rings = [np.asarray(r, np.float64) for part in feats.parts(i) for r in part if len(r) >= 2]
     if not rings:
         return rngs
     ring = rings[0]
     kx, ky = 111320.0 * math.cos(math.radians(float(ring[0, 1]))), 111320.0
+    away = _ends_beyond(feats, ring, kx, ky)    # (an end in the next cell: the bridge joined there may be its alone)
+    if not len(bidx) and not any(away):
+        return rngs
+    near = _near_bridge_ends(feats)
+    if near is not None and not near[i] and not any(away):
+        return rngs                             # (no end of it near a bridge's end: nothing joins it)
     tol = 0.75
     add = []
     L = None
     for end, p in ((0, ring[0]), (1, ring[-1])):
         if any((a <= 1e-9 if end == 0 else b >= 1.0 - 1e-9) for a, b, _ in rngs):
             continue                            # off the ground at that end already
-        d = np.hypot((bends[:, :, 0] - p[0]) * kx, (bends[:, :, 1] - p[1]) * ky)     # (k, 2) to each bridge's ends
         best = 0.0
-        for r, e2 in zip(*np.nonzero(d < tol)):
-            b = int(bidx[r])
-            if b != i:
-                best = max(best, _bridge_reach(feats, b)["over"][int(e2)])
+        if len(bidx):
+            d = np.hypot((bends[:, :, 0] - p[0]) * kx, (bends[:, :, 1] - p[1]) * ky)     # (k, 2) to each bridge's ends
+            for r, e2 in zip(*np.nonzero(d < tol)):
+                b = int(bidx[r])
+                if b != i:
+                    best = max(best, _bridge_reach(feats, b)["over"][int(e2)])
+        if away[end]:
+            best = max(best, _reach_beyond(feats, p, kx, ky, tol))
         if best > 0:
             if L is None:
                 L = float(np.hypot(*(np.diff(ring, axis=0) * [kx, ky]).T).sum())
