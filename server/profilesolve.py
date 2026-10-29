@@ -132,20 +132,23 @@ def _along(xy, s_from_end, at_end):
     return np.stack([np.interp(t, s, xy[:, 0]), np.interp(t, s, xy[:, 1])], 1)
 
 
-def joint_solve(approach_z, deck_z, speed, step=STEP_M, joint_m=JOINT_M):
+def joint_solve(approach_z, deck_z, speed, step=STEP_M, joint_m=JOINT_M, hold_approach=False):
     """The road's profile toward a joint (approach_z, every step m, the joint last) and the deck's away from it
     (deck_z, the joint first) solved as one line: (new approach_z, new deck_z). The samples joint_m or more from the
-    joint keep their heights (a deck shorter than that: its far end); the joint itself may move (the two met at
-    two heights: their mean, smoothed)."""
+    joint keep their heights (a deck shorter than that: its far end), and so does the joint, at the road's height (the
+    deck's end, often 0.1-0.2 m off it, is brought to it). hold_approach: the road as given (solved with another
+    deck at this joint already), only the deck moves."""
     za = np.asarray(approach_z, np.float64)
     zd = np.asarray(deck_z, np.float64)
     na, nd = len(za), len(zd)
     if na < 3 or nd < 3:
         return za.copy(), zd.copy()
-    joint = 0.5 * (za[-1] + zd[0])
-    p = np.r_[za[:-1], joint, zd[1:]]
+    # the joint at the road's height there: read from the same ground at the same point by every process (a mean with
+    # the deck's end differed by ~5 cm between the region's and an anchor's solves, a step at every joint)
+    p = np.r_[za, zd[1:]]
     k = int(round(joint_m / step))
-    held = {i: p[i] for i in range(0, max(1, na - 1 - k) + 1)}
+    held = {i: p[i] for i in range(0, (na if hold_approach else max(1, na - 1 - k) + 1))}
+    held[na - 1] = za[-1]
     j0 = na - 1
     for i in range(j0 + min(k, nd - 1), len(p)):
         held[i] = p[i]
