@@ -122,6 +122,15 @@ local lastReloadAt = -math.huge   -- now() of the last be:reloadCollision (ours 
 local reloads = 0                 -- be:reloadCollision runs so far (ours or another's): M.reloads
 local sinceUrgent = math.huge     -- frames since the last urgent walk import (M.urgentWalk)
 local deletesDirty = false  -- only far colliders deleted since the last rebuild (RELOAD_DELETES_S)
+-- A collider let go is hidden, not deleted, until a collision rebuild has run after it and GRAVE_FRAMES frames have
+-- passed (2026-10-29, the Speer crash: driving south into a pinned anchor crashed the game 7 of 7 times, 4-40 s after
+-- the rebase, a main-thread call through a freed object, and never with the roads off). The physics keeps a deleted
+-- collider's collision until the next rebuild, so between a delete and that rebuild it held a dead object; now the
+-- object outlives its collision. M.colliderGraves = false: the old way (deleted at once).
+M.colliderGraves = true
+M.GRAVE_FRAMES = 2
+local graves = {}           -- { id, reloads when let go } hidden colliders waiting on a rebuild
+local frameNo, reloadFrame = 0, 0
 
 -- Every road object lives in one SimGroup. A Lua reload (Lua:requestReload) rebuilds the VM without
 -- unloading the extensions, so nothing deletes the old objects: 2026-10-11, after a few reloads, 3,558
@@ -1169,17 +1178,35 @@ function M.update(gov, currentAnchor, player, view)
   end
   if currentAnchor then switchAnchor(currentAnchor) end
   releaseGhosts(player)
+  frameNo = frameNo + 1
+  if #graves > 0 and frameNo - reloadFrame >= M.GRAVE_FRAMES then
+    local keep = {}
+    for _, g in ipairs(graves) do
+      if g[2] < reloads and gov:try('roadDelete') then
+        local t0 = now()
+        local o = scenetree.findObjectById(g[1])
+        if o then o:delete() end
+        slotObjGone(g[1])
+        local ms = now() - t0
+        gov:charge('roadDelete', ms)
+        noteUnit('delete', ms)
+      else keep[#keep + 1] = g end
+    end
+    graves = keep
+  end
   while #deleteQ > 0 and gov:try('roadDelete') do
     local t0 = now()
     local did = table.remove(deleteQ)
     local o = scenetree.findObjectById(did)
+    local grave = false
     if o then
       if isCollider(o) then
         if M.nearPlayer(o:getPosition(), M.DELETE_NEAR_M) then collisionDirty = true else deletesDirty = true end
+        grave = M.colliderGraves
       end
-      o:delete()
+      if grave then o:setHidden(true); graves[#graves + 1] = { did, reloads } else o:delete() end
     end
-    slotObjGone(did)
+    if not grave then slotObjGone(did) end
     local ms = now() - t0
     gov:charge('roadDelete', ms)
     noteUnit('delete', ms)
@@ -1261,7 +1288,7 @@ function M.update(gov, currentAnchor, player, view)
     local t0 = now()
     noteNewColliders()
     be:reloadCollision()
-    lastReloadAt, reloads = now(), reloads + 1
+    lastReloadAt, reloads, reloadFrame = now(), reloads + 1, frameNo
     collisionDirty, deletesDirty, sinceReload = false, false, stopwatch.new()
     if ghostColsEnd then ghostCols, ghostColsEnd = nil, false end
     local ms = now() - t0
@@ -1489,7 +1516,7 @@ function M.hasWork() return #createQ > 0 or #deleteQ > 0 or #walkQ > 0 or #farQ 
 function M.collisionRebuilt()
   -- that rebuild already made them solid: one held now leaves the physics at the next one
   local removed = noteNewColliders()
-  lastReloadAt, reloads = now(), reloads + 1
+  lastReloadAt, reloads, reloadFrame = now(), reloads + 1, frameNo
   collisionDirty, deletesDirty, sinceReload = removed > 0, false, stopwatch.new()
   if ghostColsEnd then ghostCols, ghostColsEnd = nil, false end
 end
@@ -1543,7 +1570,13 @@ function M.clear()
   end
   deleteQ = {}
   walkQ, parked = {}, {}
-  if collisionDirty then be:reloadCollision(); collisionDirty = false end
+  if collisionDirty or #graves > 0 then be:reloadCollision(); collisionDirty = false end
+  for _, g in ipairs(graves) do
+    local o = scenetree.findObjectById(g[1])
+    if o then o:delete() end
+    slotObjGone(g[1])
+  end
+  graves = {}
 end
 
 -- The level ended: its objects are gone with it.
@@ -1557,7 +1590,7 @@ function M.reset()
     end
   end
   for n, d in pairs(slotDropped) do slotsGone[#slotsGone + 1] = { n, d[1], d[2] } end
-  objSlot, slotLive, slotDropped = {}, {}, {}
+  objSlot, slotLive, slotDropped, graves = {}, {}, {}, {}
   tiles, createQ, deleteQ, walkQ, anchorId, loadedMaterials = {}, {}, {}, {}, nil, false
   far, farQ, grassQ = {}, {}, {}
   collisionDirty, deletesDirty = false, false
@@ -1636,7 +1669,7 @@ function M.status()
       for _, o in ipairs(l) do if o.id and not o.hidden then nso = nso + 1 end end
     end
   end
-  return { enabled = M.enabled, tiles = nt, roads = no, queued = #createQ, deleting = #deleteQ, anchor = anchorId,
+  return { enabled = M.enabled, tiles = nt, roads = no, queued = #createQ, deleting = #deleteQ, graves = #graves, anchor = anchorId,
     walks = nw, roadMeshes = nr, decks = nd, buildings = nb, farBuildings = nf, skyCells = ns, skyMeshes = nso, walksQueued = #walkQ, solidAround = M.solidAround or 0, urgentWalks = M.urgentWalks or 0,
     quietS = sinceChange() / 1000, error = lastError, units = unitStats, unitLog = unitLog }
 end

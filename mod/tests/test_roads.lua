@@ -19,6 +19,7 @@ readFile = function(p) return files[p] end
 jsonDecode = function(s) return assert(load('return ' .. s))() end   -- the test writes Lua table text
 
 local roads = require('beamngEarth/roads')
+roads.colliderGraves = false   -- (the tests below count deletes at once; the graves have their own test at the end)
 
 local gov = { tries = 0 }
 function gov:try() self.tries = self.tries + 1; return self.allow == nil or self.tries <= self.allow end
@@ -672,6 +673,66 @@ do
   T.check(S.calls.reloadCollision == n0 + 1, 'moving: waits for RELOAD_EVERY_S')
   roads.RELOAD_EVERY_S, roads.RELOAD_STAND_S, roads.COLLIDE_CHECK_S = keep[1], keep[2], keep[3]
   getPlayerVehicle = nil
+  roads.reset()
+end
+-- colliders let go are hidden until a collision rebuild has run after them and GRAVE_FRAMES frames have passed, then
+-- deleted (the Speer crash, 2026-10-29: a deleted collider's collision outlived it until the next rebuild)
+do
+  roads.reset()
+  roads.colliderGraves = true
+  local keep = { roads.RELOAD_EVERY_S, roads.RELOAD_STAND_S, roads.RELOAD_DELETES_S, roads.DELETE_NEAR_M }
+  roads.RELOAD_EVERY_S, roads.RELOAD_STAND_S, roads.RELOAD_DELETES_S, roads.DELETE_NEAR_M = 0, 0, 1e6, 1e9
+  local function newest()   -- (the level's earlier statics are still in the stub scene: reset leaves them)
+    local n
+    for _, o in ipairs(statics()) do if not n or o.id > n.id then n = o end end
+    return n
+  end
+  local g = { tries = 0 }
+  function g:try() return true end
+  function g:charge() end
+  function g:chargeMotion() end
+  roads.onTile({ anchorId = 2, key = '5_5', path = '/t/w.json', n = 1 }, 2)
+  roads.update(g, 2)
+  local w = newest()
+  T.check(w and w.fields.collisionType == 'Visible Mesh Final', 'graves: a sidewalk collider made')
+  local n0 = S.calls.reloadCollision
+  roads.onDrop({ anchorId = 2, key = '5_5' })
+  roads.update(g, 2)
+  T.check(S.objects[w.id] == w and w.hidden == true, 'graves: let go, hidden, not deleted')
+  T.check(S.calls.reloadCollision == n0 + 1 and roads.status().graves == 1, 'graves: a rebuild runs, it waits on it')
+  for _ = 1, roads.GRAVE_FRAMES - 1 do roads.update(g, 2) end
+  T.check(S.objects[w.id] == w, 'graves: kept for GRAVE_FRAMES frames after the rebuild')
+  roads.update(g, 2)
+  T.check(S.objects[w.id] == nil and roads.status().graves == 0, 'graves: deleted after')
+  T.check(S.calls.reloadCollision == n0 + 1, 'graves: no rebuild of their own')
+  -- far away (deletesDirty, RELOAD_DELETES_S): no rebuild yet, so the grave waits on it however many frames go by
+  roads.DELETE_NEAR_M = -1
+  roads.onTile({ anchorId = 2, key = '5_5', path = '/t/w.json', n = 1 }, 2)
+  roads.update(g, 2)
+  local w2 = newest()
+  local n1 = S.calls.reloadCollision
+  local far = { pos = vec3(1e5, 1e5, 0), vel = vec3(0, 0, 0) }
+  function far:getPosition() return self.pos end
+  function far:getVelocity() return self.vel end
+  getPlayerVehicle = function() return far end
+  roads.onDrop({ anchorId = 2, key = '5_5' })
+  for _ = 1, 5 do roads.update(g, 2) end
+  T.check(S.calls.reloadCollision == n1 and S.objects[w2.id] == w2, 'graves: no rebuild, not deleted')
+  roads.RELOAD_DELETES_S = 0
+  for _ = 1, roads.GRAVE_FRAMES + 1 do roads.update(g, 2) end
+  T.check(S.calls.reloadCollision == n1 + 1 and S.objects[w2.id] == nil, 'graves: deleted after the far rebuild')
+  getPlayerVehicle = nil
+  -- off: the graves go with the rest
+  roads.RELOAD_DELETES_S = 1e6
+  roads.onTile({ anchorId = 2, key = '5_5', path = '/t/w.json', n = 1 }, 2)
+  roads.update(g, 2)
+  local w3 = newest()
+  roads.onDrop({ anchorId = 2, key = '5_5' })
+  roads.update(g, 2)
+  roads.setEnabled(false)
+  T.check(S.objects[w3.id] == nil and roads.status().graves == 0, 'graves: off removes them')
+  roads.setEnabled(true)
+  roads.RELOAD_EVERY_S, roads.RELOAD_STAND_S, roads.RELOAD_DELETES_S, roads.DELETE_NEAR_M = keep[1], keep[2], keep[3], keep[4]
   roads.reset()
 end
 T.done('test_roads')
