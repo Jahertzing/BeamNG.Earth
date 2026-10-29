@@ -6,7 +6,8 @@
 local M = {}
 
 -- the modes: { brightness, range } times the vehicle's own
-M.MODES = { stock = { 1, 1 }, bright = { 2, 1.5 }, brighter = { 4, 2 } }
+-- (the night slot, 2026-10-29: x2 / x1.5 lit a clearly bigger pool, but it faded within 15-20 m)
+M.MODES = { stock = { 1, 1 }, bright = { 2.5, 2 }, brighter = { 5, 3 } }
 M.mode = 'bright'
 M.CHECK_S = 1.0
 M.errors = 0
