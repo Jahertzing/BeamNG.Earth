@@ -59,6 +59,11 @@ LONG_PART_M = 3000.0        # a road part longer than this is planned per cell, 
 CLIP_MARGIN_M = 400.0
 PLAN_THREADS = 4            # cells planned at once (_plan_missing)
 PLAN_SETS_MAX = 16          # cell sets whose merged plans are kept (Grader._plan_set; ~1 MB each in a town)
+# The cell plans every Grader of this process holds, in all (plan_budget): past this the least recently used cells are
+# forgotten (Grader._forget_cell) and come back from the shared plan cache (plancache, a disk read of a few ms) when a
+# build needs them. They grew without bound: each process of a bake server held 300-580 MB of loaded plans after an
+# hour (the region graders keep up to MAX_REGIONS graders, each every cell it ever planned; 2026-10-29).
+PLANS_MB = 384
 SPREAD_CELLS = 16           # plans(): more map cells in the points' bbox: only the cells around the points
 T_MIN, T_MAX = 5.0, 12.0    # m, transition back to the natural ground (5: roads close together meet gently)
 SLOPE_RUN = 2.0             # transition = SLOPE_RUN x the height difference (1:2 slope)
@@ -992,6 +997,73 @@ def _twin_trimmed(secs):
     return out
 
 
+def plans_nbytes(plans, keeps=(), covers=(), opens=()):
+    """The bytes of a cell's plans' arrays (Plan.xy, z, cut, bank) and its keeps, covers and opens polylines."""
+    n = 0
+    for _fid, p in plans or ():
+        for a in (p.xy, p.z, p.cut, p.bank):
+            if a is not None and hasattr(a, "nbytes"):
+                n += int(a.nbytes)
+    for rows in (keeps, covers, opens):
+        for row in rows or ():
+            a = row[0] if isinstance(row, (tuple, list)) and row else None
+            if a is not None and hasattr(a, "nbytes"):
+                n += int(a.nbytes)
+    return n
+
+
+class PlanBudget:
+    """The cell plans of every Grader in this process within PLANS_MB: note(grader, key, nbytes) when a cell's plans
+    are kept, touch(grader, key) when they are used; the least recently used cells past the budget are forgotten
+    (grader._forget_cell(key)) outside the lock. Graders are held weakly: a dropped one's cells go with it."""
+
+    def __init__(self):
+        self.lock = threading.Lock()
+        self.lru = OrderedDict()        # (id(grader), cell key) -> bytes
+        self.graders = {}               # id(grader) -> weakref
+        self.bytes = 0
+        self.evicted = 0
+
+    def note(self, grader, key, nbytes):
+        import weakref
+        k = (id(grader), key)
+        evict = []
+        with self.lock:
+            self.graders[id(grader)] = weakref.ref(grader)
+            if k in self.lru:
+                self.bytes -= self.lru.pop(k)
+            self.lru[k] = int(nbytes)
+            self.bytes += int(nbytes)
+            limit = PLANS_MB * 2 ** 20
+            while self.bytes > limit and len(self.lru) > 1:
+                (gid, ck), nb = self.lru.popitem(last=False)
+                self.bytes -= nb
+                ref = self.graders.get(gid)
+                g = ref() if ref is not None else None
+                if g is not None:
+                    evict.append((g, ck))
+            self.evicted += len(evict)
+        for g, ck in evict:
+            g._forget_cell(ck)
+
+    def touch(self, grader, key):
+        k = (id(grader), key)
+        with self.lock:
+            if k in self.lru:
+                self.lru.move_to_end(k)
+
+    def drop(self, grader):
+        """A grader let go (regiongrade's LRU): its cells leave the budget."""
+        gid = id(grader)
+        with self.lock:
+            for k in [k for k in self.lru if k[0] == gid]:
+                self.bytes -= self.lru.pop(k)
+            self.graders.pop(gid, None)
+
+
+plan_budget = PlanBudget()
+
+
 class Grader:
     """The road plans of one anchor frame, per map cell, made once (worker threads; it fetches the road
     cells it lacks)."""
@@ -1015,6 +1087,7 @@ class Grader:
             got = self.cells.get(key)
             kl = self.key_locks.setdefault(key, threading.Lock())
         if got is not None:
+            plan_budget.touch(self, key)
             return got
         with kl:
             return self._plan_cell(key)
@@ -1045,7 +1118,21 @@ class Grader:
             self.keeps.setdefault(key, keeps)
             self.covers.setdefault(key, covers)
             self.opens.setdefault(key, opens)
-            return self.cells[key]
+            out = self.cells[key]
+        plan_budget.note(self, key, plans_nbytes(plans, keeps, covers, opens))     # (may forget other cells)
+        return out
+
+    def _forget_cell(self, key):
+        """Cell key's plans let go (plan_budget): planned() says no again, and a build that needs them has them
+        back from the shared plan cache; the merged plan sets holding the cell go too."""
+        with self.lock:
+            for d in (self.cells, self.keeps, self.covers, self.opens):
+                d.pop(key, None)
+            memo = self.__dict__.get("_plan_sets")
+            if memo:
+                sk = str(key)
+                for mk in [mk for mk in memo if sk in mk[0]]:
+                    del memo[mk]
 
     def _make_cell(self, key):
         """(plans, keeps, covers, opens) of cell key, or None when its roads could not be fetched."""
