@@ -990,6 +990,18 @@ local function ownAmount(gt)
   return M.autoAmount(okB and tonumber(base) or nil, okV and vs or {}, playerId())
 end
 
+-- The number of traffic cars startTraffic sets up in traffic mode `mode` (default: the setting's), and the own amount
+-- it comes from (cpuFloor included): for tools that set traffic up themselves (traffic_bench.py), so they run what a
+-- player gets. (bench8, 2026-10-29: the bench asked the game for its own pick, 7, and normal ran 7 cars, not 10.)
+function M.plannedAmount(mode)
+  local gt = trafficSystem()
+  if not gt then return 0, nil end
+  local auto = ownAmount(gt)
+  local n = M.modeAmount(mode or M.MODE, auto)
+  if n < 0 then n = auto or -1 end
+  return n, auto
+end
+
 -- Pure: base (the setting's amount; nil unknown) less the 'player' vehicles (collisionfoci.vehicles) other than me.
 function M.autoAmount(base, vehicles, me)
   if not base then return nil end
