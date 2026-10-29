@@ -2034,14 +2034,19 @@ local function onUpdate(dtReal, dtSim)
     farfield.update(gov, (gov.w1 or dtReal * 1000) / 1000, st.cam, st.player)
     t = mark('far', t)
     sea.update(st.anchorId, st.player)
+    t = mark('sea', t)
     -- the trees' own Lua time a frame (trees.lua FRAME_MS), more while the world loads, none in a heavy frame or the
     -- quiet frames round it (governor.lua: a heavy frame stays a lone spike)
     trees.update(st.anchorId, st.player, M.viewAway(), (gov.blocked or gov:isHeavyFrame()) and 0
       or (gov.loading and trees.LOADING_FRAME_MS or trees.FRAME_MS))
+    t = mark('trees', t)
+    -- (each its own part: a 15 s 'sea+trees' freeze on the 2026-10-29 replay could not say which)
     pcall(ambience.update, st.anchorId, sea)      -- (sound never stops the world's updates)
+    t = mark('ambience', t)
     pcall(pumpjacks.update)
+    t = mark('pumpjacks', t)
     pcall(nightlights.update, st.anchor, st.anchorId)   -- (and nightglow.lua's: the city glow, the star)
-    t = mark('sea+trees', t)
+    t = mark('nightlights', t)
     local pb = nil
     if st.block then
       pb = st.parkBox or {}
