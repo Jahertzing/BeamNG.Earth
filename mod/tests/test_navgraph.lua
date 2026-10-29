@@ -361,6 +361,20 @@ do
     'gentleLua: 14 m/s in ' .. tostring(got[1]) .. ' s, 2 m/s in ' .. tostring(got[2]) .. ' s')
   _G.thrusters = nil
 end
+-- a car put somewhere fades in (Jeff's drive 2026-10-29: cars appearing in front of him)
+do
+  T.check(N.fadeAlpha(0) == 0 and N.fadeAlpha(N.FADE_DELAY_S) == 0, 'fadeAlpha: hidden while it lands')
+  T.check(math.abs(N.fadeAlpha(N.FADE_DELAY_S + N.FADE_S / 2) - 0.5) < 1e-9, 'fadeAlpha: half way')
+  T.check(N.fadeAlpha(10) == 1, 'fadeAlpha: whole at the end')
+  T.check(N.AHEAD_TIGHT_M >= N.AHEAD_M[1] and N.AHEAD_M[1] >= 250, 'never put nearer ahead than 250 m')
+  local alphas = {}
+  local car = { setMeshAlpha = function(_, a) alphas[#alphas + 1] = a end }
+  local g0 = getObjectByID
+  getObjectByID = function() return car end
+  N.fadeIn(5)
+  T.check(alphas[1] == 0, 'fadeIn: hidden at once')
+  getObjectByID = g0
+end
 -- how near a cut a car is respawned: fresh cars far off, unless this module put them ahead along the player's way
 do
   T.check(N.cutReach(1, 10, nil) == N.CUT_FRESH_M, 'cutReach: a fresh car (the stock respawn): CUT_FRESH_M')

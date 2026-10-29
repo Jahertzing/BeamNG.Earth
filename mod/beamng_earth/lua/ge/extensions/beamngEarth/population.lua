@@ -420,6 +420,7 @@ local function place(id, g)
     tr.respawnVehicle(id, pos, rot)
   end)
   if not ok then return false end
+  pcall(function() require('beamngEarth/navgraph').fadeIn(id) end)    -- (faded in, not whole at once)
   -- pushed to the ghost's speed once landed (navgraph's gentle push)
   P.pushes = P.pushes or {}
   P.pushes[id] = { v = g.v, at = os.clock() }
