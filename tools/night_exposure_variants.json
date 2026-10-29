@@ -1,0 +1,37 @@
+[
+ {
+  "name": "off",
+  "lua": "local na = require('beamngEarth/nightambient') na.setMode('off')",
+  "undo": "local na = require('beamngEarth/nightambient') na.setMode('normal') na.NIGHT_BIAS_EV = 0.75 na.SKYFILL.urban, na.SKYFILL.rural = 60, 12 na.NIGHT_EXPOSURE.highlightProtectStrength = 0.2",
+  "settle": 8
+ },
+ {
+  "name": "normal",
+  "lua": "local na = require('beamngEarth/nightambient') na.setMode('normal') na.NIGHT_BIAS_EV = 0.75 na.SKYFILL.urban, na.SKYFILL.rural = 60, 12 na.NIGHT_EXPOSURE.highlightProtectStrength = 0.2",
+  "settle": 8
+ },
+ {
+  "name": "ev1.5",
+  "lua": "local na = require('beamngEarth/nightambient') na.NIGHT_BIAS_EV = 1.5",
+  "undo": "local na = require('beamngEarth/nightambient') na.setMode('normal') na.NIGHT_BIAS_EV = 0.75 na.SKYFILL.urban, na.SKYFILL.rural = 60, 12 na.NIGHT_EXPOSURE.highlightProtectStrength = 0.2",
+  "settle": 8
+ },
+ {
+  "name": "fill_x3",
+  "lua": "local na = require('beamngEarth/nightambient') na.SKYFILL.urban, na.SKYFILL.rural = 180, 36 na.setMode('normal')",
+  "undo": "local na = require('beamngEarth/nightambient') na.setMode('normal') na.NIGHT_BIAS_EV = 0.75 na.SKYFILL.urban, na.SKYFILL.rural = 60, 12 na.NIGHT_EXPOSURE.highlightProtectStrength = 0.2",
+  "settle": 6
+ },
+ {
+  "name": "fill_x0.3",
+  "lua": "local na = require('beamngEarth/nightambient') na.SKYFILL.urban, na.SKYFILL.rural = 18, 4 na.setMode('normal')",
+  "undo": "local na = require('beamngEarth/nightambient') na.setMode('normal') na.NIGHT_BIAS_EV = 0.75 na.SKYFILL.urban, na.SKYFILL.rural = 60, 12 na.NIGHT_EXPOSURE.highlightProtectStrength = 0.2",
+  "settle": 6
+ },
+ {
+  "name": "hp0",
+  "lua": "local na = require('beamngEarth/nightambient') na.NIGHT_EXPOSURE.highlightProtectStrength = 0",
+  "undo": "local na = require('beamngEarth/nightambient') na.setMode('normal') na.NIGHT_BIAS_EV = 0.75 na.SKYFILL.urban, na.SKYFILL.rural = 60, 12 na.NIGHT_EXPOSURE.highlightProtectStrength = 0.2",
+  "settle": 8
+ }
+]
