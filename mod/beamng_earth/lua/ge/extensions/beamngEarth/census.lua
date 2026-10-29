@@ -38,12 +38,16 @@ function M.measure(roots, opts)
   local okF, ffi = pcall(require, 'ffi')
   local seen = {}
   for _, x in ipairs(opts.exclude or {}) do seen[x] = true end
+  -- every module is its own root: one module's upvalue holding another (core's `local trees = require(...)`) is not
+  -- walked into from there (2026-10-29: core showed 6.6 MB in 33k tables, the other modules nothing)
+  for _, root in ipairs(roots) do seen[root[2]] = true end
   local items, total, truncated = 0, 0, false
   local byRoot, biggest = {}, {}
   local minBig = opts.minBig or 20000
 
   for _, root in ipairs(roots) do
     local name, bytes, tables = root[1], 0, 0
+    seen[root[2]] = nil
     local stack, sp = { root[2], name, 0 }, 3        -- (value, path, depth) triples
     while sp > 0 and not truncated do
       local v, path, depth = stack[sp - 2], stack[sp - 1], stack[sp]
