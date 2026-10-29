@@ -2034,7 +2034,8 @@ class Grader:
         the cells are planned (a road tile asks for the same few cells' plans dozens of times: merging them cost a
         Canton tile set ~1.6 s, 2026-10-25)."""
         self._plan_missing(keys)
-        mk = (tuple(sorted(str(k) for k in keys)), bool(roads_only))
+        adjust = getattr(self, "plan_adjust", None)      # (regiongrade: the bridge ends' joint solves, profilesolve)
+        mk = (tuple(sorted(str(k) for k in keys)), bool(roads_only), adjust.version() if adjust is not None else 0)
         memo = self.__dict__.setdefault("_plan_sets", {})
         with self.lock:
             hit = memo.get(mk)
@@ -2049,6 +2050,8 @@ class Grader:
         # in the order of their keys: grade_points' sums run in plan order, so every caller (the block, a road
         # tile, a far tile) gets the same heights at a point whatever other cells its points reached
         plans = [got[k] for k in sorted(got)]
+        if adjust is not None:
+            plans = adjust(self, plans)
         out = (plans, PlanPack(plans))
         with self.lock:
             if all(k in self.cells for k in keys):      # (not while a cell's fetch failed: it is asked again)
