@@ -48,7 +48,14 @@ if not gameplay_traffic then extensions.load('core_multiSpawn', 'gameplay_traffi
 local gt = gameplay_traffic
 pcall(gt.deleteVehicles)
 local ok, auto = pcall(gt.getIdealSpawnAmount, nil, true)
-return jsonEncode({ auto = ok and auto or nil })
+-- what the mod would set up for this mode (navgraph.plannedAmount: the CPU floor included), when it can say
+local okN, nav = pcall(require, 'beamngEarth/navgraph')
+local amount, own = nil, nil
+if okN and nav.plannedAmount then
+  local okP, n, a = pcall(nav.plannedAmount, '%s')
+  if okP then amount, own = n, a end
+end
+return jsonEncode({ auto = ok and auto or nil, amount = amount, own = own })
 """
 
 START_LUA = r"""
@@ -201,8 +208,10 @@ def main():
         for mode in a.modes.split(","):
             d = os.path.join(a.out, mode)
             os.makedirs(d, exist_ok=True)
-            auto = json.loads(lua(SETUP_LUA)).get("auto")
-            n = mode_amount(mode, auto)
+            setup = json.loads(lua(SETUP_LUA % mode))
+            auto = setup.get("own") or setup.get("auto")
+            # (the mod's own plan when it has one: the amount a player gets; else the game's pick as before)
+            n = setup["amount"] if setup.get("amount") is not None else mode_amount(mode, auto)
             if mode == a.rebase_in:
                 lua("require('beamngEarth/rebase').setDistance(%r) return 1" % a.rebase_m)
             stop = threading.Event()
