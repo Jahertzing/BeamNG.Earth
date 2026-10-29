@@ -8,6 +8,7 @@
     {"control":"ctrl alt i", "action":"beamngEarth_theDriveI25"},
     {"control":"ctrl alt a", "action":"beamngEarth_autodriveToggle"},
     {"control":"ctrl alt g", "action":"beamngEarth_goldenHour"},
-    {"control":"ctrl alt n", "action":"beamngEarth_nightNow"}
+    {"control":"ctrl alt n", "action":"beamngEarth_nightNow"},
+    {"control":"ctrl alt s", "action":"beamngEarth_snapshot"}
   ]
 }

@@ -394,6 +394,28 @@ credits overlay and HUD for the shots (they are in every image, the same in both
 sun / weather override, matching the real photo itself (the photo benchmark is compared run to run;
 the photo stays on Commons).
 
+## Drive snapshots (`snapshot.lua`, `server/snapshots.py`, `tools/snapshots.py`, 2026-10-28)
+- **Ctrl+Alt+S** (the Stream Deck's Snapshot key, page 5): no window, the drive goes on. Saves
+  `<user folder>/beamngearth/snapshots/<date>_<time>_<n>/`: screenshot.jpg and snapshot.json (report.lua's capture,
+  plus the last 10 s of frame times with every frame of 40 ms or more and how long before it was, the status bar's
+  street and place, the time of day and sky, the weather, GPS route and The Drive, the navgraph's status and the
+  traffic cars within 400 m: distance, speed, state, role, model and their driver's AI mode, speed mode and lane
+  driving, asked from each car's vehicle Lua and waited for 0.6 s). Pressed again within 8 s: a one-line note
+  (Enter saves).
+- The game tells the world server (message `snapshot`); the server copies the folder to the snapshots home
+  (`BNGE_SNAPSHOTS_DIR`, else `snapshots` beside the git checkout: `C:\beamng-earth\snapshots`) about 6 s later with
+  `earthd.log.txt` (its log lines from 60 s before to 5 s after, kept in memory), `beamng.log.txt` (the game's, from
+  beamng.log or an older beamng.N.log: the log's first line has the session's start time) and `build.json` (the
+  server checkout's commit, branch, uncommitted changes).
+- `snapshots.bat` / `python tools/snapshots.py`: the catalog at http://127.0.0.1:47710/. It copies snapshots the
+  server never saw (reading the launcher's server.log instead), every 5 s. The list groups snapshots into drives (a
+  30 min gap starts a new one), filters by status and open issues, searches the notes. A snapshot's page: title,
+  status (New / Look again / Issue / OK / Handed off), notes, regions drawn on the screenshot (box, highlight,
+  ellipse, arrow, pen; numbered), issues (area, severity, region, the thread or PR it went to, done), the frame-time
+  strip, where and the car (OpenStreetMap, Google Maps and Street View links), the traffic table, sky and build, the
+  two logs with the moment marked. It saves review.json and annotated.png in the folder; "Copy brief" copies (and
+  saves as brief.md) Markdown for a thread. `tools/snapshots.py list`, `brief [ID]`, `scan` do the same from a shell.
+
 ## Reports (GitHub issues: map / performance / bug / idea; `report.lua`, 2026-10-13, kinds 2026-10-14)
 - **Ctrl+Shift+E:** captures the moment at once: a screenshot, the location (lat/lon, anchor), the
   vehicle and camera, the last ~10 s of frame times, the engine's per-system frame metrics, the fps limit

@@ -13,3 +13,5 @@ setExtensionUnloadMode('beamngEarth_dev', 'manual')
 setExtensionUnloadMode('beamngEarth_report', 'manual')
 -- The BeamNG.Earth servers list for the tab in BeamMP's server browser (serverlist.lua; fetches only when asked).
 setExtensionUnloadMode('beamngEarth_serverlist', 'manual')
+-- The drive snapshots (snapshot.lua: Ctrl+Alt+S, the Stream Deck's Snapshot key; the catalog is tools/snapshots.py).
+setExtensionUnloadMode('beamngEarth_snapshot', 'manual')

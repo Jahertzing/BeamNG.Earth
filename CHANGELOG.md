@@ -22,6 +22,14 @@ What changed in each release of BeamNG.Earth, newest first.
   way; or midday, night, or as it is), and starts the clock when the car first moves. The status bar shows the clock,
   you get a split at Union Station, and the best times per route are kept. Optional autodrive (the setting, or
   Ctrl+Alt+A on any GPS route). Ctrl+Alt+G and Ctrl+Alt+N set golden hour or night any time.
+- **Drive snapshots**: Ctrl+Alt+S (the Stream Deck's Snapshot key) saves the moment without stopping the drive: a
+  screenshot, where you are (GPS and game position, heading, speed), the last 10 s of frame times and their hitches,
+  the AI traffic near you (the navigation graph's state, each car's speed, state and AI mode), the time of day and the
+  mod's state. Press it again within 8 s for a one-line note. The world server keeps each one in
+  `C:\beamng-earth\snapshots` (beside the checkout) with its own log lines and the game's from that minute and the
+  build's commit. `snapshots.bat` (`tools/snapshots.py`) opens the catalog in the browser: the snapshots by drive,
+  notes, a status, boxes, arrows and highlights drawn on the screenshot, issues pointing at them, and a "Copy brief"
+  (Markdown with the numbers and file paths) to hand a snapshot to someone.
 - **GPS waypoints and avoided roads**: the GPS route can pass through waypoints in order and keep off toll roads (the
   server's route request takes `via` and `avoid`). `tools/thedrive_check.py` checks both Drive routes against the
   live router.

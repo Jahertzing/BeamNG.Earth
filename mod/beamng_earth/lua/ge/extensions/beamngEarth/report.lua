@@ -166,6 +166,7 @@ local function capture()
   d.recentFrames = stats(recent)
   return d
 end
+M.capture = capture   -- (snapshot.lua: a drive snapshot starts from the same capture)
 
 local function newDir(kind)
   count = count + 1

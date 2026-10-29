@@ -1,0 +1,593 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Drive snapshots</title>
+<style>
+:root {
+  --bg: #0f1216; --panel: #171b21; --panel2: #1e232b; --line: #2a313b; --text: #e7ebf0; --muted: #8e98a6;
+  --accent: #ff6f91; --accent2: #4aa8ff; --ok: #3ddc84; --warn: #ffc93c; --bad: #ff5a52; --chip: #252b34;
+  --mono: ui-monospace, "Cascadia Mono", Consolas, monospace;
+}
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme="dark"]) {
+    --bg: #f3f5f8; --panel: #ffffff; --panel2: #f7f8fa; --line: #dde2e8; --text: #1b2028; --muted: #66707e;
+    --chip: #eceff3;
+  }
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text);
+  font: 14px/1.45 system-ui, "Segoe UI", Roboto, sans-serif; }
+button, input, select, textarea { font: inherit; color: inherit; }
+button { background: var(--chip); border: 1px solid var(--line); border-radius: 7px; padding: 5px 10px; cursor: pointer; }
+button:hover { border-color: var(--muted); }
+button.on { background: var(--accent); border-color: var(--accent); color: #fff; }
+button.primary { background: var(--accent2); border-color: var(--accent2); color: #fff; }
+input[type=text], input[type=search], select, textarea { background: var(--panel2); border: 1px solid var(--line);
+  border-radius: 7px; padding: 6px 9px; outline: none; }
+input:focus, select:focus, textarea:focus { border-color: var(--accent2); }
+.app { display: grid; grid-template-columns: 340px 1fr; grid-template-rows: auto 1fr; height: 100vh; }
+header { grid-column: 1 / 3; display: flex; align-items: center; gap: 12px; padding: 10px 16px;
+  border-bottom: 1px solid var(--line); background: var(--panel); flex-wrap: wrap; }
+header h1 { font-size: 16px; margin: 0; letter-spacing: .2px; }
+header h1 span { color: var(--accent); }
+header .folder { color: var(--muted); font-size: 12px; font-family: var(--mono); }
+header .grow { flex: 1; }
+header input[type=search] { width: 230px; }
+.chips { display: flex; gap: 6px; flex-wrap: wrap; }
+.chips button { padding: 3px 9px; font-size: 12px; border-radius: 99px; }
+aside { overflow-y: auto; border-right: 1px solid var(--line); background: var(--panel); }
+.drive { padding: 10px 12px 4px; font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: .6px;
+  position: sticky; top: 0; background: var(--panel); z-index: 1; border-bottom: 1px solid var(--line); }
+.card { display: grid; grid-template-columns: 96px 1fr; gap: 10px; padding: 9px 12px; border-bottom: 1px solid var(--line);
+  cursor: pointer; }
+.card:hover { background: var(--panel2); }
+.card.sel { background: var(--panel2); box-shadow: inset 3px 0 0 var(--accent); }
+.card img, .card .noimg { width: 96px; height: 54px; object-fit: cover; border-radius: 5px; background: #000; display: block; }
+.card .t { font-weight: 600; font-size: 13px; display: flex; gap: 6px; align-items: center; }
+.card .sub { color: var(--muted); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; flex: none; }
+.st-new { background: var(--accent2); } .st-look { background: var(--warn); } .st-issue { background: var(--bad); }
+.st-ok { background: var(--ok); } .st-handed { background: #b48cff; }
+.badge { font-size: 11px; padding: 0 6px; border-radius: 99px; background: var(--chip); color: var(--muted); }
+.badge.bad { background: color-mix(in srgb, var(--bad) 25%, transparent); color: var(--bad); }
+main { overflow-y: auto; padding: 16px 20px 40px; }
+.empty { color: var(--muted); padding: 60px 20px; text-align: center; max-width: 560px; margin: auto; }
+.empty kbd, .help kbd { font-family: var(--mono); background: var(--chip); padding: 1px 6px; border-radius: 4px;
+  border: 1px solid var(--line); }
+.top { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-bottom: 10px; }
+.top .title { flex: 1; min-width: 260px; font-size: 18px; font-weight: 600; padding: 6px 10px; }
+.seg { display: inline-flex; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+.seg button { border: 0; border-radius: 0; border-right: 1px solid var(--line); background: var(--panel2); }
+.seg button:last-child { border-right: 0; }
+.seg button.on { color: #fff; }
+.seg button.on.s-new { background: var(--accent2); } .seg button.on.s-look { background: #c99a10; }
+.seg button.on.s-issue { background: var(--bad); } .seg button.on.s-ok { background: #1fa863; }
+.seg button.on.s-handed { background: #8b63e0; }
+.meta { color: var(--muted); font-size: 13px; margin-bottom: 10px; }
+.meta a { color: var(--accent2); }
+.saved { color: var(--muted); font-size: 12px; min-width: 70px; text-align: right; }
+.tools { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; margin-bottom: 8px; }
+.tools .sep { width: 1px; height: 22px; background: var(--line); margin: 0 4px; }
+.swatch { width: 22px; height: 22px; border-radius: 50%; border: 2px solid transparent; padding: 0; }
+.swatch.on { border-color: var(--text); background-clip: padding-box; }
+.stage { position: relative; background: #000; border-radius: 10px; overflow: hidden; border: 1px solid var(--line);
+  user-select: none; }
+.stage img { display: block; width: 100%; height: auto; }
+.stage canvas { position: absolute; inset: 0; width: 100%; height: 100%; cursor: crosshair; touch-action: none; }
+.stage .none { color: var(--muted); padding: 80px; text-align: center; }
+.grid { display: grid; grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr); gap: 16px; margin-top: 16px; }
+@media (max-width: 1250px) { .grid { grid-template-columns: 1fr; } }
+.box { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; margin-bottom: 14px; }
+.box h3 { margin: 0 0 8px; font-size: 13px; text-transform: uppercase; letter-spacing: .6px; color: var(--muted);
+  display: flex; align-items: center; gap: 8px; }
+.box h3 .grow { flex: 1; }
+.box h3 label, .box h3 select, .box h3 button { text-transform: none; letter-spacing: 0; font-size: 12px; color: var(--text); }
+textarea.notes { width: 100%; min-height: 110px; resize: vertical; }
+.gamenote { background: var(--panel2); border-left: 3px solid var(--warn); padding: 6px 10px; border-radius: 4px; margin-bottom: 8px; }
+.issue { display: grid; grid-template-columns: 22px 1fr auto; gap: 6px 8px; align-items: center; padding: 8px 0;
+  border-top: 1px solid var(--line); }
+.issue:first-of-type { border-top: 0; }
+.issue .row2 { grid-column: 2 / 4; display: flex; gap: 6px; flex-wrap: wrap; }
+.issue input[type=text] { width: 100%; }
+.issue .row2 select, .issue .row2 input { font-size: 12px; padding: 3px 6px; }
+.issue .row2 input.thread { flex: 1; min-width: 160px; }
+.issue.done .ititle { text-decoration: line-through; color: var(--muted); }
+.x { background: none; border: 0; color: var(--muted); padding: 2px 6px; }
+.x:hover { color: var(--bad); }
+.kv { display: grid; grid-template-columns: max-content 1fr; gap: 3px 14px; font-size: 13px; }
+.kv .k { color: var(--muted); }
+.kv .v { font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.stats { display: flex; gap: 18px; flex-wrap: wrap; margin-bottom: 8px; }
+.stat .n { font-size: 20px; font-weight: 650; font-variant-numeric: tabular-nums; }
+.stat .l { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .5px; }
+canvas.strip { width: 100%; height: 110px; display: block; }
+table { width: 100%; border-collapse: collapse; font-size: 12.5px; font-variant-numeric: tabular-nums; }
+th { text-align: left; color: var(--muted); font-weight: 500; padding: 4px 6px; border-bottom: 1px solid var(--line); }
+td { padding: 4px 6px; border-bottom: 1px solid var(--line); }
+.logs pre { margin: 0; max-height: 420px; overflow: auto; font: 12px/1.5 var(--mono); white-space: pre-wrap;
+  word-break: break-all; background: var(--panel2); border-radius: 6px; padding: 8px 10px; }
+.logs .E { color: var(--bad); } .logs .W { color: var(--warn); } .logs .mark { background: color-mix(in srgb, var(--accent2) 30%, transparent); }
+details summary { cursor: pointer; color: var(--muted); }
+details pre { font: 12px/1.45 var(--mono); max-height: 500px; overflow: auto; background: var(--panel2); padding: 8px; border-radius: 6px; }
+.toast { position: fixed; bottom: 18px; left: 50%; transform: translateX(-50%); background: var(--text); color: var(--bg);
+  padding: 8px 14px; border-radius: 8px; opacity: 0; transition: opacity .2s; pointer-events: none; }
+.toast.show { opacity: .95; }
+.help { color: var(--muted); font-size: 12px; margin-top: 6px; }
+.regions { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 8px; }
+.regions .r { display: inline-flex; align-items: center; gap: 4px; background: var(--chip); border-radius: 99px;
+  padding: 1px 4px 1px 8px; font-size: 12px; }
+.regions .r i { width: 10px; height: 10px; border-radius: 2px; display: inline-block; }
+@media (max-width: 800px) {
+  .app { grid-template-columns: 1fr; grid-template-rows: auto 38vh 1fr; }
+  header { grid-column: 1; }
+  aside { border-right: 0; border-bottom: 1px solid var(--line); }
+}
+</style>
+</head>
+<body>
+<div class="app">
+  <header>
+    <h1><span>&#9679;</span> Drive snapshots</h1>
+    <span class="folder" id="folder"></span>
+    <span class="grow"></span>
+    <div class="chips" id="filters"></div>
+    <input type="search" id="q" placeholder="Search notes, streets, issues">
+    <button id="rescan" title="Look for new snapshots from the game now">Refresh</button>
+  </header>
+  <aside id="list"></aside>
+  <main id="main"><div class="empty">Loading&hellip;</div></main>
+</div>
+<div class="toast" id="toast"></div>
+<script>
+'use strict';
+const STATUS = [['new', 'New'], ['look', 'Look again'], ['issue', 'Issue'], ['ok', 'OK'], ['handed', 'Handed off']];
+const AREAS = ['map', 'roads', 'traffic', 'buildings', 'terrain', 'trees', 'sky', 'performance', 'bug', 'idea'];
+const SEVS = ['low', 'med', 'high'];
+const COLORS = ['#ff3b30', '#ffcc00', '#34c7ff', '#3ddc84', '#ffffff'];
+const TOOLS = [['rect', 'Box'], ['highlight', 'Highlight'], ['ellipse', 'Ellipse'], ['arrow', 'Arrow'], ['pen', 'Pen']];
+const DRIVE_GAP_S = 30 * 60;
+
+let all = [], home = '', version = -1, filter = 'all', query = '';
+let cur = null;               // {id, det, review}
+let tool = 'rect', color = COLORS[0];
+let saveTimer = null, dirtyShapes = false;
+const $ = (s, el = document) => el.querySelector(s);
+const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'}[c]));
+const num = (v, d = 0, u = '') => (typeof v === 'number' && isFinite(v)) ? v.toFixed(d) + u : '–';
+const uid = () => Math.random().toString(36).slice(2, 10);
+
+function toast(msg) {
+  const t = $('#toast'); t.textContent = msg; t.classList.add('show');
+  clearTimeout(toast.t); toast.t = setTimeout(() => t.classList.remove('show'), 1800);
+}
+async function api(path, opts) {
+  const r = await fetch(path, opts);
+  const ct = r.headers.get('Content-Type') || '';
+  const body = ct.includes('json') ? await r.json() : await r.text();
+  if (!r.ok) throw new Error((body && body.error) || r.statusText);
+  return body;
+}
+function when(unix, withDate) {
+  if (!unix) return '';
+  const d = new Date(unix * 1000);
+  const t = d.toLocaleTimeString([], {hour: 'numeric', minute: '2-digit', second: '2-digit'});
+  return withDate ? d.toLocaleDateString([], {weekday: 'short', month: 'short', day: 'numeric'}) + ', ' + t : t;
+}
+function place(s) { return [s.street, s.place].filter(Boolean).join(', ') || (s.lat != null ? s.lat.toFixed(4) + ', ' + s.lon.toFixed(4) : 'no location'); }
+
+// ---------------------------------------------------------------- the list
+function matches(s) {
+  if (filter === 'open' && !(s.openIssues > 0)) return false;
+  if (filter !== 'all' && filter !== 'open' && s.status !== filter) return false;
+  if (!query) return true;
+  const hay = [s.title, s.notes, s.gameNote, s.street, s.place, s.id, (s.tags || []).join(' ')].join(' ').toLowerCase();
+  return query.toLowerCase().split(/\s+/).every(w => hay.includes(w));
+}
+function renderFilters() {
+  const counts = {all: all.length, open: all.filter(s => s.openIssues > 0).length};
+  for (const [k] of STATUS) counts[k] = all.filter(s => s.status === k).length;
+  const items = [['all', 'All'], ...STATUS, ['open', 'Open issues']];
+  $('#filters').innerHTML = items.map(([k, l]) =>
+    `<button data-f="${k}" class="${filter === k ? 'on' : ''}">${l} ${counts[k] || 0}</button>`).join('');
+}
+function cardHtml(s) {
+  const src = s.annotated ? `annotated.png?v=${s.annotatedAt || 0}` : 'screenshot.jpg';
+  const img = s.screenshot ? `<img loading="lazy" src="/files/${s.id}/${src}" alt="">` : '<div class="noimg"></div>';
+  const label = s.title || s.gameNote || s.notes.split('\n')[0] || place(s);
+  return `<div class="card ${cur && cur.id === s.id ? 'sel' : ''}" data-id="${s.id}">${img}<div>
+    <div class="t"><span class="dot st-${esc(s.status)}"></span>${esc(when(s.unix))}
+      ${s.openIssues ? `<span class="badge bad">${s.openIssues} open</span>` : ''}
+      ${s.hitches ? `<span class="badge">${s.hitches} hitch${s.hitches > 1 ? 'es' : ''}</span>` : ''}</div>
+    <div class="sub">${esc(label)}</div>
+    <div class="sub">${num(s.speedMph, 0, ' mph')} &middot; ${num(s.fps, 0, ' fps')} &middot; ${s.cars} cars near</div>
+  </div></div>`;
+}
+function updateCard(s) {
+  const el = document.querySelector(`.card[data-id="${s.id}"]`);
+  if (!el || !matches(s)) return renderList();
+  const tmp = document.createElement('div'); tmp.innerHTML = cardHtml(s);
+  const fresh = tmp.firstElementChild, oldImg = el.querySelector('img'), newImg = fresh.querySelector('img');
+  if (oldImg && newImg && oldImg.getAttribute('src') === newImg.getAttribute('src')) newImg.replaceWith(oldImg);
+  el.replaceWith(fresh); renderFilters();
+}
+function renderList() {
+  renderFilters();
+  const rows = all.filter(matches);
+  if (!all.length) { $('#list').innerHTML = ''; return; }
+  let html = '', prev = null, drive = 0;
+  const groups = [];
+  for (const s of rows) {      // (newest first) a new drive after a gap of DRIVE_GAP_S
+    if (!prev || !s.unix || !prev.unix || prev.unix - s.unix > DRIVE_GAP_S) groups.push([]);
+    groups[groups.length - 1].push(s); prev = s;
+  }
+  for (const g of groups) {
+    const a = g[g.length - 1], b = g[0];
+    html += `<div class="drive">${esc(when(a.unix, true))} &ndash; ${esc(when(b.unix))} &middot; ${g.length}</div>`;
+    for (const s of g) html += cardHtml(s);
+  }
+  $('#list').innerHTML = html || '<div class="empty">Nothing matches.</div>';
+}
+async function loadList(keepSel) {
+  const r = await api('/api/snapshots');
+  all = r.snapshots; home = r.home; version = r.version;
+  $('#folder').textContent = home;
+  renderList();
+  if (!all.length) return renderEmpty(r);
+  const want = (keepSel && cur && cur.id) || location.hash.slice(1);
+  if (!cur || !keepSel) select(all.some(s => s.id === want) ? want : all[0].id);
+}
+function renderEmpty(r) {
+  $('#main').innerHTML = `<div class="empty"><h2>No snapshots yet</h2>
+    <p>In the game, press <kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>S</kbd> (or the Stream Deck's <b>Snapshot</b> key) while you drive.
+    Press it again within 8 seconds to add a note.</p>
+    <p>Snapshots land in <code>${esc(r.home)}</code>. This page also picks them up from
+    ${r.userDirs.length ? r.userDirs.map(d => '<code>' + esc(d) + '</code>').join(', ') : 'no game user folder (was the game ever started here?)'}.</p></div>`;
+}
+$('#list').addEventListener('click', e => { const c = e.target.closest('.card'); if (c) select(c.dataset.id); });
+$('#filters').addEventListener('click', e => { const b = e.target.closest('button'); if (b) { filter = b.dataset.f; renderList(); } });
+$('#q').addEventListener('input', e => { query = e.target.value.trim(); renderList(); });
+$('#rescan').addEventListener('click', async () => {
+  const r = await api('/api/scan', {method: 'POST'});
+  await loadList(true); toast(r.new.length ? `${r.new.length} new or changed` : 'Nothing new');
+});
+setInterval(async () => {
+  try { const r = await api('/api/version'); if (r.version !== version) await loadList(true); } catch (e) {}
+}, 5000);
+
+// ---------------------------------------------------------------- one snapshot
+async function select(id) {
+  await flush();
+  const det = await api('/api/snapshots/' + id);
+  const review = Object.assign({title: '', notes: '', status: 'new', tags: [], shapes: [], issues: []}, det.review || {});
+  cur = {id, det, review};
+  history.replaceState(null, '', '#' + id);
+  renderList();
+  renderDetail();
+  const sel = $('.card.sel'); if (sel) sel.scrollIntoView({block: 'nearest'});
+}
+function neighbour(d) {
+  const rows = all.filter(matches); const i = rows.findIndex(s => s.id === (cur && cur.id));
+  const n = rows[i + d]; if (n) select(n.id);
+}
+
+function renderDetail() {
+  const {id, det, review} = cur; const s = det.snapshot || {}; const sm = det.summary;
+  const veh = s.vehicle || {}; const lat = sm.lat, lon = sm.lon;
+  const maps = lat != null ? `<a target="_blank" rel="noopener" href="https://www.openstreetmap.org/?mlat=${lat}&mlon=${lon}#map=18/${lat}/${lon}">OpenStreetMap</a>
+    &middot; <a target="_blank" rel="noopener" href="https://www.google.com/maps/search/?api=1&query=${lat},${lon}">Google Maps</a>
+    &middot; <a target="_blank" rel="noopener" href="https://www.google.com/maps/@?api=1&map_action=pano&viewpoint=${lat},${lon}&heading=${Math.round(veh.headingDeg || 0)}">Street View</a>` : '';
+  $('#main').innerHTML = `
+    <div class="top">
+      <button id="prev" title="Newer (left arrow)">&larr;</button><button id="next" title="Older (right arrow)">&rarr;</button>
+      <input type="text" class="title" id="title" placeholder="Title (what is this about?)" value="${esc(review.title)}">
+      <div class="seg" id="status">${STATUS.map(([k, l]) => `<button data-s="${k}" class="s-${k} ${review.status === k ? 'on' : ''}">${l}</button>`).join('')}</div>
+      <button class="primary" id="brief" title="Copies a Markdown brief for a Claude thread and saves brief.md">Copy brief</button>
+      <button id="open" title="Open the snapshot's folder">Folder</button>
+      <span class="saved" id="saved"></span>
+    </div>
+    <div class="meta">${esc(when(sm.unix, true))} &middot; ${esc(place(sm))} &middot; ${maps}</div>
+    <div class="tools" id="tools">
+      ${TOOLS.map(([k, l], i) => `<button data-t="${k}" class="${tool === k ? 'on' : ''}" title="${l} (${i + 1})">${l}</button>`).join('')}
+      <span class="sep"></span>
+      ${COLORS.map(c => `<button class="swatch ${color === c ? 'on' : ''}" data-c="${c}" style="background:${c}"></button>`).join('')}
+      <span class="sep"></span>
+      <button id="undo" title="Undo (Ctrl+Z)">Undo</button><button id="clear">Clear</button>
+    </div>
+    <div class="stage" id="stage">${sm.screenshot ? `<img id="shot" src="/files/${id}/screenshot.jpg" alt="screenshot"><canvas id="cv"></canvas>`
+      : '<div class="none">No screenshot in this snapshot.</div>'}</div>
+    <div class="regions" id="regions"></div>
+    <div class="help">Drag on the picture to mark a region; each gets a number that an issue can point to. <kbd>&larr;</kbd> <kbd>&rarr;</kbd> step through snapshots.</div>
+    <div class="grid">
+      <div>
+        <div class="box"><h3>Notes</h3>
+          ${s.note ? `<div class="gamenote"><b>In the game:</b> ${esc(s.note)}</div>` : ''}
+          <textarea class="notes" id="notes" placeholder="What did you see? What should happen instead?">${esc(review.notes)}</textarea>
+        </div>
+        <div class="box"><h3>Issues <span class="grow"></span><button id="addIssue">+ Issue</button></h3><div id="issues"></div></div>
+        <div class="box logs"><h3>Logs <span class="grow"></span>
+          <label><input type="checkbox" id="onlyWE"> warnings and errors</label>
+          <select id="logPick"><option value="beamng.log.txt">beamng.log</option><option value="earthd.log.txt">world server</option></select></h3>
+          <pre id="logText"></pre>
+          <div class="help">The minute before the snapshot and 5 s after; the snapshot's moment is highlighted.</div></div>
+      </div>
+      <div>
+        ${framesBox(s)}
+        ${whereBox(s, sm)}
+        ${trafficBox(s)}
+        ${worldBox(s, det.build)}
+        <div class="box"><details><summary>Everything in snapshot.json</summary><pre>${esc(JSON.stringify(s, (k, v) => k === 'ms' ? `[${(v || []).length} frame times]` : v, 1))}</pre></details></div>
+      </div>
+    </div>`;
+  wireDetail();
+  drawStrip(s);
+  renderIssues(); renderRegions(); renderLog();
+  const img = $('#shot');
+  if (img) { if (img.complete) setupCanvas(); else img.addEventListener('load', setupCanvas); }
+}
+
+function framesBox(s) {
+  const f = s.frames || {};
+  return `<div class="box"><h3>Frames, last ${num(f.seconds, 0, ' s')}</h3>
+    <div class="stats">
+      <div class="stat"><div class="n">${num(f.fps, 0)}</div><div class="l">fps</div></div>
+      <div class="stat"><div class="n">${num(f.p50, 1)}</div><div class="l">p50 ms</div></div>
+      <div class="stat"><div class="n">${num(f.p99, 1)}</div><div class="l">p99 ms</div></div>
+      <div class="stat"><div class="n">${num(f.maxMs, 0)}</div><div class="l">max ms</div></div>
+      <div class="stat"><div class="n">${(f.hitches || []).length}</div><div class="l">hitches &ge; ${f.hitchMs || 40} ms</div></div>
+    </div><canvas class="strip" id="strip"></canvas>
+    ${(f.hitches || []).length ? `<div class="help">${f.hitches.slice(0, 12).map(h => `${num(h.ms, 0)} ms ${num(h.agoS, 1)} s before`).join(' &middot; ')}</div>` : ''}
+  </div>`;
+}
+function whereBox(s, sm) {
+  const v = s.vehicle || {}; const c = s.camera || {}; const g = s.gps || null; const d = s.drive || null;
+  const pos = p => Array.isArray(p) ? p.map(x => num(x, 1)).join(', ') : '–';
+  return `<div class="box"><h3>Where and the car</h3><div class="kv">
+    <span class="k">GPS</span><span class="v">${sm.lat != null ? sm.lat.toFixed(6) + ', ' + sm.lon.toFixed(6) : '–'}</span>
+    <span class="k">Street</span><span class="v">${esc(place(sm))}</span>
+    <span class="k">Game position</span><span class="v">${pos(v.pos)}</span>
+    <span class="k">Camera</span><span class="v">${pos(c.pos)}</span>
+    <span class="k">Heading</span><span class="v">${num(v.headingDeg, 0, '&deg;')}</span>
+    <span class="k">Speed</span><span class="v">${num(v.speedMph, 1, ' mph')} (${num(v.speedMs, 1, ' m/s')})</span>
+    <span class="k">Car</span><span class="v">${esc(v.name || '–')}${s.player && s.player.ai ? ' &middot; AI ' + esc(s.player.ai.mode) : ''}</span>
+    ${g ? `<span class="k">GPS route</span><span class="v">to ${esc(g.name || '?')}${g.autodrive ? ' &middot; autodrive' : ''}${g.remaining != null ? ' &middot; ' + num(g.remaining / 1609.34, 1, ' mi left') : ''}</span>` : ''}
+    ${d ? `<span class="k">The Drive</span><span class="v">${esc(d.route)} &middot; ${esc(d.phase)} &middot; ${num(d.t, 0, ' s')}</span>` : ''}
+  </div></div>`;
+}
+function trafficBox(s) {
+  const t = s.traffic || {}; const n = t.navgraph || {}; const cars = t.cars || [];
+  const navKeys = ['nodes', 'edges', 'junctions', 'routesKept', 'routesDropped', 'cutRespawns', 'aheadRespawns', 'merging', 'mergeAssists', 'restarts'];
+  const tstate = n.traffic && typeof n.traffic === 'object' ? n.traffic : null;
+  return `<div class="box"><h3>AI traffic</h3>
+    <div class="kv" style="margin-bottom:8px">
+      <span class="k">Navgraph</span><span class="v">${navKeys.filter(k => n[k] != null).map(k => `${k} ${esc(n[k])}`).join(' &middot; ') || 'no status'}</span>
+      ${tstate ? `<span class="k">Traffic</span><span class="v">${Object.entries(tstate).filter(([, v]) => typeof v !== 'object').map(([k, v]) => `${esc(k)} ${esc(v)}`).join(' &middot; ')}</span>` : ''}
+      <span class="k">Cars</span><span class="v">${t.amount ?? '–'} in traffic, ${cars.length} within 400 m${s.aiAnswered != null ? ', ' + s.aiAnswered + ' drivers answered' : ''}</span>
+    </div>
+    ${cars.length ? `<table><tr><th>#</th><th>Dist</th><th>Speed</th><th>State</th><th>AI mode</th><th>Speed mode</th><th>Lane</th><th>Car</th></tr>
+      ${cars.map(c => `<tr><td>${esc(c.id)}</td><td>${num(c.distM, 0, ' m')}</td><td>${num(c.speedMph, 0, ' mph')}</td><td>${esc(c.state || '')}</td>
+        <td>${esc((c.ai || {}).mode || '')}</td><td>${esc((c.ai || {}).speedMode || '')}${(c.ai || {}).routeSpeed ? ' ' + num(c.ai.routeSpeed * 2.23694, 0) : ''}</td>
+        <td>${esc((c.ai || {}).driveInLane || '')}</td><td>${esc(c.model || c.role || '')}</td></tr>`).join('')}</table>` : ''}
+  </div>`;
+}
+function worldBox(s, b) {
+  const tod = s.tod || {}; const sky = tod.sky || {}; const w = s.weather || {};
+  const wl = Object.entries(w).filter(([, v]) => typeof v !== 'object').slice(0, 8).map(([k, v]) => `${esc(k)} ${esc(v)}`).join(' &middot; ');
+  return `<div class="box"><h3>Sky, build</h3><div class="kv">
+    <span class="k">Time of day</span><span class="v">${esc(tod.clock || sky.localTime || '–')}${sky.mode ? ' &middot; sky ' + esc(sky.mode) : ''}${sky.date ? ' &middot; ' + esc(sky.date) : ''}</span>
+    ${wl ? `<span class="k">Weather</span><span class="v">${wl}</span>` : ''}
+    <span class="k">Mod</span><span class="v">${esc(s.modVersion || '–')}${s.server && s.server.serverVersion ? ' &middot; server ' + esc(s.server.serverVersion) : ''}</span>
+    <span class="k">Build</span><span class="v">${b ? `${esc(b.branch || '?')} @ <code>${esc(b.short || '?')}</code>${b.dirty ? ' (uncommitted changes)' : ''}<br><span style="color:var(--muted)">${esc(b.subject || '')}</span>` : 'not recorded (the world server was not running)'}</span>
+    <span class="k">Level</span><span class="v">${esc(s.level || '–')}</span>
+    <span class="k">Folder</span><span class="v"><code>${esc(cur.det.summary.folder)}</code></span>
+  </div></div>`;
+}
+
+function drawStrip(s) {
+  const cv = $('#strip'); const f = s.frames || {}; const ms = f.ms || [];
+  if (!cv) return;
+  const W = cv.clientWidth, H = cv.clientHeight, dpr = devicePixelRatio || 1;
+  cv.width = W * dpr; cv.height = H * dpr;
+  const g = cv.getContext('2d'); g.scale(dpr, dpr);
+  const css = getComputedStyle(document.documentElement);
+  const total = ms.reduce((a, b) => a + b, 0) || 1;
+  const top = Math.max(50, ...ms) * 1.08;
+  const base = H - 16, y = v => base - (v / top) * (base - 4);
+  g.font = '10px system-ui'; g.textAlign = 'right';
+  let lastY = 1e9;
+  for (const ref of [16.7, 33.3, 50, 100]) {
+    if (ref > top) continue;
+    g.strokeStyle = css.getPropertyValue('--line'); g.beginPath(); g.moveTo(0, y(ref)); g.lineTo(W - 40, y(ref)); g.stroke();
+    if (lastY - y(ref) > 11) { g.fillStyle = css.getPropertyValue('--muted'); g.fillText(ref.toFixed(0) + ' ms', W, y(ref) + 3); lastY = y(ref); }
+  }
+  g.textAlign = 'left';
+  let x = 0; const PW = W - 44;
+  for (const v of ms) {
+    const w = (v / total) * PW;
+    g.fillStyle = v >= (f.hitchMs || 40) ? css.getPropertyValue('--bad') : v > 20 ? css.getPropertyValue('--warn') : css.getPropertyValue('--accent2');
+    g.fillRect(x, y(v), Math.max(w - 0.2, 0.6), base - y(v));
+    x += w;
+  }
+  g.fillStyle = css.getPropertyValue('--muted');
+  g.fillText('-' + (total / 1000).toFixed(0) + ' s', 0, H - 2); g.textAlign = 'right'; g.fillText('snapshot', PW, H - 2);
+}
+
+// ---------------------------------------------------------------- notes, status, issues
+function wireDetail() {
+  $('#prev').onclick = () => neighbour(-1); $('#next').onclick = () => neighbour(1);
+  $('#title').oninput = e => { cur.review.title = e.target.value; queueSave(); };
+  $('#notes').oninput = e => { cur.review.notes = e.target.value; queueSave(); };
+  $('#status').onclick = e => { const b = e.target.closest('button'); if (!b) return;
+    cur.review.status = b.dataset.s; [...$('#status').children].forEach(x => x.classList.toggle('on', x === b)); queueSave(); };
+  $('#tools').onclick = e => {
+    const t = e.target.closest('[data-t]'), c = e.target.closest('[data-c]');
+    if (t) setTool(t.dataset.t);
+    if (c) { color = c.dataset.c; [...document.querySelectorAll('.swatch')].forEach(x => x.classList.toggle('on', x === c)); }
+  };
+  $('#undo').onclick = undo;
+  $('#clear').onclick = () => { if (cur.review.shapes.length && confirm('Remove every region from this snapshot?')) {
+    cur.review.shapes = []; shapesChanged(); } };
+  $('#addIssue').onclick = () => { const sh = cur.review.shapes[cur.review.shapes.length - 1];
+    cur.review.issues.push({id: uid(), title: '', area: 'map', severity: 'med', shape: sh ? sh.id : null, thread: '', done: false});
+    if (cur.review.status === 'new' || cur.review.status === 'look') setStatus('issue');
+    renderIssues(); queueSave(); const ins = document.querySelectorAll('.ititle'); if (ins.length) ins[ins.length - 1].focus(); };
+  $('#brief').onclick = async () => {
+    await flush();
+    const r = await api(`/api/snapshots/${cur.id}/brief`, {method: 'POST'});
+    try { await navigator.clipboard.writeText(r.text); toast('Brief copied; also saved as brief.md'); }
+    catch (e) { toast('Saved ' + r.path); }
+  };
+  $('#open').onclick = () => api(`/api/snapshots/${cur.id}/open`, {method: 'POST'});
+  $('#logPick').onchange = renderLog; $('#onlyWE').onchange = renderLog;
+}
+function setStatus(k) { cur.review.status = k; [...$('#status').children].forEach(x => x.classList.toggle('on', x.dataset.s === k)); }
+function setTool(k) { tool = k; [...document.querySelectorAll('[data-t]')].forEach(x => x.classList.toggle('on', x.dataset.t === k)); }
+function renderIssues() {
+  const r = cur.review; const box = $('#issues');
+  if (!r.issues.length) { box.innerHTML = '<div class="help">No issues yet. Mark a region on the picture, then add an issue for it.</div>'; return; }
+  const regionOpts = sel => `<option value="">no region</option>` + r.shapes.map((sh, i) =>
+    `<option value="${sh.id}" ${sel === sh.id ? 'selected' : ''}>region ${i + 1}</option>`).join('');
+  box.innerHTML = r.issues.map((it, n) => `<div class="issue ${it.done ? 'done' : ''}" data-n="${n}">
+    <input type="checkbox" data-k="done" ${it.done ? 'checked' : ''} title="Done">
+    <input type="text" class="ititle" data-k="title" placeholder="What is wrong?" value="${esc(it.title)}">
+    <button class="x" data-del title="Remove">&times;</button>
+    <div class="row2">
+      <select data-k="area">${AREAS.map(a => `<option ${it.area === a ? 'selected' : ''}>${a}</option>`).join('')}</select>
+      <select data-k="severity">${SEVS.map(a => `<option ${it.severity === a ? 'selected' : ''}>${a}</option>`).join('')}</select>
+      <select data-k="shape">${regionOpts(it.shape)}</select>
+      <input type="text" class="thread" data-k="thread" placeholder="Thread or PR it went to" value="${esc(it.thread)}">
+    </div></div>`).join('');
+  box.oninput = box.onchange = e => {
+    const row = e.target.closest('.issue'); const k = e.target.dataset.k; if (!row || !k) return;
+    const it = r.issues[+row.dataset.n];
+    it[k] = e.target.type === 'checkbox' ? e.target.checked : (k === 'shape' ? (e.target.value || null) : e.target.value);
+    if (k === 'done') row.classList.toggle('done', it.done);
+    if (k === 'shape') redraw();
+    queueSave();
+  };
+  box.onclick = e => { if (e.target.closest('[data-del]')) { r.issues.splice(+e.target.closest('.issue').dataset.n, 1); renderIssues(); queueSave(); } };
+}
+function renderRegions() {
+  const r = cur.review;
+  $('#regions').innerHTML = r.shapes.map((sh, i) => `<span class="r"><i style="background:${esc(sh.color)}"></i>${i + 1} ${sh.kind}
+    <button class="x" data-del="${sh.id}" title="Remove region ${i + 1}">&times;</button></span>`).join('');
+  $('#regions').onclick = e => { const b = e.target.closest('[data-del]'); if (!b) return;
+    r.shapes = r.shapes.filter(s => s.id !== b.dataset.del);
+    for (const it of r.issues) if (it.shape === b.dataset.del) it.shape = null;
+    shapesChanged(); };
+}
+function renderLog() {
+  const name = $('#logPick').value; const text = cur.det.logs[name];
+  const pre = $('#logText');
+  if (text == null) { pre.textContent = name === 'beamng.log.txt' ? 'Not added yet (it comes about 5 s after the snapshot).'
+      : 'No world server log for this snapshot (the server was not running, or its log file was not found).'; return; }
+  const only = $('#onlyWE').checked; const t = cur.det.snapshot.unix;
+  const at = /the snapshot is at ([\d.]+) s/.exec(text); const gameT = at ? +at[1] : null;
+  const lines = text.split('\n').filter(l => l.length);
+  pre.innerHTML = lines.filter(l => !only || /\|[EW]\||\b(WARNING|ERROR|CRITICAL)\b/.test(l)).map(l => {
+    const cls = /\|E\||\b(ERROR|CRITICAL)\b/.test(l) ? 'E' : /\|W\||\bWARNING\b/.test(l) ? 'W' : '';
+    let mark = false;
+    const sm = /^(\d{4}-\d{2}-\d{2}) (\d{2}:\d{2}:\d{2})/.exec(l);
+    if (sm && t) mark = Math.abs(new Date(sm[1] + 'T' + sm[2]).getTime() / 1000 - t) < 1.5;
+    const gm = gameT != null && /^\s*(\d+\.\d+)\|/.exec(l); if (gm) mark = Math.abs(+gm[1] - gameT) < 1.0;
+    return `<span class="${cls} ${mark ? 'mark' : ''}">${esc(l)}</span>`;
+  }).join('\n') || '(no lines)';
+}
+
+// ---------------------------------------------------------------- saving
+function queueSave() { $('#saved').textContent = 'editing…'; clearTimeout(saveTimer); saveTimer = setTimeout(save, 700); }
+async function flush() { if (saveTimer) { clearTimeout(saveTimer); saveTimer = null; await save(); } }
+async function save() {
+  saveTimer = null; if (!cur) return;
+  const c = cur;
+  try {
+    const r = await api(`/api/snapshots/${c.id}/review`, {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(c.review)});
+    if (dirtyShapes && c === cur) { dirtyShapes = false; await saveAnnotated(c); r.summary.annotated = true; r.summary.annotatedAt = Date.now(); }
+    const i = all.findIndex(s => s.id === c.id);
+    if (i >= 0) { if (!r.summary.annotatedAt) r.summary.annotatedAt = all[i].annotatedAt; all[i] = r.summary; }
+    updateCard(r.summary);
+    if (c === cur) $('#saved').textContent = 'saved ' + new Date().toLocaleTimeString([], {hour: 'numeric', minute: '2-digit'});
+  } catch (e) { $('#saved').textContent = 'not saved: ' + e.message; }
+}
+async function saveAnnotated(c) {
+  const img = $('#shot'); if (!img || !img.naturalWidth) return;
+  const W = img.naturalWidth, H = img.naturalHeight;
+  const cv = document.createElement('canvas'); cv.width = W; cv.height = H;
+  const g = cv.getContext('2d'); g.drawImage(img, 0, 0);
+  drawShapes(g, W, H, c.review, null);
+  await api(`/api/snapshots/${c.id}/annotated`, {method: 'POST', body: cv.toDataURL('image/png')});
+}
+
+// ---------------------------------------------------------------- drawing
+let drawing = null;
+function setupCanvas() {
+  const cv = $('#cv'); if (!cv) return;
+  const resize = () => { const r = cv.getBoundingClientRect(); const dpr = devicePixelRatio || 1;
+    cv.width = r.width * dpr; cv.height = r.height * dpr; redraw(); };
+  new ResizeObserver(resize).observe(cv); resize();
+  const pt = e => { const r = cv.getBoundingClientRect();
+    return [Math.min(1, Math.max(0, (e.clientX - r.left) / r.width)), Math.min(1, Math.max(0, (e.clientY - r.top) / r.height))]; };
+  cv.onpointerdown = e => { cv.setPointerCapture(e.pointerId);
+    drawing = {id: uid(), kind: tool, color, points: [pt(e), pt(e)]}; };
+  cv.onpointermove = e => { if (!drawing) return;
+    if (drawing.kind === 'pen') drawing.points.push(pt(e)); else drawing.points[1] = pt(e); redraw(); };
+  cv.onpointerup = () => { if (!drawing) return; const d = drawing; drawing = null;
+    const [a, b] = [d.points[0], d.points[d.points.length - 1]];
+    const big = d.kind === 'pen' ? d.points.length > 3 : Math.hypot(a[0] - b[0], a[1] - b[1]) > 0.008;
+    if (big) { if (d.kind === 'pen') d.points = simplify(d.points); cur.review.shapes.push(d);
+      if (cur.review.status === 'new') setStatus('look');
+      shapesChanged(); } else redraw(); };
+}
+function simplify(p) { const out = [p[0]]; for (const q of p) { const l = out[out.length - 1]; if (Math.hypot(q[0] - l[0], q[1] - l[1]) > 0.002) out.push(q); } return out; }
+function shapesChanged() { dirtyShapes = true; redraw(); renderRegions(); renderIssues(); queueSave(); }
+function undo() { if (cur && cur.review.shapes.length) { const sh = cur.review.shapes.pop();
+  for (const it of cur.review.issues) if (it.shape === sh.id) it.shape = null; shapesChanged(); } }
+function redraw() {
+  const cv = $('#cv'); if (!cv || !cur) return;
+  const g = cv.getContext('2d'); g.clearRect(0, 0, cv.width, cv.height);
+  drawShapes(g, cv.width, cv.height, cur.review, drawing);
+}
+function drawShapes(g, W, H, review, extra) {
+  const lw = Math.max(2, W / 400);
+  const linked = new Set(review.issues.filter(i => i.shape).map(i => i.shape));
+  const list = extra ? [...review.shapes, extra] : review.shapes;
+  list.forEach((sh, i) => {
+    const P = sh.points.map(([x, y]) => [x * W, y * H]); const [a, b] = [P[0], P[P.length - 1]];
+    g.save(); g.lineWidth = lw; g.strokeStyle = sh.color; g.fillStyle = sh.color; g.lineJoin = g.lineCap = 'round';
+    g.shadowColor = 'rgba(0,0,0,.6)'; g.shadowBlur = lw * 1.5;
+    const x = Math.min(a[0], b[0]), y = Math.min(a[1], b[1]), w = Math.abs(a[0] - b[0]), h = Math.abs(a[1] - b[1]);
+    if (sh.kind === 'rect') g.strokeRect(x, y, w, h);
+    else if (sh.kind === 'highlight') { g.globalAlpha = 0.28; g.fillRect(x, y, w, h); g.globalAlpha = 1; g.setLineDash([lw * 3, lw * 2]); g.strokeRect(x, y, w, h); }
+    else if (sh.kind === 'ellipse') { g.beginPath(); g.ellipse(x + w / 2, y + h / 2, w / 2 || 1, h / 2 || 1, 0, 0, 7); g.stroke(); }
+    else if (sh.kind === 'arrow') {
+      g.beginPath(); g.moveTo(a[0], a[1]); g.lineTo(b[0], b[1]); g.stroke();
+      const ang = Math.atan2(b[1] - a[1], b[0] - a[0]), L = lw * 6;
+      g.beginPath(); g.moveTo(b[0], b[1]); g.lineTo(b[0] - L * Math.cos(ang - .45), b[1] - L * Math.sin(ang - .45));
+      g.lineTo(b[0] - L * Math.cos(ang + .45), b[1] - L * Math.sin(ang + .45)); g.closePath(); g.fill();
+    } else if (sh.kind === 'pen') { g.beginPath(); P.forEach(([px, py], j) => j ? g.lineTo(px, py) : g.moveTo(px, py)); g.stroke(); }
+    if (sh !== extra) {        // the region's number (an issue points at it)
+      const r = lw * 5.5, lx = (sh.kind === 'arrow' || sh.kind === 'pen') ? a[0] : x, ly = (sh.kind === 'arrow' || sh.kind === 'pen') ? a[1] : y;
+      g.shadowBlur = 0; g.setLineDash([]); g.beginPath(); g.arc(lx, ly, r, 0, 7); g.fill();
+      g.fillStyle = sh.color === '#ffffff' || sh.color === '#ffcc00' ? '#000' : '#fff';
+      g.font = `bold ${Math.round(r * 1.25)}px system-ui`; g.textAlign = 'center'; g.textBaseline = 'middle';
+      g.fillText(String(i + 1) + (linked.has(sh.id) ? '' : ''), lx, ly + 0.5);
+    }
+    g.restore();
+  });
+}
+
+// ---------------------------------------------------------------- keys
+document.addEventListener('keydown', e => {
+  const typing = /INPUT|TEXTAREA|SELECT/.test(document.activeElement.tagName);
+  if ((e.ctrlKey || e.metaKey) && e.key === 'z' && !typing) { e.preventDefault(); undo(); return; }
+  if (typing || e.ctrlKey || e.metaKey || e.altKey) return;
+  if (e.key === 'ArrowLeft' || e.key === 'k') neighbour(-1);
+  else if (e.key === 'ArrowRight' || e.key === 'j') neighbour(1);
+  else if (e.key >= '1' && e.key <= String(TOOLS.length)) setTool(TOOLS[+e.key - 1][0]);
+});
+window.addEventListener('beforeunload', () => { if (saveTimer) save(); });
+loadList(false).catch(e => { $('#main').innerHTML = `<div class="empty">Could not load: ${esc(e.message)}</div>`; });
+</script>
+</body>
+</html>
