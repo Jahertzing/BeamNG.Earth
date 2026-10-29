@@ -42,6 +42,15 @@ SMALL_ANALYSES_OFF = True
 LARGE_GB = 48.0
 LARGE_MAPDATA_MB = 768      # decoded map data layers (mapdata.MEM_MB)
 LARGE_WALL_CELLS = 96       # cells of building walls for the street widths (roadwidth.WALL_CELLS)
+# The BAKE profile (BNGE_BUDGET=bake: tools/headless_bake.py's servers): the desktop sizes, with the per-process caches
+# clamped. A bake runs several servers at once, each with its workers, and every process grew to ~1.6 GB over an hour,
+# mostly these caches (a 9-process server 14 GB; four of them paged a 64 GB PC, 2026-10-28). What falls out of a
+# smaller cache is read again from the decoded mirrors on disk: cheap beside a tile's build. Nothing a bake keeps
+# depends on a cache size.
+BAKE_DEM_TILES = 128        # decoded DEM tiles (dem.MEM_TILES, 512: 1 MB each)
+BAKE_MAPDATA_MB = 192       # decoded map data layers (mapdata.MEM_MB; 768 on a large machine)
+BAKE_IMAGERY_TILES = 128    # decoded photo tiles (imagery.MEM_TILES, 512)
+BAKE_WALL_CELLS = 48        # roadwidth.WALL_CELLS (96 on a large machine)
 
 
 def total_gb():
@@ -68,10 +77,15 @@ def total_gb():
     return None
 
 
+def bake():
+    """The bake profile (BNGE_BUDGET=bake): the desktop profile with the per-process caches clamped (apply)."""
+    return os.environ.get("BNGE_BUDGET", "").lower() == "bake"
+
+
 def small(gb=None):
-    """Is this a small machine (the small profile)? BNGE_BUDGET=small / desktop overrides."""
+    """Is this a small machine (the small profile)? BNGE_BUDGET=small / desktop / bake overrides."""
     force = os.environ.get("BNGE_BUDGET", "").lower()
-    if force in ("small", "desktop"):
+    if force in ("small", "desktop", "bake"):
         return force == "small"
     gb = total_gb() if gb is None else gb
     return gb is not None and gb < SMALL_GB
@@ -98,12 +112,21 @@ def apply(is_small=None):
         import roadwidth
         mapdata.MEM_MB = max(mapdata.MEM_MB, LARGE_MAPDATA_MB)
         roadwidth.WALL_CELLS = max(roadwidth.WALL_CELLS, LARGE_WALL_CELLS)
+    elif bake():
+        import dem
+        import imagery
+        import mapdata
+        import roadwidth
+        dem.MEM_TILES = min(dem.MEM_TILES, BAKE_DEM_TILES)
+        mapdata.MEM_MB = min(mapdata.MEM_MB, BAKE_MAPDATA_MB)
+        imagery.MEM_TILES = min(imagery.MEM_TILES, BAKE_IMAGERY_TILES)
+        roadwidth.WALL_CELLS = min(roadwidth.WALL_CELLS, BAKE_WALL_CELLS)
     return is_small
 
 
 def large(gb=None):
-    """Is this a large machine (bigger map data caches)? BNGE_BUDGET=small / desktop: no."""
-    if os.environ.get("BNGE_BUDGET", "").lower() in ("small", "desktop"):
+    """Is this a large machine (bigger map data caches)? BNGE_BUDGET=small / desktop / bake: no."""
+    if os.environ.get("BNGE_BUDGET", "").lower() in ("small", "desktop", "bake"):
         return False
     gb = total_gb() if gb is None else gb
     return gb is not None and gb >= LARGE_GB

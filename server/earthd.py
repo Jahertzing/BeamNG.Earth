@@ -281,6 +281,14 @@ TRACE_S = 60.0                  # BNGE_TRACEMALLOC: seconds between the memory r
 TRACE_TOP = 15                  # ... and the allocation sites in each
 LANE_REQUEST, LANE_PREFETCH = 0, 1     # Server.block_pools: the blocks the mod asks for / the prefetch (--block-lanes 1:
                                        # one pool for both, lane_pool; a bake's client never waits on a prefetch)
+
+
+def lane_pool(block_pools, lane):
+    """The block process pool of lane (LANE_REQUEST / LANE_PREFETCH) among block_pools [(pool, warm queue)]: the last
+    one when there are fewer lanes (--block-lanes 1: one pool for both); None without block processes."""
+    if not block_pools:
+        return None
+    return block_pools[min(lane, len(block_pools) - 1)][0]
 HM_BUSY_TILE_WORKERS = 1    # far tiles built at once while a physics block is building in the server process (an
                             # anchor's first, or every one with --block-process off; the block processes' blocks do
                             # not share its interpreter: far tiles one at a time behind them were most of a Steam
@@ -1851,14 +1859,11 @@ class Server:
         analyses on (they live in this process) or without block processes."""
         if not self.block_pools or self.imagery is None or self.deshadow is not None or self.colormatch is not None:
             return None
-        return self.lane_pool(LANE_PREFETCH if lane == LANE_REQUEST else LANE_REQUEST)
+        return lane_pool(self.block_pools, LANE_PREFETCH if lane == LANE_REQUEST else LANE_REQUEST)
 
     def lane_pool(self, lane):
-        """The block process pool of lane (LANE_REQUEST / LANE_PREFETCH): the last one when there are fewer lanes
-        (--block-lanes 1: one pool for both); None without block processes."""
-        if not self.block_pools:
-            return None
-        return self.block_pools[min(lane, len(self.block_pools) - 1)][0]
+        """The block process pool of lane (LANE_REQUEST / LANE_PREFETCH): lane_pool() over this server's."""
+        return lane_pool(self.block_pools, lane)
 
     def _base_photo(self, anchor, cx, cy, pool=None, urgent=False, quick=False):
         """base_pool: the block's base photo (write_base; in the block process pool when given and its imagery

@@ -79,12 +79,12 @@ class ServerCommandTest(unittest.TestCase):
     def test_servers_and_workers_from_the_memory_free(self):
         # the PC with the game closed: 43 GB free (2026-10-28 20:50), 24 CPUs
         # a process of a tree grows to 1.6 GB over a bake (4 x (3 + 2) = 56 GB paged on the 64 GB PC)
+        # (PROC_GB 1.2 with the bake profile's caches; 3 fixed processes)
         jobs, far, road, note = hb.plan_servers(8, 8, ram_gb=43.0, cpus=24)
-        self.assertEqual((jobs, far, road), (2, 1, 5), "43 GB free less 8 reserved: two servers of 6 workers")
+        self.assertEqual((jobs, far, road), (2, 3, 6), "43 GB free less 8 reserved: two full servers")
         self.assertIn("2 servers in the 43 GB", note)
-        self.assertEqual(hb.plan_servers(4, 8, ram_gb=43.0, cpus=24)[:3], (2, 1, 5))
-        self.assertEqual(hb.plan_servers(4, 8, ram_gb=56.0, cpus=24)[:3], (2, 3, 6),
-                         "56 GB: 2 x (3 + 6) and 3 x (1 + 5) are 18 workers both: the fewer servers")
+        self.assertEqual(hb.plan_servers(4, 8, ram_gb=43.0, cpus=24)[:3], (2, 3, 6))
+        self.assertEqual(hb.plan_servers(4, 8, ram_gb=56.0, cpus=24)[:3], (3, 3, 6), "56 GB: three full servers")
         self.assertEqual(hb.plan_servers(4, 8, ram_gb=100.0, cpus=24)[:3], (4, 3, 6), "100 GB: four full servers")
         self.assertEqual(hb.plan_servers(2, 8, ram_gb=56.0, cpus=24), (2, 3, 6, None))
         self.assertEqual(hb.plan_servers(8, 2, ram_gb=100.0, cpus=24), (2, 3, 6, None), "at most one per leg")
@@ -92,11 +92,11 @@ class ServerCommandTest(unittest.TestCase):
         self.assertEqual(hb.plan_servers(8, 8, ram_gb=10.0, cpus=24)[:3], (1, 1, 2), "too little memory: the least")
         self.assertEqual(hb.plan_servers(2, 2, ram_gb=1e9, cpus=24), (2, 3, 6, None))
         self.assertEqual(hb.alone_workers(ram_gb=64.0), (3, 6))
-        self.assertEqual(hb.alone_workers(ram_gb=20.0), (1, 2), "20 GB: the least")
-        self.assertIsNone(hb.workers_for(9.0))
-        self.assertEqual(hb.workers_for(9.6), (1, 2))
-        self.assertEqual(hb.workers_for(12.8), (1, 4), "the road processes first")
-        self.assertEqual(hb.workers_for(19.2), (3, 6))
+        self.assertEqual(hb.alone_workers(ram_gb=16.0), (1, 2), "16 GB: the least")
+        self.assertIsNone(hb.workers_for(7.0))
+        self.assertEqual(hb.workers_for(7.2), (1, 2))
+        self.assertEqual(hb.workers_for(9.6), (1, 4), "the road processes first")
+        self.assertEqual(hb.workers_for(14.4), (3, 6))
 
     def test_auto_is_alone_unless_the_game_runs(self):
         self.assertEqual(hb.resolve_mode("game"), "game")
@@ -524,7 +524,10 @@ class ProfileTest(unittest.TestCase):
            "2026-10-28 10:20:30,000 DEBUG earthd: worker 100 cpu: roads_tile 25 jobs 61.5 s; shared road plans read 5\n"
            "2026-10-28 10:20:31,000 DEBUG earthd: worker 200 cpu: far_geometry 300 jobs 12.0 s, far_tile 300 jobs 30.0 s\n"
            "2026-10-28 10:20:32,000 DEBUG earthd: worker 300 cpu: build 8 jobs 9.5 s, base_photo 8 jobs 20.0 s\n"
-           "2026-10-28 10:20:33,000 INFO earthd: terrain (1, 0.0, 0.0) z16 in 1.0 s (heights 0.5 grading 0.1)\n")
+           "2026-10-28 10:20:33,000 INFO earthd: terrain (1, 0.0, 0.0) z16 in 1.0 s (heights 0.5 grading 0.1)\n"
+           "2026-10-28 10:21:00,000 INFO earthd.worker: memory pid 100: rss 900 MB, traced 400 MB; top: dem.py:640 300 MB\n"
+           "2026-10-28 10:22:00,000 INFO earthd.worker: memory pid 100: rss 1100 MB, traced 500 MB; top: dem.py:640 380 MB; "
+           "mapdata.py:300 90 MB\n")
 
     def test_v_only_with_profile(self):
         with tempfile.TemporaryDirectory() as user:
@@ -572,6 +575,10 @@ class ProfileTest(unittest.TestCase):
             self.assertIn(proc.pid, p["by_pid"], "the root process")
             self.assertGreater(p["cpu_s"], 0.3, "two busy loops over 1.5 s")
             self.assertEqual(p["by_kind"]["roads_tile"], [25, 61.5])
+            self.assertEqual(p["memory"], {100: {"rss_mb": 1100, "traced_mb": 500,
+                                                 "top": "dem.py:640 380 MB; mapdata.py:300 90 MB"}},
+                             "the last memory line of each worker")
+            self.assertIn("worker memory: 1 traced, rss 1100 MB at most", hb.profile_text(p))
             self.assertIn("server", p["by_role"], "the busiest process without jobs")
             with open(path, encoding="utf-8") as f:
                 rows = [json.loads(line) for line in f if line.strip()]
@@ -586,7 +593,7 @@ class ProfileTest(unittest.TestCase):
         s = hb.CpuSampler(1, "/nonexistent/cpu.jsonl", say=lambda *x, **k: None)
         s.psutil = None
         p = s.summary(None)
-        self.assertEqual((p["cpu_s"], p["by_pid"], p["by_role"], p["by_kind"]), (0.0, {}, {}, {}))
+        self.assertEqual((p["cpu_s"], p["by_pid"], p["by_role"], p["by_kind"], p["memory"]), (0.0, {}, {}, {}, {}))
         self.assertTrue(hb.profile_text(p).startswith("profile: 0.00 cores used"))
 
 
