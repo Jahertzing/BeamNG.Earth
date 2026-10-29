@@ -119,12 +119,14 @@ M.TINT_STRENGTH = 0.7
 -- (Jeff's drive with the first version, 2026-10-28: the grass "sometimes looked white": the green textures need ~5x
 -- red and ~10x blue for tan, and lit blades read brighter than the photo's ground; kept lower until tuned in game)
 M.TINT_BRIGHT = 0.75
--- Each new copy costs a frame: the builder's I-25 laps (2026-10-29, 45 m/s, ~20 block commits each) had a ~120 ms
--- Render spike on 12 of them with the tint on and none with it off (the objects made again on stale cells alone cost
--- nothing): the first draw with a just-made Material. At 8 % and steps of 6 % nearly every block's colour made a new
--- copy; at these, a drive's colours fall on a few copies, each made once and re-used after.
-M.TINT_MIN_CHANGE = 0.18    -- a smaller change (per channel, relative) keeps the copies in use
-M.TINT_STEP = 1.25          -- the copies' factors are powers of this (per channel)
+M.TINT_MIN_CHANGE = 0.18    -- a smaller change (per channel, relative) keeps the copies in use (was 0.08: the fields
+                            -- along I-25 toggled it block after block; the perf thread's 661bcc3, 2026-10-29: the first
+                            -- draw of each new tinted copy is a ~120 ms frame, so few copies, and only made at a stop)
+-- A moved tint goes on (the objects made again, one a frame: M.update) only at or under this speed (m/s), or at the
+-- next teleport / rebase (M.rebuild, which makes them again anyway). At a block change while driving it waits
+-- (tintPending): the remake in that frame was the hitching half of Jeff's block swaps (M.update).
+M.TINT_APPLY_V = 3
+M.TINT_STEP = 1.25          -- the copies' factors are powers of this (per channel; 1.06 made a copy per block)
 M.TINT_RANGE = { 0.2, 4.0 } -- the factor's bounds per channel (the green grass has almost no blue: tan wants ~10x)
 M.TINT_PREFIX = 'bngEarthGT_'
 -- material name -> { r, g, b } (linear 0-1), see above: the opaque texels' mean of the full-size base colour map
@@ -155,6 +157,16 @@ local remake = false      -- the objects are to be made again at the next block 
 local nStale = 0          -- block changes that remade them (status)
 
 local created = {}        -- object names we made
+-- Making the objects again, one a frame (M.update). The remake in one frame (removeAll + ensure, then
+-- flushGroundCoverGrids regenerating every cell within the reach in that frame's render) was the hitching half of the
+-- block swaps on Jeff's afternoon drive (2026-10-29: of the 20 block commits his profile recorded, the 8 with a remake
+-- cost 100-147 ms of render and 4-6 ms more Lua, the quiet ones 13-16 ms; the builder's A/B with the block not drawn
+-- and with a smaller base texture changed nothing, as neither touches the grass). Staged, each frame deletes and
+-- makes one definition's object and flushes its cells: 7 frames of a part of the work instead of one with all of it.
+local staged = nil        -- { i = the next definition's index, why = 'tint' | 'stale' } while a remake runs
+local madeAt = {}         -- definition index -> the object's name (makeObject)
+local remakes = {}        -- remakes started, by why (status)
+M.lastChange = 'none'     -- what the last block change did about the grass (core's commit log)
 local layered = false     -- a block with surface layers was loaded this level (objects can exist)
 local defsCache = {}      -- source -> stock definitions by name (read once per level)
 local loadedMaterials = {} -- source -> true
@@ -237,7 +249,62 @@ local function removeAll()
     local o = scenetree.findObject(name)
     if o then pcall(function() o:delete() end) end
   end
-  created = {}
+  created, madeAt, staged = {}, {}, nil
+end
+
+-- The stock definitions of definition d's source (read once per level: defsCache), or nil and why.
+local function defsOf(d)
+  local defs = defsCache
+  if not defs[d.source] then
+    if not loadedMaterials[d.source] then
+      loadJsonMaterialsFile(M.SOURCES[d.source].materials)
+      loadedMaterials[d.source] = true
+    end
+    local e
+    defs[d.source], e = readDefs(d.source)
+    if not defs[d.source] then return nil, e end
+  end
+  return defs[d.source]
+end
+
+-- Makes definition i's GroundCover (an older one of that name deleted first). Returns its name, or nil (no such
+-- stock definition, logged). Errors propagate (the callers pcall). keepMaterial: the material it drew with before
+-- stays (a stale remake while driving: a new tinted copy's first draw is a ~120 ms frame, the pipeline built, so
+-- copies are only made at a stop or a rebuild).
+local function makeObject(i, keepMaterial)
+  local d = M.DEFS[i]
+  local defs, e = defsOf(d)
+  if not defs then error(e) end
+  local def = defs[d.src]
+  if not def then
+    log('W', 'beamngEarth', 'ground cover: no ' .. d.src .. ' in ' .. d.source)
+    return nil
+  end
+  local name = M.PREFIX .. (d.name or d.src)
+  local stock = d.tint and (def.material or def.Material)
+  local mat = nil
+  if type(stock) == 'string' then
+    local old = keepMaterial and scenetree.findObject(name)
+    local cur = old and old:getField('material', 0)
+    mat = (type(cur) == 'string' and cur ~= '' and scenetree.findObject(cur)) and cur or M.tintMaterial(d.source, stock)
+  end
+  -- one left by an earlier module instance (a GE Lua reload keeps the level's objects) may
+  -- have older fields, e.g. GPU placement: made again from the current definition
+  local old = scenetree.findObject(name)
+  if old then old:delete() end
+  local gc = createObject('GroundCover')
+  local fields, factor = M.reachFor(d, M.reach)
+  maxRadius = math.max(maxRadius, tonumber(fields.radius) or tonumber(def.radius) or 0)
+  for _, c in ipairs(M.fieldsFor(def, d.layer, d.share * M.density * factor)) do gc:setField(c[1], c[2], c[3]) end
+  for k, v in pairs(fields) do gc:setField(k, 0, tostring(v)) end
+  if mat then gc:setField('material', 0, mat) end     -- (a tinted copy of the stock one)
+  for _, f in ipairs(M.PLACEMENT) do gc:setField(f[1], 0, f[2]) end
+  gc.canSave = false
+  gc:registerObject(name)
+  scenetree.MissionGroup:addObject(gc)
+  pcall(function() gc:postApply() end) -- the first layered GroundCover once showed nothing until this
+  madeAt[i] = name
+  return name
 end
 
 -- Create the GroundCovers (once per level; the surface layers exist). Returns true if made.
@@ -247,43 +314,9 @@ function M.ensure()
   if not scenetree.MissionGroup then return false end
   maxRadius = 0
   local ok, err = pcall(function()
-    local defs = defsCache
-    for _, d in ipairs(M.DEFS) do
-      if not defs[d.source] then
-        if not loadedMaterials[d.source] then
-          loadJsonMaterialsFile(M.SOURCES[d.source].materials)
-          loadedMaterials[d.source] = true
-        end
-        local e
-        defs[d.source], e = readDefs(d.source)
-        if not defs[d.source] then error(e) end
-      end
-      local def = defs[d.source][d.src]
-      if def then
-        local name = M.PREFIX .. (d.name or d.src)
-        local stock = d.tint and (def.material or def.Material)
-        local mat = type(stock) == 'string' and M.tintMaterial(d.source, stock) or nil
-        -- one left by an earlier module instance (a GE Lua reload keeps the level's objects) may
-        -- have older fields, e.g. GPU placement: made again from the current definition
-        local old = scenetree.findObject(name)
-        if old then old:delete() end
-        do
-          local gc = createObject('GroundCover')
-          local fields, factor = M.reachFor(d, M.reach)
-          maxRadius = math.max(maxRadius, tonumber(fields.radius) or tonumber(def.radius) or 0)
-          for _, c in ipairs(M.fieldsFor(def, d.layer, d.share * M.density * factor)) do gc:setField(c[1], c[2], c[3]) end
-          for k, v in pairs(fields) do gc:setField(k, 0, tostring(v)) end
-          if mat then gc:setField('material', 0, mat) end     -- (a tinted copy of the stock one)
-          for _, f in ipairs(M.PLACEMENT) do gc:setField(f[1], 0, f[2]) end
-          gc.canSave = false
-          gc:registerObject(name)
-          scenetree.MissionGroup:addObject(gc)
-          pcall(function() gc:postApply() end) -- the first layered GroundCover once showed nothing until this
-        end
-        created[#created + 1] = name
-      else
-        log('W', 'beamngEarth', 'ground cover: no ' .. d.src .. ' in ' .. d.source)
-      end
+    for i = 1, #M.DEFS do
+      local name = makeObject(i)
+      if name then created[#created + 1] = name end
     end
   end)
   if not ok then
@@ -292,6 +325,48 @@ function M.ensure()
     removeAll()
   end
   return #created > 0
+end
+
+-- One step of a staged remake: definition i's object made again, the next definition next frame; the remake ends
+-- after the last one. Its cells: generated in this frame (the flush) while the car is slow (TINT_APPLY_V), so
+-- standing grass never blinks; under the engine's own per-frame budget while it moves (a few frames of that type
+-- filling in round the car), so no frame carries them all.
+local function stepStaged(speed)
+  local i = staged.i
+  local keep = staged.why == 'stale' and (speed or 0) > M.TINT_APPLY_V     -- (driving: no new tinted copies)
+  local ok, err = pcall(function()
+    local old = madeAt[i]
+    if old and not keep then
+      local o = scenetree.findObject(old)
+      if o then pcall(function() o:delete() end) end
+      madeAt[i] = nil
+    end
+    makeObject(i, keep)
+  end)
+  if not ok then
+    lastError = 'grass remake: ' .. tostring(err)
+    log('W', 'beamngEarth', 'ground cover: ' .. lastError)
+  end
+  if flushGroundCoverGrids and (speed or 0) <= M.TINT_APPLY_V then flushGroundCoverGrids() end
+  staged.i = i + 1
+  if staged.i > #M.DEFS then staged = nil end
+end
+
+local function startStaged(why)
+  remakes[why] = (remakes[why] or 0) + 1
+  staged = { i = 1, why = why }
+end
+
+-- Once a frame (core onUpdate, after the world's update): a staged remake's next object; a moved tint's remake
+-- started once the car is slow (TINT_APPLY_V). speed: the player's (m/s; nil: standing).
+function M.update(speed)
+  if #created == 0 then staged = nil; return end
+  if staged then stepStaged(speed); return end
+  if tintPending and (speed or 0) <= M.TINT_APPLY_V then
+    tintPending = false
+    startStaged('tint')
+    stepStaged(speed)
+  end
 end
 
 local function srgbToLinear(c)
@@ -423,7 +498,7 @@ end
 -- moved. Returns true when they will be.
 function M.setTint(rgb)
   if type(rgb) == 'table' and #rgb >= 3 then tintRgb = { tonumber(rgb[1]), tonumber(rgb[2]), tonumber(rgb[3]) } end
-  if #created > 0 and tintChanged() then tintPending = true end
+  if #created > 0 then tintPending = tintChanged() end   -- (a colour that moved back drops the pending remake)
   return tintPending
 end
 
@@ -457,15 +532,22 @@ function M.noteBlock(x0, y0, x1, y1, player)
   return stale
 end
 
-function M.afterBlockChange()
-  if #created == 0 or not flushGroundCoverGrids then return false end
-  if tintPending or remake then   -- (the colour moved, or cells made off the old block: made again, generated now)
-    if remake then nStale = nStale + 1 end
-    tintPending, remake = false, false
-    removeAll()
-    M.ensure()
+-- speed: the player's (m/s). Nothing is made again in this frame (see `staged` above): stale cells start a staged
+-- remake next frame; a moved tint waits for the car to slow down (M.update), or the next rebuild.
+function M.afterBlockChange(speed)
+  if #created == 0 or not flushGroundCoverGrids then M.lastChange = 'none'; return false end
+  local what = 'quiet'
+  if remake then                  -- (cells made off the old block: made again, one object a frame)
+    remake, nStale = false, nStale + 1
+    if not staged then startStaged('stale') end
+    what = 'stale cells: made again over frames'
+  elseif staged then
+    what = staged.why .. ' remake under way'
+  elseif tintPending then
+    what = (speed or 0) <= M.TINT_APPLY_V and 'tint: made again over frames' or 'tint moved: waits for a stop'
   end
   flushGroundCoverGrids()
+  M.lastChange = what
   return true
 end
 
@@ -505,7 +587,8 @@ end
 -- The level ended (its objects are gone with it, the stock materials loaded for it too: a level started again in
 -- the same game session found no m_grass_* / wca_groundcover and drew no grass, 2026-10-19).
 function M.reset()
-  created = {}
+  created, madeAt, staged, remakes = {}, {}, nil, {}
+  M.lastChange = 'none'
   blockBox, maxRadius, remake, nStale = nil, 0, false, 0
   tintUsed = {}
   tintPending = false
@@ -523,7 +606,9 @@ function M.rebuild()
   blockBox = nil                -- (a teleport or rebase: the old block's box is in another frame)
   removeAll()
   M.ensure()
-  return M.afterBlockChange()
+  local ok = M.afterBlockChange(0)
+  M.lastChange = 'rebuilt'
+  return ok
 end
 
 function M.status()
@@ -531,7 +616,8 @@ function M.status()
   for _, u in pairs(tintUsed) do mats[#mats + 1] = u.name end
   table.sort(mats)
   return { enabled = M.enabled, density = M.density, reach = M.reach, objects = #created, materialsLoaded = next(loadedMaterials) ~= nil,
-    error = lastError, tint = M.TINT and tintRgb or nil, tintMaterials = mats, radius = maxRadius, staleRemakes = nStale }
+    error = lastError, tint = M.TINT and tintRgb or nil, tintMaterials = mats, radius = maxRadius, staleRemakes = nStale,
+    tintPending = tintPending, staged = staged and staged.why or nil, remakes = remakes, lastChange = M.lastChange }
 end
 
 return M

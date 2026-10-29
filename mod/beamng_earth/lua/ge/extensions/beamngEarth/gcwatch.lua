@@ -11,6 +11,7 @@ local M = {}
 local gc = collectgarbage
 local last, prevFrame = nil, nil
 local parts, alloc, freed, low, high = {}, 0, 0, nil, nil
+local frameFrom, frameTo = nil, nil   -- the heap (kb) at the last two frames' starts (M.lastFrame)
 
 function M.begin()
   local kb = gc('count')
@@ -18,6 +19,7 @@ function M.begin()
     local d = kb - prevFrame
     if d > 0 then alloc = alloc + d else freed = freed - d end
   end
+  frameFrom, frameTo = prevFrame, kb
   if not low or kb < low then low = kb end
   if not high or kb > high then high = kb end
   prevFrame, last = kb, kb
@@ -30,6 +32,14 @@ function M.mark(name)
     if d > 0 then parts[name] = (parts[name] or 0) + d end
   end
   last = kb
+end
+
+-- The heap (MB) at the start of the frame that just ended and at this frame's start: what that frame did to it
+-- (a drop of tens of MB in one frame is a full collection, not an incremental step; 2026-10-29: were the LuaGC
+-- frames of 103-193 ms full collections? the hitch line says). nil before two frames were seen.
+function M.lastFrame()
+  if not (frameFrom and frameTo) then return nil end
+  return frameFrom / 1024, frameTo / 1024
 end
 
 -- The line's text since the last take ('' before a frame was seen), and the counts start again.
@@ -48,7 +58,7 @@ function M.take(n)
 end
 
 function M.reset()
-  last, prevFrame = nil, nil
+  last, prevFrame, frameFrom, frameTo = nil, nil, nil, nil
   parts, alloc, freed, low, high = {}, 0, 0, nil, nil
 end
 

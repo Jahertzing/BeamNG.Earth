@@ -32,6 +32,10 @@ STAMP = re.compile(r"^(\d{4}-\d\d-\d\d)[ T](\d\d:\d\d:\d\d)")
 MINUTE = re.compile(r"perf minute (\d+) fps, 1% low (\d+), worst (\d+) ms, (\d+) hitches(?: \(worst: (.*?)\))?"
                     r"(?:, (\d+) stutters)?")
 HITCH = re.compile(r"perf hitch (\d+) ms(.*)$")
+# the minute line's pacing (perflog 2026-10-29): frames within the refresh's budget, at two refreshes or more, jitter
+PACING = re.compile(r"pacing: (\d+)% within ([\d.]+) ms, (\d+)% at 2\+ refreshes, jitter ([\d.]+) ms")
+PARTS = re.compile(r"stutter parts: ([^|]+)")                 # "roads 4 (38 ms), trees 2 (12 ms)"
+PART = re.compile(r"([A-Za-z+_.]+) (\d+) \((\d+) ms\)")
 WHERE = re.compile(r"at (-?\d+\.\d+),(-?\d+\.\d+), (\d+) mph")
 MORE = re.compile(r"\((\d+) more hitches since the last line\)")
 LISTEN = "earthd listening on"
@@ -75,9 +79,17 @@ def parse_lines(lines, source=""):
         w = WHERE.search(line)
         where = {"lat": float(w.group(1)), "lon": float(w.group(2)), "mph": int(w.group(3))} if w else {}
         if mm:
-            cur["minutes"].append({"t": t, "fps": int(mm.group(1)), "low": int(mm.group(2)), "worst": int(mm.group(3)),
-                                   "hitches": int(mm.group(4)), "cause": (mm.group(5) or "").strip(),
-                                   "stutters": int(mm.group(6) or 0), **where})
+            minute = {"t": t, "fps": int(mm.group(1)), "low": int(mm.group(2)), "worst": int(mm.group(3)),
+                      "hitches": int(mm.group(4)), "cause": (mm.group(5) or "").strip(),
+                      "stutters": int(mm.group(6) or 0), **where}
+            pc = PACING.search(line)
+            if pc:
+                minute.update(within=int(pc.group(1)), budget=float(pc.group(2)), two=int(pc.group(3)),
+                              jitter=float(pc.group(4)))
+            pp = PARTS.search(line)
+            if pp:
+                minute["parts"] = {m.group(1): (int(m.group(2)), int(m.group(3))) for m in PART.finditer(pp.group(1))}
+            cur["minutes"].append(minute)
         else:
             rest = hh.group(2)
             parts = {}
@@ -118,8 +130,21 @@ def metrics(d):
             continue
         c = top_part(h["engine"]) or top_part(h["mod"]) or ("outside" if h["outside"] else "?")
         causes[c] += 1 + h["more"]
+    paced = [m for m in driving if "within" in m]
+    parts = Counter()
+    for m in driving:
+        for name, (n, _) in (m.get("parts") or {}).items():
+            parts[name] += n
     return {
         "start": d["start"], "end": d["end"], "source": d["source"], "minutes": len(mins), "driving": len(driving),
+        # pacing (frames within the refresh's budget, at two refreshes or more, the frame-to-frame jitter): the means over
+        # the driving minutes that have them; None in a log from before perflog wrote them
+        "within": round(statistics.mean(m["within"] for m in paced), 1) if paced else None,
+        "two": round(statistics.mean(m["two"] for m in paced), 1) if paced else None,
+        "jitter": round(statistics.mean(m["jitter"] for m in paced), 2) if paced else None,
+        "budget": paced[0]["budget"] if paced else None,
+        "stutters_per_min": round(sum(m["stutters"] for m in driving) / max(1, len(driving)), 2),
+        "stutter_parts": parts.most_common(4),
         "fps": round(statistics.mean(m["fps"] for m in driving), 1),
         "low": round(statistics.median(m["low"] for m in driving), 1),
         "low_min": min(m["low"] for m in driving),
@@ -159,14 +184,22 @@ def worse_than(m, prev):
     return out
 
 
+def fmt_pacing(m):
+    if m.get("within") is None:
+        return "-"
+    return f"{m['within']:.0f}% in {m['budget']:.1f} ms, {m['two']:.0f}% 2+, jitter {m['jitter']:.1f}"
+
+
 def table(rows):
     head = f"{'start':19} {'min':>4} {'drv':>4} {'fps':>6} {'1%low':>6} {'lowmin':>6} {'worst':>6} {'hit/min':>7} " \
-           f"{'>=250':>5}  causes"
+           f"{'>=250':>5} {'stut/min':>8}  causes | stutter parts | pacing"
     lines = [head]
     for m in rows:
         causes = ", ".join(f"{c} {n}" for c, n in m["causes"])
+        parts = ", ".join(f"{c} {n}" for c, n in m.get("stutter_parts", []))
         lines.append(f"{m['start']:19} {m['minutes']:4} {m['driving']:4} {m['fps']:6.1f} {m['low']:6.1f} "
-                     f"{m['low_min']:6} {m['worst']:6} {m['hitches_per_min']:7.2f} {m['big_hitches']:5}  {causes}")
+                     f"{m['low_min']:6} {m['worst']:6} {m['hitches_per_min']:7.2f} {m['big_hitches']:5} "
+                     f"{m.get('stutters_per_min', 0):8.2f}  {causes} | {parts or '-'} | {fmt_pacing(m)}")
     return "\n".join(lines)
 
 
@@ -208,9 +241,12 @@ th:first-child,td:first-child,td.l,th.l{text-align:left}.bad{color:var(--bad);fo
     for i, m in enumerate(rows):
         causes = ", ".join(f"{c} {n}" for c, n in m["causes"])
         cls = ' class="bad"' if i == len(rows) - 1 and (breaches or worse) else ""
+        parts = ", ".join(f"{c} {n}" for c, n in m.get("stutter_parts", []))
         rows_html += (f"<tr{cls}><td class='l'>{html.escape(m['start'])}</td><td>{m['minutes']}</td><td>{m['driving']}</td>"
                       f"<td>{m['fps']}</td><td>{m['low']}</td><td>{m['low_min']}</td><td>{m['worst']}</td>"
-                      f"<td>{m['hitches_per_min']}</td><td>{m['big_hitches']}</td><td class='l mut'>{html.escape(causes)}</td></tr>")
+                      f"<td>{m['hitches_per_min']}</td><td>{m['big_hitches']}</td><td>{m.get('stutters_per_min', 0)}</td>"
+                      f"<td class='l mut'>{html.escape(causes)}</td><td class='l mut'>{html.escape(parts or '-')}</td>"
+                      f"<td class='l mut'>{html.escape(fmt_pacing(m))}</td></tr>")
     verdict = ""
     if rows:
         if breaches or worse:
@@ -224,7 +260,8 @@ th:first-child,td:first-child,td.l,th.l{text-align:left}.bad{color:var(--bad);fo
     return (f"<!doctype html><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'>"
             f"<title>Perf trend</title><style>{css}</style><h1>Performance trend</h1>{verdict}"
             f"<div class='wrap'><table><tr><th class='l'>start</th><th>min</th><th>driving</th><th>fps</th><th>1% low</th>"
-            f"<th>low min</th><th>worst ms</th><th>hit/min</th><th>&ge;250 ms</th><th class='l'>causes</th></tr>{rows_html}"
+            f"<th>low min</th><th>worst ms</th><th>hit/min</th><th>&ge;250 ms</th><th>stut/min</th><th class='l'>causes</th>"
+            f"<th class='l'>stutter parts</th><th class='l'>pacing</th></tr>{rows_html}"
             f"</table></div><p class='mut'>Green: fps per minute. Amber: 1 % low. Red ticks: hitches in that minute. "
             f"The numbers are over driving minutes (the car over {MOVING_MPH} mph); the charts show every "
             f"minute.</p>{charts}")

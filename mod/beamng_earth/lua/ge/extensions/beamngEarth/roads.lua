@@ -256,8 +256,8 @@ local unitLog = {}       -- the last UNIT_LOG units: { kind, ms, shape } (status
 M.UNIT_LOG = 400
 local frameUnits = {}    -- this frame's units of FRAME_UNIT_MS or more (M.frameUnits: the perf log's hitch lines)
 M.FRAME_UNIT_MS = 5
-local function noteUnit(kind, ms, shape)
-  if ms >= M.FRAME_UNIT_MS then frameUnits[#frameUnits + 1] = { kind, ms, shape } end
+local function noteUnit(kind, ms, shape, info)
+  if ms >= M.FRAME_UNIT_MS then frameUnits[#frameUnits + 1] = { kind, ms, shape, info } end
   unitLog[#unitLog + 1] = { kind, ms, shape }
   if #unitLog > M.UNIT_LOG then table.remove(unitLog, 1) end
   local u = unitStats[kind]
@@ -450,7 +450,13 @@ local function isCollider(o)
 end
 
 -- collide: true ('Visible Mesh Final'), a collision type name, or false / nil (render only)
+-- The last createWalk's steps (ms): the object made with its fields, registered (the shape loaded), added to the
+-- scene (a collider: into the physics). A unit of SLOW_UNIT_MS or more is logged with them (unitInfo): a 190 KB
+-- building collision mesh took 1.3 s on Jeff's drive 2026-10-29 and nothing said which step.
+local walkPhases = { 0, 0, 0 }
+M.SLOW_UNIT_MS = 30
 local function createWalk(walk, collide)
+  local t0 = now()
   local o = createObject('TSStatic')
   o:setField('shapeName', 0, walk.shape)
   -- 'Visible Mesh Final' (the engine's own suggestion: 'Performance: Mesh is using visible collision ... switch the
@@ -460,9 +466,25 @@ local function createWalk(walk, collide)
   o:setField('dynamic', 0, 'true')    -- no redraw of the cached sun shadow map for each tile (farfield.lua spawn)
   o.canSave = false
   o:setPosition(vec3(walk.pos[1], walk.pos[2], walk.pos[3]))
+  local t1 = now()
   o:registerObject('')
+  local t2 = now()
   group():addObject(o)
+  walkPhases[1], walkPhases[2], walkPhases[3] = t1 - t0, t2 - t1, now() - t2
   return o:getID()
+end
+
+-- A slow unit's detail: createWalk's steps, the shape file's size and how long ago it was written (FS:stat).
+local function unitInfo(path)
+  local parts = { string.format('made %d, registered %d, added %d ms', math.floor(walkPhases[1] + 0.5),
+    math.floor(walkPhases[2] + 0.5), math.floor(walkPhases[3] + 0.5)) }
+  local okS, st = pcall(function() return FS and FS.stat and FS:stat(path) or nil end)
+  if okS and type(st) == 'table' then
+    if tonumber(st.filesize) then parts[#parts + 1] = string.format('%d KB', math.floor(st.filesize / 1024 + 0.5)) end
+    local mt, t = tonumber(st.modtime), os.time and os.time() or nil
+    if mt and t and math.abs(t - mt) < 86400 then parts[#parts + 1] = string.format('written %d s ago', t - mt) end
+  end
+  return table.concat(parts, ', ')
 end
 
 local function createChunk(chunk)
@@ -761,7 +783,7 @@ local function updateFar(gov, player, view)
       else lastError = tostring(id) end
       local ms = now() - t0
       gov:charge('roadWalk', ms)
-      noteUnit('bldfar', ms, s.shape)
+      noteUnit('bldfar', ms, s.shape, ok and ms >= M.SLOW_UNIT_MS and unitInfo(s.shape) or nil)
     end
   end
   while #farQ > 0 and #walkQ == 0 and gov:try('roadWalk') do
@@ -774,7 +796,7 @@ local function updateFar(gov, player, view)
       if ok then f.id = id; slotMade(id, f.shape) else lastError = tostring(id) end
       local ms = now() - t0
       gov:charge('roadWalk', ms)
-      noteUnit('bldfar', ms, f.shape)
+      noteUnit('bldfar', ms, f.shape, ok and ms >= M.SLOW_UNIT_MS and unitInfo(f.shape) or nil)
     end
   end
 end
@@ -1144,6 +1166,17 @@ end
 local viewAt = nil  -- core.viewAway(): the camera's { x, y } when it is away from the car, else nil (M.nextWalk)
 local prewarmId, prewarmPath, prewarmWant = nil, nil, nil     -- (the materials' prewarm shape, below)
 local prewarmNow
+-- The prewarm shape is drawn in front of the camera for PREWARM_FRAMES frames when made (M.update), then kept far
+-- below the map: a shape the camera never sees is culled before its materials' pipelines are built (the streaming
+-- research, 2026-10-29: the D3D12 pipeline cache fills at the first draw, and the cold cache after a game update
+-- froze Jeff's drive four times for 4.6-8.8 s). Its triangles are 5 cm, PREWARM_AHEAD_M ahead: specks for a few frames
+-- at level start, under the loading screen when the scene renders there. The frames' wall times are logged
+-- (prewarmFrames: a slow one is the pipelines being built, which then never happens on the road).
+M.PREWARM_FRAMES = 4
+M.PREWARM_AHEAD_M = 2.0
+local prewarmShow = 0           -- frames left in front of the camera
+local prewarmFrames = {}        -- their wall ms (the log line after the last)
+local prewarmT = nil
 
 -- The last update's slow units, "bldcol 62 ms (bldcol_5_3_-2.cdae), reloadCollision 21 ms", slowest first ('' if none).
 -- (core's perf log reads it before this frame's update: the units of the frame a hitch line is about.)
@@ -1155,17 +1188,45 @@ function M.frameUnits()
   for i = 1, math.min(4, #arr) do
     local u = arr[i]
     local shape = type(u[3]) == 'string' and u[3]:match('([^/]+)$')
-    out[i] = string.format('%s %d ms%s', tostring(u[1]), math.floor(u[2] + 0.5), shape and (' (' .. shape .. ')') or '')
+    local detail = (shape or '') .. (u[4] and ((shape and '; ' or '') .. u[4]) or '')
+    out[i] = string.format('%s %d ms%s', tostring(u[1]), math.floor(u[2] + 0.5), detail ~= '' and (' (' .. detail .. ')') or '')
   end
   return table.concat(out, ', ')
 end
 
-function M.update(gov, currentAnchor, player, view)
+-- The prewarm shape in front of the camera (cam: core's {x, y, z, fx, fy, fz}), or far below without one.
+local function placePrewarm(cam)
+  local o = prewarmId and scenetree.findObjectById(prewarmId)
+  if not o then return end
+  if cam and cam.x then
+    o:setPosition(vec3(cam.x + (cam.fx or 0) * M.PREWARM_AHEAD_M, cam.y + (cam.fy or 0) * M.PREWARM_AHEAD_M,
+      cam.z + (cam.fz or 0) * M.PREWARM_AHEAD_M))
+  else
+    o:setPosition(vec3(0, 0, -5000))
+  end
+end
+
+function M.update(gov, currentAnchor, player, view, cam)
   for i = #frameUnits, 1, -1 do frameUnits[i] = nil end
   viewAt = view
   if prewarmWant then prewarmNow()
   elseif prewarmId and not scenetree.findObjectById(prewarmId) then   -- (the level loaded again: gone with it)
     prewarmId, prewarmWant = nil, prewarmPath
+  end
+  if prewarmShow > 0 then           -- (drawn: in front of the camera this frame; the frame's time noted next frame)
+    if prewarmT then prewarmFrames[#prewarmFrames + 1] = prewarmT() end
+    prewarmT = stopwatch.new()
+    prewarmShow = prewarmShow - 1
+    placePrewarm(cam)
+    if prewarmShow == 0 then
+      local ms = {}
+      for i, v in ipairs(prewarmFrames) do ms[i] = string.format('%.0f', v) end
+      log('I', 'beamngEarth', 'roads: materials prewarm drawn for ' .. M.PREWARM_FRAMES .. ' frames (ms: ' .. table.concat(ms, ' ') .. ')')
+    end
+  elseif prewarmT then
+    prewarmFrames[#prewarmFrames + 1] = prewarmT()
+    prewarmT = nil
+    placePrewarm(nil)
   end
   if currentAnchor then switchAnchor(currentAnchor) end
   releaseGhosts(player)
@@ -1238,7 +1299,7 @@ function M.update(gov, currentAnchor, player, view)
       else lastError = tostring(id) end
       local ms = now() - t0
       gov:charge('roadWalk', ms)
-      noteUnit(tostring(q.what), ms, q.walk and q.walk.shape)
+      noteUnit(tostring(q.what), ms, q.walk and q.walk.shape, ok and ms >= M.SLOW_UNIT_MS and unitInfo(q.walk.shape) or nil)
       sinceChange = stopwatch.new()
     end
   end
@@ -1514,8 +1575,12 @@ prewarmNow = function()
   local ok, id = pcall(createWalk, { shape = path, pos = { 0, 0, -5000 } }, false)
   if not ok then lastError = tostring(id); return end
   prewarmId, prewarmPath = id, path
+  prewarmShow, prewarmFrames, prewarmT = M.PREWARM_FRAMES, {}, nil     -- (drawn from the next update on)
   log('I', 'beamngEarth', string.format('roads: materials prewarmed in %.0f ms (%s)', t(), path))
 end
+
+-- (tests, the dev tools) frames the prewarm shape still has in front of the camera, and the frame times so far
+function M.prewarmState() return prewarmShow, prewarmFrames end
 
 function M.prewarm(path)
   if type(path) ~= 'string' then return false end

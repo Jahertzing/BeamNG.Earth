@@ -39,6 +39,14 @@ M.FAST_V_1024 = 1e9                          -- no fast mode
 -- 512² (M4)
 M.GRID_512 = 128
 M.PREPARE_DIST_512 = 128
+-- Past URGENT_DIST from the centre a ready block commits without the governor's calm-frame wait (core: urgent); past
+-- HARD_COMMIT_DIST also without the far tiles' gate. The calm wait held commits for up to 60 frames on Jeff's drive
+-- (followWait.governor 627 frames in 36 min, the gate 144), and a commit later than ~258 m past the centre put the
+-- grass square round the car (groundcover.lua: 250 m at 'far') past the old block's edge, where its cells were made
+-- empty and the grass had to be made again (2026-10-29). (Asking for the next block earlier instead does not help:
+-- the target is clamped to REACH from the car, so an early request gets a nearer centre and twice the swaps.)
+M.URGENT_DIST_512 = 240
+M.URGENT_DIST_1024 = 700
 M.COMMIT_DIST_512 = 192
 -- The next block's centre at least MIN_LEAD ahead of a moving player (M.target): at town speeds LOOKAHEAD_S put it one
 -- grid step ahead, a move every 128 m, each a ~50 ms frame and a redraw of the sun's shadow map on a Steam Deck
@@ -71,6 +79,7 @@ M.SQUARE_SIZE = lattice.SQUARE -- m
 M.HALF = lattice.HALF          -- block SW corner = centre - HALF
 M.GRID = M.GRID_1024           -- block centres snap to this grid
 M.PREPARE_DIST = M.PREPARE_DIST_1024         -- Chebyshev distance player -> centre that requests a new terrain
+M.URGENT_DIST = M.URGENT_DIST_1024           -- ... that commits a ready one without the governor's calm wait
 M.COMMIT_DIST = M.COMMIT_DIST_1024           -- ... that commits a ready one (once its uncovered strip is live)
 M.MIN_LEAD = M.MIN_LEAD_1024
 M.HARD_COMMIT_DIST = M.HARD_COMMIT_DIST_1024 -- ... that commits a ready one regardless (still >= 320 m from the edge)
@@ -93,6 +102,7 @@ function M.configure(size)
   local t = n == 512 and '_512' or '_1024'
   M.SIZE, M.HALF = n, n * M.SQUARE_SIZE / 2
   M.GRID, M.PREPARE_DIST, M.COMMIT_DIST = M['GRID' .. t], M['PREPARE_DIST' .. t], M['COMMIT_DIST' .. t]
+  M.URGENT_DIST = M['URGENT_DIST' .. t]
   M.MIN_LEAD = M['MIN_LEAD' .. t]
   M.HARD_COMMIT_DIST, M.EDGE_MARGIN, M.REACH = M['HARD_COMMIT_DIST' .. t], M['EDGE_MARGIN' .. t], M['REACH' .. t]
   M.LOOKAHEAD_S, M.RECHECK_S, M.FAST_MODE_V = M['LOOKAHEAD_S' .. t], M['RECHECK_S' .. t], M['FAST_V' .. t]

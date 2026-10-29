@@ -216,6 +216,24 @@ class PerfTrendTest(unittest.TestCase):
         self.assertEqual(len(w), 3)
         self.assertEqual(perf_trend.worse_than(a, b), [])
 
+    def test_pacing_and_stutter_parts(self):
+        # perflog 2026-10-29: the minute line's stutter parts and pacing numbers
+        tail = (" | stutters by cause: FramePresent 4, Lua 2 | stutter parts: roads 4 (38 ms), trees 1 (12 ms)"
+                " | pacing: 61% within 11.8 ms, 23% at 2+ refreshes, jitter 4.1 ms")
+        lines = [minute(i, st=6, hour=9) + tail for i in range(4)]
+        drives = perf_trend.parse_lines(lines)
+        self.assertEqual(len(drives), 1)
+        m0 = drives[0]["minutes"][0]
+        self.assertEqual((m0["within"], m0["budget"], m0["two"], m0["jitter"]), (61, 11.8, 23, 4.1))
+        self.assertEqual(m0["parts"], {"roads": (4, 38), "trees": (1, 12)})
+        m = perf_trend.metrics(drives[0])
+        self.assertEqual((m["within"], m["two"], m["jitter"], m["budget"]), (61.0, 23.0, 4.1, 11.8))
+        self.assertEqual((m["stutters_per_min"], m["stutter_parts"]), (6.0, [("roads", 16), ("trees", 4)]))
+        self.assertIn("61% in 11.8 ms, 23% 2+, jitter 4.1", perf_trend.table([m]))
+        old = perf_trend.metrics(perf_trend.parse_lines([minute(i, hour=9) for i in range(4)])[0])
+        self.assertIsNone(old["within"])                                    # a log from before the numbers
+        self.assertIn(" | - | -", perf_trend.table([old]))
+
     def test_gap_splits_a_drive(self):
         lines = [minute(i, hour=10) for i in range(4)] + [minute(i, hour=12) for i in range(4)]
         self.assertEqual(len(perf_trend.parse_lines(lines)), 2)

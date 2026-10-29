@@ -13,6 +13,15 @@ local g = {
 }
 local nodes, nn, ne, cuts = N.toNodes(g, { -500, -500, 500, 500 }, 60, false)
 T.check(nn == 3 and ne == 2 and not nodes.far, 'clipped to the block: the far node and its edge left out')
+-- the radius sentinel (2026-10-29): one node of the largest radius map.lua allows, far away, no road to it, once
+local sent = N.SENTINEL.name
+N.withSentinel(nodes)
+T.check(nodes[sent] and nodes[sent].radius == 15 and next(nodes[sent].links) == nil and nodes[sent].pos.x == 2e6, 'the sentinel: radius 15, no links, far away')
+N.withSentinel(nodes)
+local cnt = 0
+for _ in pairs(nodes) do cnt = cnt + 1 end
+T.check(cnt == nn + 1, 'added once')
+nodes[sent] = nil
 T.check(#cuts == 1 and cuts[1][1] == 100 and cuts[1][2] == 0, 'the cut: c, whose road to the far node was left out')
 -- GitHub #131: a link 6.4 m up in 8 m (a bridge's first node over its junction) is left out; a steep real street not
 local steep = { nodes = { j = { 0, 0, 22.7, 4 }, d = { 8, 0, 29.1, 3 }, h = { 0, 30, 33.7, 3 } },

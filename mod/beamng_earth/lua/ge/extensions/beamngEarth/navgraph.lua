@@ -243,6 +243,22 @@ function M.cutAhead(nodes, cutSet, a, b, px, py, dx, dy, reach)
   return false
 end
 
+-- The radius sentinel. The game keeps the largest road radius of the graph it last loaded in a local of map.lua that
+-- the sandbox lets no one set (navbuild.lua), and the map built over frames can only go in while the new graph's
+-- largest radius is no larger: a wider road in a new area meant map.reset in one frame, 7 times on Jeff's afternoon
+-- drive 2026-10-29 (100-600 ms each). Every graph carries one node of the largest radius map.lua allows (it clamps at
+-- 15 m), far outside any world a session reaches, with no road to it, so the first graph of a level sets the game's
+-- radius to the maximum once (that one reset in one frame) and every later graph fits.
+M.SENTINEL = { name = 'bne_radius_sentinel', radius = 15, x = 2e6, y = 2e6, z = 0 }
+
+-- Adds the sentinel to a toNodes table (in place; once). Returns the table.
+function M.withSentinel(nodes)
+  if nodes and not nodes[M.SENTINEL.name] then
+    nodes[M.SENTINEL.name] = { pos = vec3(M.SENTINEL.x, M.SENTINEL.y, M.SENTINEL.z), radius = M.SENTINEL.radius, links = {} }
+  end
+  return nodes
+end
+
 -- Pure: node table nodes (toNodes') as { name = { pos, radius, links } } sharing its links tables: map.reset swaps
 -- each node's links for a single-sided one, these stay as they were.
 function M.adjacency(nodes)
@@ -394,6 +410,7 @@ local function apply(b, pre)
   local nodes, nn, ne, cl
   if pre then nodes, nn, ne, cl = pre.result[1], pre.result[2], pre.result[3], pre.result[4]
   else nodes, nn, ne, cl = M.toNodes(graph, b, M.EDGE_M, M.rules.rightHandDrive, nil, M.OUTER_M) end
+  M.withSentinel(nodes)
   stats.nodesMs = (os.clock() - tN) * 1000         -- (the parts of an apply's frame: the hitch hunt, 2026-10-23)
   local ts = signalsSystem()
   -- before the reset: its onNavgraphReloaded would place the old instances on the new graph (research §2.8)
@@ -1192,6 +1209,7 @@ local function buildNodes(b)
       if coroutine.status(prep.co) == 'dead' then prep.result = res end
     until prep.result or sw() >= M.PREP_MS
     if not prep.result then return nil end
+    M.withSentinel(prep.result[1])
     if M.MAP_SPREAD then
       prep.adj = M.adjacency(prep.result[1])       -- (both ways round: before the build makes the links single-sided)
       local okJ, job = pcall(navbuild.new, prep.result[1])
