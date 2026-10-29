@@ -25,8 +25,9 @@ beamngEarth_core = { _state = function() return cstate end,
   teleport = function(lat, lon, name) teleports[#teleports + 1] = { lat, lon, name }; return true end,
   requestRoute = function() return true end }
 beamngEarth_settings = { get = function(k) return ({ theDriveTime = 'night', theDriveAutodrive = false })[k] end }
-local hours
-sky.setLocalHour = function(h) hours = h; return h end
+local hours, hoursBy, restored = nil, nil, 0
+sky.setLocalHour = function(h, by) hours, hoursBy = h, by; return h end
+sky.restoreLive = function(by) if by == 'The Drive' then restored = restored + 1 end end
 P.cannotGo = function() return nil end
 D._reset()
 
@@ -46,7 +47,7 @@ step(3, here)
 local gs = G.status()
 T.check(D.status().phase == 'ready' and gs and gs.name == 'Castle Rock' and gs.avoid == 'toll' and gs.viasLeft == 0,
   'loaded: the GPS to Castle Rock off the toll roads')
-T.check(hours == 21.5, 'the time of day from the setting (night)')
+T.check(hours == 21.5 and hoursBy == 'The Drive', 'the time of day from the setting (night), live for The Drive')
 step(4, here)
 T.check(D.status().phase == 'ready' and D.status().t == 0, 'standing: the clock waits')
 local moving = { lat = here.lat, lon = here.lon, vx = 10, vy = 0 }
@@ -67,6 +68,8 @@ T.check(D.status().phase == 'done' and saved and saved.routes.i25.best and saved
 T.check(msgs[#msgs]:find('Castle Rock!', 1, true) and msgs[#msgs]:find('first run', 1, true), 'the finish message')
 step(D.DONE_S + 1, moving)
 T.check(D.status() == nil, 'the result goes after DONE_S')
+T.check(restored >= 1, 'the run over: the sky mode before it back (sky.restoreLive)')
+local r0 = restored
 
 -- through downtown: the split at Union Station; the GPS cleared ends a run
 T.check(D.start('downtown', { auto = false, time = 'real' }), 'downtown started')
@@ -88,6 +91,7 @@ T.check(D.status().nextName == 'Castle Rock', 'next: Castle Rock')
 G.clear()
 step(0.5, moving)
 T.check(D.status() == nil and msgs[#msgs]:find('ended', 1, true), 'the GPS cleared: the run ends')
+T.check(restored > r0, 'and the sky mode comes back')
 
 -- not in our level: refused
 cstate.inOurLevel = false
