@@ -45,6 +45,9 @@ M.MATERIALS = {
   line_dashed_long = { '1 1 1', 3, stock = true },
   line_yellow = { '1 0.78 0.32', 2.5, stock = true },
   line_dashed_short_yellow = { '1 0.78 0.32', 2.5, stock = true },
+  -- the raised pavement markers on the highways' lines (server roads.rpm_rows, tools/build_rpm.py): their reflectors
+  bne_rpm_white = { '1 1 1', 300 },
+  bne_rpm_amber = { '1 0.68 0.18', 300 },
 }
 M.STADIUM_OFF_H = 23.0      -- local hour the stadiums' lights go out (a game is over by then)
 M.STAR_LAST = { 1, 25 }     -- the star goes off after the National Western Stock Show (month, day; mid to late January)
@@ -171,7 +174,7 @@ local function apply(night)
   end
   -- the lamps' far glow (trees.lua's lampglow group, off by day)
   local okt, trees = pcall(require, 'beamngEarth/trees')
-  if okt and trees.setGroupEnabled then pcall(trees.setGroupEnabled, { 'lampglow', 'beaconglow' }, night) end
+  if okt and trees.setGroupEnabled then pcall(trees.setGroupEnabled, { 'lampglow', 'beaconglow', 'rpm_white', 'rpm_amber' }, night) end
   M.night = night
 end
 
