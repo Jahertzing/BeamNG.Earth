@@ -133,6 +133,7 @@ def lines_of(name, la, lo, radius, cache_dir):
     net = netfetch.Fetcher(offline=True)
     md = mapdata.MapData(cache_dir, fetcher=net)
     dem = demmod.Dem(os.path.join(cache_dir, "dem"), fetcher=net)
+    roads.ELEVATED_FN = grading.elevated_provider(md, dem)     # (as the servers: unflagged structures made decks)
     frame = geodesy.EnuFrame(la, lo)
     sample = lambda a, b: dem.sample(a, b, grading.PROFILE_ZOOM)  # noqa: E731
     grader = grading.Grader(frame, md, sample)

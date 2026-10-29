@@ -784,6 +784,52 @@ def _seg_hits(a, b):
     return np.array(out).reshape(-1, 2)
 
 
+def elevated_provider(md, dem):
+    """roads.ELEVATED_FN for a process with map data and a DEM: (s, lift) along a lon/lat ring every PROFILE_STEP m,
+    lift = lidar_lift of the bare earth to the lidar's surface (the decks over the road left out), or None without the
+    lidar. A Grader in a frame at the ring's start reads them (its decks, the lidar Surface of decklidar)."""
+    import decklidar
+    import geodesy
+    surf = decklidar.surface_for(md, dem)
+    if surf is None:
+        return None
+
+    def sample(la, lo):
+        return dem.sample(la, lo, PROFILE_ZOOM)
+
+    graders = {}        # region (0.1 degree) -> a Grader for its decks (made once: each one reads its cells' decks)
+    lock = threading.Lock()
+
+    def fn(ring):
+        ring = np.asarray(ring, np.float64)
+        rk = (int(math.floor(ring[0, 1] * 10)), int(math.floor(ring[0, 0] * 10)))
+        with lock:
+            g = graders.get(rk)
+            if g is None:
+                g = graders[rk] = Grader(geodesy.EnuFrame((rk[0] + 0.5) / 10, (rk[1] + 0.5) / 10), md, sample)
+                g.surface = surf
+        frame = g.frame
+        e, n, _ = frame.geodetic_to_enu(ring[:, 1], ring[:, 0], 0.0)
+        xy, s = resample(np.stack([np.asarray(e), np.asarray(n)], 1), PROFILE_STEP)
+        if len(xy) < 3:
+            return None
+        la, lo, _ = frame.enu_to_geodetic(xy[:, 0], xy[:, 1], 0.0)
+        la, lo = np.asarray(la), np.asarray(lo)
+        z = np.asarray(sample(la, lo), np.float64)
+        h = np.asarray(surf(la, lo), np.float64)
+        lift = lidar_lift(xy, z, h, g._decks_near(xy))
+        # another road's line under each sample, from every map cell along the ring (a long road's crossings lie in
+        # cells other than the one asking)
+        under = np.zeros(len(xy), bool)
+        if (lift >= roadsmod.ELEVATED_M).any():
+            for key in mapcells.cells_for_points(la, lo, 0.0003, 0.0004):
+                feats = md.cell(key, layers=("roads",), kind="demand").layers.get("roads")
+                if feats is not None and len(feats):
+                    under |= roadsmod.roads_under(feats, frame, xy, ring)
+        return s, lift, under
+    return fn
+
+
 def cut_separated(plans, specs, clips):
     """(plans, specs, clips) with every road's plan cut where it lies in another road's core at SEP_FULL_M or more
     above that road's height there (SEPARATED_CUT_ON). Two roads that far apart cross over one another, but where the

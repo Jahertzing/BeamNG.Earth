@@ -761,6 +761,7 @@ class Server:
         self.mapdata = mapdata      # mapdata.MapData for the roads (--roads on), else None
         if mapdata is not None:     # (the junctions' mapped traffic signals: roads.pocket_profiles' rule (c))
             roadsmod.SIGNALS_FN = roadsmod.signals_provider(mapdata)
+            roadsmod.ELEVATED_FN = gradingmod.elevated_provider(mapdata, self.dem)  # (unflagged structures: decks)
         if mapdata is not None and getattr(mapdata, "dem", 0) is None:
             mapdata.dem = self.dem  # (gradesep's ground)
         self.grading = bool(grading) and mapdata is not None   # ground graded under roads (grading.py)

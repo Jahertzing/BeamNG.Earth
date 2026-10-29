@@ -294,11 +294,131 @@ def level_ranges(feats, i):
     memo = feats.__dict__.setdefault("_level_ranges", {})
     got = memo.get(i)
     if got is None:
+        if getattr(_ELEV_TL, "busy", False):        # (inside an elevated-deck search: the map's own, never kept)
+            return list(_skew_decks(feats, i, raw_level_ranges(feats, i)))
         _cell_ranges(feats)
         got = memo.get(i)
         if got is None:
-            got = memo[i] = _skew_decks(feats, i, raw_level_ranges(feats, i))
+            got = memo[i] = _elevated_decks(feats, i, _skew_decks(feats, i, raw_level_ranges(feats, i)))
     return list(got)
+
+
+# Ground roads the lidar puts on a structure (2026-10-29, Jeff: "interpret the data less literally ... do what makes
+# actual physical sense"). Where the map has a motorway or trunk on the ground but the lidar's surface stands
+# ELEVATED_M or more over the bare earth along it (the bare earth has the structure taken out) and another road runs
+# under it there, it is a bridge the map does not flag: I-25's ramps 7 m over 20th Street were ground roads, and as
+# ground either 20th Street got a 7.5 m wall in it or the ramps a 68 g pit. The span over the road under it (+
+# ELEVATED_PAD_M) is made a bridge range: a deck (BridgeProfiles, at the lidar's heights), the road under it on the
+# ground, the rest of the high stretch a ground road at the lidar's height as before. ELEVATED_FN(ring) -> (s, lift,
+# under): every few metres along a lon/lat ring, the lidar's lift (grading.lidar_lift, decks over the road left out)
+# and whether another road runs under it (roads_under, from every map cell along it) (grading.elevated_provider).
+ELEVATED_FN = None
+ELEVATED_ON = os.environ.get("BNE_ELEVATED_DECKS", "off") == "on"   # (off until its decks' joints are solved: stage 2)
+ELEVATED_M = 4.0
+ELEVATED_PAD_M = 10.0      # m of deck either side of the road under it
+ELEVATED_MIN_M = 6.0
+ELEVATED_CLASSES = ("motorway", "trunk")
+_ELEV_TL = threading.local()
+
+
+def _elevated_decks(feats, i, rngs):
+    """rngs with the stretches of feature i the lidar puts ELEVATED_M+ over the bare earth over another road made
+    bridge ranges (see ELEVATED_FN). Never raises: the ranges as they were."""
+    if ELEVATED_FN is None or not ELEVATED_ON:
+        return rngs
+    try:
+        sp = road_specs(feats)[i]
+        if sp is None or sp.cls not in ELEVATED_CLASSES:
+            return rngs
+        rings = [np.asarray(r, np.float64) for part in feats.parts(i) for r in part if len(r) >= 2]
+        if not rings:
+            return rngs
+        ring = rings[0]
+        _ELEV_TL.busy = True
+        try:
+            got = ELEVATED_FN(ring)
+        finally:
+            _ELEV_TL.busy = False
+        if got is None:
+            return rngs
+        s, lift, under = got
+        L = float(s[-1]) if len(s) else 0.0
+        if L <= 0.0:
+            return rngs
+        t = s / L
+        off = np.zeros(len(t), bool)
+        for a, b, _k in rngs:
+            off |= (t >= a) & (t <= b)
+        high = (lift >= ELEVATED_M) & ~off
+        if not high.any():
+            return rngs
+        add = []
+        j = 0
+        while j < len(high):
+            if not high[j]:
+                j += 1
+                continue
+            k = j
+            while k + 1 < len(high) and high[k + 1]:
+                k += 1
+            if s[k] - s[j] >= ELEVATED_MIN_M and under[j:k + 1].any():
+                # only the span over the road under it (and ELEVATED_PAD_M either side, inside the high stretch): the
+                # rest stays a ground road at the lidar's height (its fill), meeting the deck at the same height
+                # (decks out to where the lidar came down to the bare earth: new joints at the Mousetrap, p99 1.14 ->
+                # 1.62 g, one of 66 g)
+                u = np.nonzero(under[j:k + 1])[0] + j
+                a = int(np.searchsorted(s, s[u[0]] - ELEVATED_PAD_M))
+                b = int(np.searchsorted(s, s[u[-1]] + ELEVATED_PAD_M, side="right")) - 1
+                a, b = max(a, j), min(b, k)
+                if s[b] - s[a] >= ELEVATED_MIN_M:
+                    add.append((float(t[a]), float(t[b]), "bridge"))
+            j = k + 1
+        if not add:
+            return rngs
+        return _merge_ranges(list(rngs) + add)
+    except Exception as e:      # (the map's ranges rather than none)
+        log.debug("elevated decks of %s: %s: %s", i, type(e).__name__, e)
+        return rngs
+
+
+def roads_under(feats, frame, xy, ring):
+    """Per point xy (n, 2, frame metres) of a road (its lon/lat ring, to leave itself out): another road of feats
+    with its line within its half width (a road running under it). Pure given feats."""
+    out = np.zeros(len(xy), bool)
+    specs = road_specs(feats)
+    lo, hi = xy.min(0) - 30.0, xy.max(0) + 30.0
+    r0 = np.asarray(ring, np.float64)
+    for j in range(len(feats)):
+        if specs[j] is None:
+            continue
+        hw = specs[j].width / 2
+        # (its whole line, not ground_parts: those read level_ranges, which would search it again)
+        for part in (np.asarray(r, np.float64) for pr in feats.parts(j) for r in pr if len(r) >= 2):
+            if len(part) == len(r0) and np.allclose(part, r0):
+                continue                        # (the road itself)
+            e, n, _ = frame.geodetic_to_enu(part[:, 1], part[:, 0], 0.0)
+            q = np.stack([np.asarray(e), np.asarray(n)], 1)
+            if (q.max(0) < lo).any() or (q.min(0) > hi).any():
+                continue
+            a, b = q[:-1], q[1:]
+            ab = b - a
+            L2 = np.maximum((ab * ab).sum(1), 1e-12)
+            tt = np.clip(((xy[:, None, :] - a[None]) * ab[None]).sum(2) / L2[None], 0.0, 1.0)
+            d = np.hypot(*(xy[:, None, :] - (a[None] + tt[..., None] * ab[None])).transpose(2, 0, 1)).min(1)
+            out |= d <= hw
+    return out
+
+
+def _merge_ranges(rngs):
+    """Ranges (start, end, kind) sorted, overlapping bridge ranges merged (a tunnel kept as it is)."""
+    rngs = sorted(rngs)
+    out = []
+    for a, b, k in rngs:
+        if out and k == "bridge" and out[-1][2] == "bridge" and a <= out[-1][1] + 1e-9:
+            out[-1] = (out[-1][0], max(out[-1][1], b), "bridge")
+        else:
+            out.append((a, b, k))
+    return out
 
 
 def raw_level_ranges(feats, i):

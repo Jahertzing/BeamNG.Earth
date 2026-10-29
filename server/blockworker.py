@@ -59,6 +59,7 @@ class _State:
         if md is not None:      # (the junctions' mapped traffic signals: roads.pocket_profiles' rule (c))
             import roads as roadsmod
             roadsmod.SIGNALS_FN = roadsmod.signals_provider(md)
+            roadsmod.ELEVATED_FN = gradingmod.elevated_provider(md, self.dem)     # (unflagged structures: decks)
         if md is not None:
             md.dem = self.dem       # (gradesep's ground)
         # the sea's and the lakes' floors carved in (--sea on)
