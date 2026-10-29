@@ -73,6 +73,20 @@ def hook(md, key):
     return run
 
 
+def neighbours_hook(md, key):
+    """(the cell's lon/lat bounds, a callable: the roads layers of the eight cells round it, read once) that a cell's
+    roads layer carries (roads._bridge_reach: the roads under a bridge at the cell's edge)."""
+    lock = threading.Lock()
+    memo = {}
+
+    def get():
+        with lock:
+            if "n" not in memo:
+                memo["n"] = _neighbours(md, key)
+        return memo["n"]
+    return key.bounds(), get
+
+
 _POOL = None
 _POOL_LOCK = threading.Lock()
 
