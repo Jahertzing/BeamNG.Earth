@@ -1,0 +1,23 @@
+{
+ "version": 1,
+ "about": "Reflection probes along The Drive (fidelity.lua captureProbe, with fidelity_probe_variants.json): the free camera at each place is moved onto the nearest road within 60 m, 2.5 m up, and a cubemap captured there to the user folder's beamngEarth/reflect/ with an index. Midday, clear. Built-up places only: elsewhere the level's own sky map stays.",
+ "defaults": {
+  "date": "2026-10-20",
+  "hour": 12.5,
+  "weather": "clear",
+  "views": [
+   {"name": "probe", "agl": 2.5, "pitch": 0, "fov": 70}
+  ]
+ },
+ "places": [
+  {"id": "pr_frederick", "name": "Frederick, The Drive's start", "lat": 40.09953, "lon": -104.937, "group": "probes"},
+  {"id": "pr_union_station", "name": "Wynkoop at Union Station", "lat": 39.75292, "lon": -104.99975, "group": "probes"},
+  {"id": "pr_ballpark", "name": "Blake and 20th by Coors Field", "lat": 39.756, "lon": -104.995, "group": "probes"},
+  {"id": "pr_16th", "name": "16th Street, the towers", "lat": 39.7459, "lon": -104.9906, "group": "probes"},
+  {"id": "pr_speer", "name": "Speer and Larimer", "lat": 39.7484, "lon": -105.0018, "group": "probes"},
+  {"id": "pr_colfax", "name": "Colfax and Broadway", "lat": 39.7402, "lon": -104.9875, "group": "probes"},
+  {"id": "pr_i25_speer", "name": "I-25 at Speer by the stadium", "lat": 39.759, "lon": -105.0145, "group": "probes"},
+  {"id": "pr_dtc", "name": "I-25 and Belleview, the Tech Center", "lat": 39.6245, "lon": -104.8975, "group": "probes"},
+  {"id": "pr_castle_rock", "name": "Castle Rock main street", "lat": 39.3719, "lon": -104.8587, "group": "probes"}
+ ]
+}

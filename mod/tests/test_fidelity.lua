@@ -164,6 +164,99 @@ T.check(not W({ speed = 0, dist = 700, since = 5 }), 'too soon after the last')
 T.check(F.insideCam('driver') and F.insideCam('onboard.hood') and F.insideCam(nil) and not F.insideCam('orbit')
   and not F.insideCam('chase') and not F.insideCam('free'), 'inside cameras')
 
+-- reflection probes: the pure parts
+T.check(F.probeId(39.75301, -105.00004) == '39.7530_m105.0000', 'probe id: a file name')
+T.near(F.geoDist(39.75, -105, 39.76, -105), 1113.2, 0.5, 'a hundredth of a degree north')
+T.near(F.geoDist(39.75, -105, 39.75, -104.99), 1113.2 * math.cos(math.rad(39.75)), 0.5, 'east, by the latitude')
+local P1, P2 = { id = 'a', lat = 39.75, lon = -105.0 }, { id = 'b', lat = 39.76, lon = -105.0 }
+local plist = { P1, P2 }
+T.check(F.pickProbe(plist, 39.751, -105.0, nil) == P1, 'the nearest')
+T.check(F.pickProbe(plist, 39.9, -105.0, nil) == nil, 'none in range: the level\'s own')
+T.check(F.pickProbe(plist, 39.7552, -105.0, P1) == P1, 'just past halfway: the current one kept')
+T.check(F.pickProbe(plist, 39.758, -105.0, P1) == P2, 'clearly nearer the other: switched')
+T.check(F.pickProbe(plist, 39.751, -105.0, { lat = 50, lon = 0 }) == P1, 'a current one out of range: the nearest')
+T.check(F.pickProbe(nil, 39.75, -105, nil) == nil and F.pickProbe(plist, nil, nil, nil) == nil, 'nothing to pick')
+local q = F.nearestOnSegment({ x = 5, y = 3, z = 0 }, { x = 0, y = 0, z = 0 }, { x = 10, y = 0, z = 2 })
+T.near(q.x, 5, 0.2, 'on the segment: x'); T.near(q.y, 0, 1e-9, 'on the segment: y')
+q = F.nearestOnSegment({ x = -5, y = 0, z = 0 }, { x = 0, y = 0, z = 0 }, { x = 10, y = 0, z = 0 })
+T.check(q.x == 0, 'clamped to the end')
+
+-- probes against stubs: loaded from the index, the nearest assigned as the player moves, the level's own out of range
+local idx = { version = 1, probes = {
+  { id = 'p1', lat = 39.75, lon = -105.0, prefix = '/beamngEarth/reflect/p1_' },
+  { id = 'p2', lat = 39.76, lon = -105.0, prefix = '/beamngEarth/reflect/p2_' },
+  { id = 'gone', lat = 39.70, lon = -105.0, prefix = '/beamngEarth/reflect/gone_' } } }
+files = {}
+for _, id in ipairs({ 'p1', 'p2' }) do
+  for i = 0, 5 do files['/beamngEarth/reflect/' .. id .. '_' .. i .. '.hdr.dds'] = true end
+end
+local written = nil
+files[F.PROBES.index] = true
+jsonReadFile = function(f) return f == F.PROBES.index and idx or nil end
+jsonWriteFile = function(f, t) written = { f = f, t = t } end
+local player = { lat = 39.7501, lon = -105.0 }
+local cstate = { player = player, anchor = { enuToGeodetic = function(_, x, y) return 39.0 + y, -105.0 + x end } }
+beamngEarth_core = { _state = function() return cstate end }
+F.update(false)         -- (the index is read once per stay in the level: read again after leaving)
+F.setMode('on')
+clock = 700; F.update(true)
+T.check(F.state().probes == 2, 'two probes loaded (one without faces skipped)')
+T.check(li.fields.globalEnviromentMap == F.PROBES.name .. '1' and F.state().probe == 'p1', 'the nearest assigned')
+T.check(objects[F.PROBES.name .. '2'].fields.cubeFace3 == '/beamngEarth/reflect/p2_3.hdr.dds', 'cubemaps made')
+player.lat = 39.7595
+clock = 710; F.update(true)
+T.check(li.fields.globalEnviromentMap == F.PROBES.name .. '2', 'moved: the other one')
+player.lat = 39.9
+clock = 720; F.update(true)
+T.check(li.fields.globalEnviromentMap == 'BNG_Sky_01_cubemap' and F.state().probe == nil, 'far from both: the level\'s own')
+player.lat = 39.7501
+clock = 730; F.update(true)
+F.setFeature('probes', false)
+clock = 740; F.update(true)
+T.check(li.fields.globalEnviromentMap == 'BNG_Sky_01_cubemap' and F.state().probes == nil, 'probes off: the level\'s own')
+F.setFeature('probes', true)
+clock = 750; F.update(true)
+T.check(F.state().probe == 'p1', 'on again')
+F.update(false)
+T.check(li.fields.globalEnviromentMap == 'BNG_Sky_01_cubemap' and F.state().probes == nil, 'leaving: the level\'s own')
+
+-- a probe captured: at the camera (not a free one: not moved), car hidden, added to the index
+local camAt = { x = 0.0002, y = 0.7505, z = 1600 }
+local moved = nil
+core_camera = { getActiveCamName = function() return 'chase' end, getPosition = function() return camAt end,
+  setPosition = function(_, p) moved = p end }
+captureCameraCubemap = function(prefix, res)
+  captured = { prefix = prefix, res = res }
+  for i = 0, 5 do files[prefix .. i .. '.hdr.dds'] = true end
+end
+local alpha = {}
+getPlayerVehicle = function() return { setMeshAlpha = function(_, a) alpha[#alpha + 1] = a end } end
+local okP, pid = F.captureProbe()
+T.check(okP and pid == F.probeId(39.7505, -104.9998), 'captured, named by the place')
+T.check(captured.res == F.PROBES.res and captured.prefix == F.PROBES.dir .. pid .. '_', 'the probe\'s faces')
+T.check(alpha[1] == 0 and alpha[2] == 1, 'the car hidden for the call')
+T.check(moved == nil, 'not a free camera: left where it is')
+T.check(written and written.f == F.PROBES.index and #written.t.probes == 4 and written.t.probes[4].id == pid,
+  'appended to the index')
+idx = written.t
+F.captureProbe()
+T.check(#written.t.probes == 4, 'the same place again: replaced, not added')
+-- a free camera near a road: moved onto it for the capture, then back
+core_camera.getActiveCamName = function() return 'free' end
+map = { findClosestRoad = function() return 'n1', 'n2' end,
+  getMap = function() return { nodes = { n1 = { pos = { x = 0, y = 0.75, z = 1590 } },
+    n2 = { pos = { x = 0.001, y = 0.75, z = 1590 } } } } end }
+vec3 = function(x, y, z) return { x = x, y = y, z = z } end
+local positions = {}
+core_camera.setPosition = function(_, p) positions[#positions + 1] = p; camAt = p end
+local okS = F.captureProbe('snapped')
+T.check(okS and #positions == 2, 'moved and put back')
+T.near(positions[1].y, 0.75, 1e-9, 'onto the road'); T.near(positions[1].z, 1590 + F.PROBES.eyeM, 1e-9, 'eye height over it')
+T.near(positions[2].y, 0.7505, 1e-9, 'back where it was')
+T.check(written.t.probes[#written.t.probes].snapped == true, 'index: snapped')
+core_camera, map, getPlayerVehicle, beamngEarth_core, jsonReadFile, jsonWriteFile = nil, nil, nil, nil, nil, nil
+F.update(false)
+
 -- wet roads: the values, then against stub materials (written in steps, put back dry)
 local r, col = F.wetValues('1.5', '1 0.9 0.8 1', 1)
 T.near(tonumber(r), 1.5 * F.WET.rough, 1e-3, 'wet: rougher map scaled down')

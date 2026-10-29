@@ -1,0 +1,3 @@
+[
+ {"name": "capture", "lua": "local ok, r = require('beamngEarth/fidelity').captureProbe() log('I', 'beamngEarth', 'probe capture: ' .. tostring(ok) .. ' ' .. tostring(r))", "settle": 4}
+]
