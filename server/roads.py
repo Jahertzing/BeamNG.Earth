@@ -1946,7 +1946,14 @@ def _join_nodes(lines, zs, pins=None):
     out = []
     for k, (a, b, s) in enumerate(edges):
         z = np.array(zs[k], np.float64)
-        if np.isfinite(z).all() and s[-1] > 0:
+        if np.isfinite(z).all() and s[-1] > 0 and a in target and b in target and s[-1] < 2.0 * JOIN_FADE_M:
+            # both ends moved on a short part: one smoothstep between their changes over all of it (each faded over
+            # half the part, its middle kept where it was: a 7 m part between I-25's ramps at US-36 sagged 0.44 m
+            # under its raised ends, a 12 g jolt, 2026-10-29)
+            u = s / s[-1]
+            w = u * u * (3.0 - 2.0 * u)
+            z += (target[a] - zs[k][0]) * (1.0 - w) + (target[b] - zs[k][-1]) * w
+        elif np.isfinite(z).all() and s[-1] > 0:
             reach = min(JOIN_FADE_M, s[-1] / 2.0)
             for node, d, e in ((a, s, 0), (b, s[-1] - s, -1)):
                 if node in target:
