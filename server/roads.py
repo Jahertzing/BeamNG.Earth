@@ -2319,12 +2319,52 @@ def deck_profile_once(lines, ground_fn, crossings=(), clear=None, grade=None, li
                 floor = np.maximum(np.minimum(floor, z + DECK_END_FLOOR_GRADE * off), g)
             zz = np.maximum(sm, floor)
             zz[0], zz[-1] = sm[0], sm[-1]
-            zz = _curve_deck(s, zz, floor, cap[k])
+            got = _curve_deck(s, zz, floor, cap[k])
+            if not _curved(s, got):
+                # no curve held: the cap itself turned too sharply (two abutments' DECK_MAX_GRADE meeting over a road
+                # it could not clear, I-25's 4581afec: +6 % to -6 % at one point, a 3.3 g crest at 65 mph,
+                # 2026-10-29): the cap rounded to the curve, a little headroom given up for it
+                crest = np.maximum(_round_crests(s, cap[k]), g)
+                low = np.minimum(zz, crest)
+                low[0], low[-1] = zz[0], zz[-1]
+                got = _curve_deck(s, low, floor, crest)
+                if not _curved(s, got):
+                    got = zz
+            zz = got
         out.append(zz)
     return out
 
 
 DECK_HELD_R = 300.0     # m: the vertical radius a deck curves away from its measured stretches at most (_curve_deck's)
+
+
+DECK_CREST_CAP_R = 320.0    # m: _round_crests' radius (a little over _curve_deck's 300 m, room for its tolerance)
+
+
+def _round_crests(s, cap, radius=DECK_CREST_CAP_R):
+    """The highest profile under cap (at arcs s) whose grade falls no faster than 1 / radius per metre: cap's crests
+    rounded to vertical curves (the lower convex hull of cap + s^2 / 2r, less it; infinite past cap's first and last
+    finite points). _curve_deck's curve (300 m) fits under it. Pure."""
+    s, cap = np.asarray(s, np.float64), np.asarray(cap, np.float64)
+    q = s * s / (2.0 * radius)
+    ok = np.flatnonzero(np.isfinite(cap))
+    out = np.full(len(s), np.inf)
+    if not len(ok):
+        return out
+    hull = []
+    for i in ok:
+        y = cap[i] + q[i]
+        while len(hull) >= 2:
+            (x1, y1), (x2, y2) = hull[-2], hull[-1]
+            if (x2 - x1) * (y - y1) - (y2 - y1) * (s[i] - x1) <= 0:     # hull[-1] over the chord: dropped
+                hull.pop()
+            else:
+                break
+        hull.append((s[i], y))
+    hx, hy = zip(*hull)
+    span = slice(ok[0], ok[-1] + 1)
+    out[span] = np.interp(s[span], hx, hy) - q[span]
+    return out
 
 
 def _held_reach(s, z, held, tol=0.0, radius=DECK_HELD_R):
@@ -2405,6 +2445,17 @@ def _curve_deck(s, z, floor, cap):
     f64 = np.float64
     return fast._ef.curve_deck(np.ascontiguousarray(s, f64), np.ascontiguousarray(z, f64),
                                np.ascontiguousarray(floor, f64), np.ascontiguousarray(cap, f64))
+
+
+def _curved(s, z):
+    """Does profile z (at arcs s) change grade no faster than _curve_deck allows (1/300 per metre)? Pure."""
+    s, z = np.asarray(s, np.float64), np.asarray(z, np.float64)
+    if len(s) < 3:
+        return True
+    ds = np.diff(s)
+    if (ds <= 0).any() or not np.isfinite(z).all():
+        return False
+    return bool((np.abs(np.diff(np.diff(z) / ds)) <= (ds[:-1] + ds[1:]) / 600.0 + 1e-6).all())
 
 
 def _no_sag(s, z):

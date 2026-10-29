@@ -173,6 +173,33 @@ class JoinNodesTest(TestCase):
         self.assertAlmostEqual(float(out[1][0]), 11.0)
 
 
+class RoundCrestsTest(TestCase):
+    def test_tent_cap_rounded_to_the_curve(self):
+        """Two abutments' DECK_MAX_GRADE caps meeting in a point (+6 % to -6 %): no 300 m curve fits under it, so
+        _curve_deck kept the tent (I-25 at 39.8056, a 3.3 g crest); rounded, one does, lower by about R dg^2 / 8."""
+        s = np.arange(0.0, 68.1, 4.0)
+        cap = np.minimum(1588.02 + 0.06 * s, 1586.84 + 0.06 * (s[-1] - s))
+        self.assertFalse(roads._curved(s, cap))
+        r = roads._round_crests(s, cap)
+        self.assertTrue((r <= cap + 1e-9).all())
+        self.assertTrue(roads._curved(s, r))
+        self.assertAlmostEqual(r[0], cap[0])
+        self.assertAlmostEqual(r[-1], cap[-1])
+        self.assertLess(cap.max() - r.max(), 0.12 ** 2 * roads.DECK_CREST_CAP_R / 8 + 0.1)
+        out = roads._curve_deck(s, np.minimum(cap, r), cap, r)
+        self.assertTrue(roads._curved(s, out))
+
+    def test_gentle_cap_kept(self):
+        s = np.arange(0.0, 200.1, 5.0)
+        cap = 10.0 + 0.02 * s - s * s / (2 * 1000.0)
+        np.testing.assert_allclose(roads._round_crests(s, cap), cap, atol=1e-9)
+        cap2 = cap.copy()
+        cap2[:3] = np.inf
+        r = roads._round_crests(s, cap2)
+        self.assertTrue(np.isinf(r[:3]).all())
+        np.testing.assert_allclose(r[3:], cap[3:], atol=1e-9)
+
+
 class HeldReachTest(TestCase):
     def test_unmeasured_points_curve_off_the_measured_stretch(self):
         s = np.arange(0.0, 60.1, 3.0)
