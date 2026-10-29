@@ -332,6 +332,8 @@ const settingsSchema = [
       { id: "cityGlow", type: "bool", default: true, name: "City glow at night", desc: "At night, a soft glow of light in the sky over the cities near you (Denver from Frederick), and the Castle Rock star in its season. Lit windows, street lamps and the distant skyline's lights are always on at night." },
       { id: "nightAmbient", type: "select", default: "normal", name: "Night ambient light", desc: "How much light there is at night outside the street lamps' pools: the dim warm sky light of a city (strongest in Denver, fading out toward the country, where it is a faint starlit blue) and a soft fill under each lamp near you, like the light a lit street throws back onto walls, cars and yards. Off: the game's real sky alone, where anything a lamp doesn't hit is black. Bright: about twice Normal.",
         options: [ { label: "Off", value: "off" }, { label: "Dim", value: "dim" }, { label: "Normal", value: "normal" }, { label: "Bright", value: "bright" } ] },
+      { id: "headlights", type: "select", default: "bright", name: "Headlights", desc: "How bright your car's headlights are and how far down the road they reach. Stock: the car's own. Bright: twice as bright, reaching half again as far. Brighter: four times as bright, twice as far. Your car only; traffic keeps its own.",
+        options: [ { label: "Stock", value: "stock" }, { label: "Bright", value: "bright" }, { label: "Brighter", value: "brighter" } ] },
     ],
   },
   {
