@@ -2069,6 +2069,10 @@ local function onUpdate(dtReal, dtSim)
     end
     parking.update(st.anchorId, not (st.player and st.player.camera) and st.player or nil, pb, gov)  -- (no car: none parked)
     t = mark('parking', t)
+    for k, v in pairs(parking.parts or {}) do   -- (its parts: which one a "parking" hitch was)
+      if v > 0 then marks['parking.' .. k] = (marks['parking.' .. k] or 0) + v end
+      parking.parts[k] = 0
+    end
     navgraph.update(st.anchorId, pb, gov)
     t = mark('navgraph', t)
     updateSky(dtReal)

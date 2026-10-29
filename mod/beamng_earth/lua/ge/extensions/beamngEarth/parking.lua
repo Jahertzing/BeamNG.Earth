@@ -283,20 +283,35 @@ function M.freeNear(player, rad, minRad)
   return n
 end
 M.ACTIVATE_MIN_M = 100  -- (the stock pool's activation moves a car to a spot this far from the player at least)
+-- Moves a guard pass makes at most (a forceTeleport or a hidden car shown again): the rest wait for the next pass, which
+-- comes GUARD_BACKLOG_S later while any wait. Moving every car the block left behind in one frame cost 94-145 ms (the
+-- perf log's "parking" part, south Denver 2026-10-29: 120 ms at 35 mph, 94 ms at a block swap); a falling car that
+-- finds no move left is hidden at once and comes back later the same way.
+M.MOVES_PER_PASS = 1
+M.GUARD_BACKLOG_S = 0.1
+-- ms spent this frame, by part (core.lua adds them to the frame's marks as parking.<part>, and zeroes them)
+M.parts = { view = 0, guard = 0, rebuild = 0, start = 0 }
 
+-- Returns the number of moves left waiting for the next pass.
 local function guard(player)
   local gp = gameplay_parking
-  if not box or not gp or not gp.getState() then return end
+  if not box or not gp or not gp.getState() then return 0 end
   local data = (not scatterPending and sites and gp.getParkedCarsData) and gp.getParkedCarsData() or nil
+  local sw = stopwatch.new()
   local okV, errV = pcall(holdView, data, gp.getParkedCarsList() or {})
   if not okV then log('W', 'beamngEarth', 'parking view: ' .. tostring(errV)) end
+  M.parts.view = M.parts.view + sw()
+  local moves, waiting = M.MOVES_PER_PASS, 0
   local cx, cy, fx, fy = camera()
   local free = M.freeNear(player)
   local freeFar = M.freeNear(player, M.START_M, M.ACTIVATE_MIN_M)
   for _, id in ipairs(gp.getParkedCarsList() or {}) do
     local o = getObjectByID(id)
     if o and hidden[id] then
-      if freeFar > 0 and free > 0 then     -- spots near again: back, onto one of them
+      if freeFar > 0 and free > 0 and moves <= 0 then
+        waiting = waiting + 1
+      elseif freeFar > 0 and free > 0 then     -- spots near again: back, onto one of them
+        moves = moves - 1
         freeFar = freeFar - 1
         hidden[id] = nil
         o:setActive(1)
@@ -317,9 +332,12 @@ local function guard(player)
         if d and held[id] then             -- (a falling car in view: rescued all the same)
           d.ignoreTeleport, d.ignoreForceTeleport, held[id] = nil, nil, nil
         end
-        if free > 0 then
+        if free > 0 and moves > 0 then
+          moves = moves - 1
           pcall(gp.forceTeleport, id, vec3(player.x, player.y, player.z), 0, M.START_M)
           free = free - 1
+        elseif free > 0 and not falling then
+          waiting = waiting + 1              -- (next pass: it stands on the ground out of view meanwhile)
         else
           hidden[id] = true
           o:setActive(0)
@@ -327,6 +345,7 @@ local function guard(player)
       end
     end
   end
+  return waiting
 end
 
 -- The stock gameplay_parking.setupVehicles (the radial menu's parked cars, our own start) rebuilds the sites first
@@ -353,6 +372,7 @@ end
 M.REBUILD_ROOM_MS = 4.0
 M.REBUILD_WAIT_FRAMES = 30
 local waited = 0
+local backlog = 0       -- guard moves waiting for the next pass
 
 function M.update(aid, player, blk, gov)
   if aid ~= anchorId then
@@ -365,10 +385,13 @@ function M.update(aid, player, blk, gov)
     box = { blk[1], blk[2], blk[3], blk[4] }
     dirty = true
   end
-  if player and os.clock() - lastGuard >= M.GUARD_S then
+  if player and os.clock() - lastGuard >= (backlog > 0 and M.GUARD_BACKLOG_S or M.GUARD_S) then
     lastGuard = os.clock()
-    local okG, errG = pcall(guard, player)
-    if not okG then log('W', 'beamngEarth', 'parking guard: ' .. tostring(errG)) end
+    local sw = stopwatch.new()
+    local okG, n = pcall(guard, player)
+    if not okG then log('W', 'beamngEarth', 'parking guard: ' .. tostring(n)) end
+    backlog = okG and n or 0
+    M.parts.guard = M.parts.guard + sw()
   end
   if player then lastPlayer = player end
   hookSetup()
@@ -388,13 +411,22 @@ function M.update(aid, player, blk, gov)
   lastBuild, dirty = t, false
   local sw = stopwatch.new()
   local ok, near = pcall(rebuild, player)
-  if gov and gov.noteFrame then gov:noteFrame(sw()) end
+  local ms = sw()
+  M.parts.rebuild = M.parts.rebuild + ms
+  if gov and gov.noteFrame then gov:noteFrame(ms) end
   if not ok then
     log('W', 'beamngEarth', 'parking: ' .. tostring(near))
     return
   end
   local gp = gameplay_parking
   if not gp or near < M.START_MIN then return end
+  sw = stopwatch.new()
+  M.start(gp, player)
+  M.parts.start = M.parts.start + sw()
+end
+
+-- The parked cars' start (the first rebuild with enough spots near), or the scatter a teleport left pending.
+function M.start(gp, player)
   if not started then
     started = true
     -- the player's level-start choice (navgraph.choice; the radial menu works at any time)
@@ -428,6 +460,7 @@ function M.reset()
   spots, objs, anchorId, dirty, lastBuild, sites = {}, {}, nil, false, -math.huge, nil
   hidden = {}
   banned, held, spotAt = {}, {}, {}
+  backlog = 0
   box, lastGuard, heldActive = nil, -math.huge, nil
   started, scatterPending = false, false
   lastPlayer = nil

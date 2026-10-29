@@ -220,4 +220,53 @@ do
   core_camera, getObjectByID = nil, nil
   P.reset()
 end
+do
+  -- the guard moves MOVES_PER_PASS cars a pass, the rest on the next one (GUARD_BACKLOG_S later); a falling car with no
+  -- move left is hidden at once (south Denver 2026-10-29: one frame of parking.lua moves over 90 ms)
+  local cam = { pos = vec3(0, 0, 0), fwd = vec3(1, 0, 0) }
+  core_camera = { getPosition = function() return cam.pos end, getForward = function() return cam.fwd end }
+  local cars = {}
+  for i, id in ipairs({ 81, 82, 83, 84 }) do
+    local c = { p = vec3(-300, i * 10, 0), v = vec3(0, 0, 0), on = true }
+    function c:getActive() return self.on end
+    function c:getPosition() return self.p end
+    function c:getVelocity() return self.v end
+    function c:setActive(a) self.on = a == 1 end
+    cars[id] = c
+  end
+  function getObjectByID(id) return cars[id] end
+  local data = { [81] = {}, [82] = {}, [83] = {}, [84] = {} }
+  local teleported = {}
+  active = true
+  gameplay_parking.getParkedCarsList = function() return { 81, 82, 83, 84 } end
+  gameplay_parking.getParkedCarsData = function() return data end
+  gameplay_parking.forceTeleport = function(id)
+    teleported[#teleported + 1] = id
+    cars[id].p, cars[id].v = vec3(10, 0, 0), vec3(0, 0, 0)   -- (onto a spot by the player)
+  end
+  P.reset()
+  local rows = {}
+  for i = 1, 10 do rows[i] = { 150 + i * 5, -150, 1600, 0, 1 } end   -- (out of view, 100-400 m: free)
+  P.onRows(9, '9:0_0', rows)
+  cam.fwd = vec3(0, 1, 0)
+  clock = clock + 3
+  P.update(9, { x = 0, y = 0, z = 1600 }, { -1000, -1000, 1000, 1000 })   -- (the sites built: no spot data before)
+  cars[84].v = vec3(0, 0, -30)            -- falling
+  for i = #teleported, 1, -1 do teleported[i] = nil end
+  clock = clock + P.GUARD_S + 0.01
+  P.update(9, { x = 0, y = 0, z = 1600 }, { -1000, -1000, 1000, 1000 })
+  T.check(#teleported == P.MOVES_PER_PASS, 'guard: one move a pass: ' .. #teleported)
+  T.check(not cars[84].on, 'guard: a falling car past the move cap is hidden at once')
+  clock = clock + P.GUARD_BACKLOG_S + 0.01
+  P.update(9, { x = 0, y = 0, z = 1600 }, { -1000, -1000, 1000, 1000 })
+  T.check(#teleported == 2 * P.MOVES_PER_PASS, 'guard: the next move a backlog interval later: ' .. #teleported)
+  for _ = 1, 6 do
+    clock = clock + P.GUARD_BACKLOG_S + 0.01
+    P.update(9, { x = 0, y = 0, z = 1600 }, { -1000, -1000, 1000, 1000 })
+  end
+  T.check(cars[84].on, 'guard: the hidden car comes back once the others are moved')
+  T.check(P.parts.guard >= 0 and P.parts.view >= 0, 'parts: guard and view timed')
+  core_camera, getObjectByID = nil, nil
+  P.reset()
+end
 T.done('test_parking')
