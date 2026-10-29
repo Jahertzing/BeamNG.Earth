@@ -102,6 +102,9 @@ end
 T.check(d(128, 0, 40, 0, 0, 0, nil, 0, 0) == nil, '512: at 128 m: no request')
 a, cx, cy = d(129, 0, 40, 0, 0, 0, nil, 0, 0)
 T.check(a == 'prepare' and cx == 384 and cy == 0, '512: past 128 m: prepare snap128(p + 5 s v)')
+-- past URGENT_DIST a ready block commits without the governor's calm wait (core); the grass round the car is still
+-- inside the old block then (groundcover.lua: no stale cells, 2026-10-29)
+T.check(f.URGENT_DIST == 240 and f.URGENT_DIST < f.HARD_COMMIT_DIST and f.URGENT_DIST > f.COMMIT_DIST, '512: the urgent distance between the commit and hard-commit ones')
 pend = { cx = 256, cy = 0, ready = true }
 T.check(d(192, 0, 40, 0, 0, 0, pend, 0, 0) == nil, '512: ready at 192 m: hold')
 T.check(d(193, 0, 40, 0, 0, 0, pend, 0, 0) == 'commit', '512: ready past 192 m: commit')

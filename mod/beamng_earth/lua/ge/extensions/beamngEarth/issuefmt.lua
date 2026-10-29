@@ -252,6 +252,10 @@ function M.buildIssue(data, hw)
       local hitches = type(b.hitches) == 'table' and #b.hitches or 0
       p(string.format('- median frame %.1f ms, 95th %.1f ms, 99th %.1f ms; %d hitches over 50 ms',
         num(b.p50) or 0, num(b.p95) or 0, num(b.p99) or 0, hitches))
+      if num(b.withinBudget) and num(b.budgetMs) then
+        p(string.format('- pacing: %.0f %% of frames within the %.1f ms refresh budget, %.0f %% at two refreshes or more, frame-to-frame change %.1f ms',
+          100 * b.withinBudget, b.budgetMs, 100 * (num(b.twoRefresh) or 0), num(b.jitterMs) or 0))
+      end
     end
   end
   local mod = type(data.mod) == 'table' and data.mod or {}

@@ -415,17 +415,19 @@ local function loadBlock(tr)
   local base = nil
   if nearVisual == 'detail' then base = type(tr.base) == 'string' and tr.base or false end
   local ter = M.TER_SWAP and type(tr.ter) == 'string'
+  local speed = st.player and st.player.speed or 0
   if ter and terrain.swap(tr.ter, sq, maxH, x, y, tr.zBase, layers, base, tonumber(tr.baseSize)) then
     roads.terrainSwapped()      -- its collision follows by itself next frame: no other rebuild meanwhile
-    groundcover.afterBlockChange()
+    groundcover.afterBlockChange(speed)
     return true, nil, true
   end
   local ok, err = terrain.load(tr.heightmap, sq, maxH, x, y, tr.zBase, layers, base, tonumber(tr.baseSize))
   if ok and ter and terrain.swap(tr.ter, sq, maxH, x, y, tr.zBase, layers, base, tonumber(tr.baseSize)) then
     roads.terrainSwapped()
   end
-  -- every block import / move drops all the grass on it; rebuild it before this frame is drawn
-  groundcover.afterBlockChange()
+  -- every block import / move drops all the grass on it (unless gcpatch keeps it); what the engine freed comes back
+  -- before this frame is drawn, nothing is made again in this frame (groundcover.lua: staged)
+  groundcover.afterBlockChange(speed)
   return ok, err
 end
 
@@ -663,7 +665,8 @@ end
 -- frame: importMaps + setPosition + reloadCollision + the far tiles' cover change. Vehicles and
 -- camera stay where they are; far tiles only sink / hide / come back (no imports in this frame).
 local COMMIT_LOG = 20
-local COMMIT_SLOW_MS = 300     -- a commit frame this slow is logged with its materials
+local COMMIT_SLOW_MS = 60      -- a commit frame this slow is logged with its materials and what the grass did (was 300:
+                               -- the 100-150 ms swap frames of 2026-10-29 went unlogged)
 local frameTimer = hptimer and hptimer() or nil
 
 local function commitTerrain(msg)
@@ -684,7 +687,8 @@ local function commitTerrain(msg)
   local ls = swapped and terrain.lastSwap or nil
   local c = { load = tLoad, coll = tColl - tLoad, cover = sw() - tColl, f = {}, swap = swapped or nil,
     ter = ls and ls.apply or nil,   -- the .ter load alone (ms)
-    mats = ls and ls.mats or nil, fresh = ls and ls.fresh or nil, at = { msg.cx, msg.cy } }
+    mats = ls and ls.mats or nil, fresh = ls and ls.fresh or nil, at = { msg.cx, msg.cy },
+    grass = groundcover.lastChange }   -- (what the block change did about the grass: the hitching half of the swaps)
   table.insert(st.commits, c)
   if #st.commits > COMMIT_LOG then table.remove(st.commits, 1) end
   st.commitFrames = c
@@ -1481,7 +1485,7 @@ local function updateWorld(dt)
     -- isolated heavy slot (governor.lua); until then the request repeats. Past the hard commit
     -- distance it is urgent: the car's ground comes before the frame budget (a far-tile import backlog
     -- held commits for seconds at 90 m/s, 2026-10-12)
-    local urgent = b ~= nil and follow.cheb(pl.x, pl.y, b.cx, b.cy) > follow.HARD_COMMIT_DIST
+    local urgent = b ~= nil and follow.cheb(pl.x, pl.y, b.cx, b.cy) > (follow.URGENT_DIST or follow.HARD_COMMIT_DIST)
     if gov:requestHeavy(urgent) then
       local tp = st.terrainPending
       st.terrainPending = nil
@@ -1787,8 +1791,40 @@ local function mark(name, t0)
 end
 -- The mod's parts' ms in the last whole frame (diagnostics: a per-frame probe; not to be changed by the caller)
 function M.frameMarks() return prevMarks end
+-- The engine's GPU pass timings (Engine.Debug.getGpuTimings, in the 0.40 binary beside getLastPerformanceMetrics;
+-- its shape is logged once, the first time it answers): {name = ms} or nil. For the FramePresent-led stutters
+-- (the GPU, 45 % of the 50-100 ms frames on Jeff's drive 2026-10-29): which pass.
+-- (an export, its state in M: the main chunk is at LuaJIT's 200 locals; console: beamngEarth_core.gpuTimings())
+function M.gpuTimings()
+  local dbg = Engine and Engine.Debug
+  if not (dbg and dbg.getGpuTimings) then return nil end
+  local t = {}
+  local ok, r = pcall(dbg.getGpuTimings, t)
+  if not ok then
+    if M.gpuShape == nil then M.gpuShape = 'error'; log('I', 'beamngEarth', 'gpu timings: ' .. tostring(r)) end
+    return nil
+  end
+  local src = (type(r) == 'table' and next(r) ~= nil) and r or (next(t) ~= nil and t) or nil
+  if M.gpuShape == nil then
+    M.gpuShape = src and 'table' or ('none (' .. type(r) .. ')')
+    local keys = {}
+    if src then for k, v in pairs(src) do keys[#keys + 1] = tostring(k) .. '=' .. tostring(v) end end
+    table.sort(keys)
+    log('I', 'beamngEarth', 'gpu timings: ' .. M.gpuShape ..
+      (#keys > 0 and (': ' .. table.concat(keys, ', ', 1, math.min(16, #keys))) or ''))
+  end
+  if not src then return nil end
+  local out = {}
+  for k, v in pairs(src) do if type(v) == 'number' then out[tostring(k)] = v end end
+  return out
+end
 local function noteHitch(frameMs)
   local h = { ms = math.floor(frameMs + 0.5), at = math.floor(st.clock * 10 + 0.5) / 10, mod = {} }
+  h.gpu = M.gpuTimings()
+  do                                -- the heap across the frame that just ended (gcwatch: a full collection shows)
+    local okG, a, b = pcall(require('beamngEarth/gcwatch').lastFrame)
+    if okG and a and b then h.heap = { a, b } end
+  end
   -- marks: the mod's parts in the frame that just ended (onUpdate swaps them to prevMarks after this call; reading
   -- prevMarks named the frame before it, and most Lua-led hitches showed no part at all, 2026-10-18)
   for k, v in pairs(marks) do if v >= 1 then h.mod[k] = math.floor(v * 10 + 0.5) / 10 end end
@@ -1882,6 +1918,11 @@ local function perfMachine()
   return out
 end
 local function perfFrame(ms, hrec)
+  if not st.refreshSet then        -- (the display's refresh: the frame budget of the minute line's pacing numbers)
+    st.refreshSet = true
+    local okR, hz = pcall(perflog.gameRefresh)
+    if okR and hz then perflog.setRefresh(hz) end
+  end
   local lines = perflog.frame(ms, st.clock, perfContext, hrec, marks, perfEngine)
   if hrec then                             -- (the first long LuaGC: where the heap goes, census.lua)
     local cl = require('beamngEarth/census').afterHitch(hrec.engine)
@@ -1955,9 +1996,11 @@ local function onUpdate(dtReal, dtSim)
     if not okG then look.grade.setMode('off'); log('W', 'beamngEarth', 'grade: ' .. tostring(errG) .. '; off this session') end
   end
   require('beamngEarth/enginepref').update(st.inOurLevel)      -- (the settings' object detail: our level only)
+  t = mark('ui.look', t)       -- (post effects, haze, grade: 'ui' was 27-33 ms in frames while tiles loaded, 2026-10-29)
   local stg = rawget(_G, 'beamngEarth_settings')
   if stg and stg.redirectBigMap then stg.redirectBigMap(st.inOurLevel) end
   if st.inOurLevel then gps.update(st.anchor, st.player) end
+  t = mark('ui.gps', t)
   do -- The Drive: Frederick to Castle Rock, timed (thedrive.lua; required here: the main chunk is at Lua's 200 locals)
     local thedrive = require('beamngEarth/thedrive')
     local okD, errD = pcall(thedrive.update, dtReal, dtSim, st.inOurLevel and st.player or nil,
@@ -1965,6 +2008,7 @@ local function onUpdate(dtReal, dtSim)
     if not okD then log('W', 'beamngEarth', 'the drive: ' .. tostring(errD)) end
     statusbar.setLead(thedrive.hudLine(thedrive.status()))
   end
+  t = mark('ui.drive', t)
   seasonlook.update(st.inOurLevel, st.anchor and st.anchor.lat)
   t = mark('ui', t)
   local frameMs = frameMs0
@@ -1997,9 +2041,10 @@ local function onUpdate(dtReal, dtSim)
         -- RenderShadows in one): what it listed, for the log
         local e = {}
         for k, v in pairs(cf.engine or {}) do e[#e + 1] = k .. ' ' .. tostring(v) end
-        log('W', 'beamngEarth', string.format('slow terrain commit at %s,%s: %.0f ms (%s), %s materials, new: %s',
+        log('W', 'beamngEarth', string.format('slow terrain commit at %s,%s: %.0f ms (%s), %s materials, new: %s, load %.0f ms (ter %.0f), grass: %s',
           tostring(cf.at and cf.at[1]), tostring(cf.at and cf.at[2]), cf.f[1], table.concat(e, ', '),
-          tostring(cf.mats), cf.fresh and table.concat(cf.fresh, ' ') or 'none'))
+          tostring(cf.mats), cf.fresh and table.concat(cf.fresh, ' ') or 'none', cf.load or 0, cf.ter or 0,
+          tostring(cf.grass)))
       end
     end
   end
@@ -2057,11 +2102,12 @@ local function onUpdate(dtReal, dtSim)
     end
     t = mark('player', t)
     updateWorld(dtReal)
+    pcall(groundcover.update, st.player and st.player.speed)   -- (a staged grass remake's next object, a waiting tint)
     t = mark('world', t)
     -- the roads before the far tiles: they share the governor's budget and the first to ask gets it; after a
     -- teleport the far field's hundreds of tiles took it frame after frame and the road meshes under the car
     -- came after it had passed (Brasov, Sinaia 2026-10-15: the car drove bare ground)
-    roads.update(gov, st.anchorId, st.player, M.viewAway())
+    roads.update(gov, st.anchorId, st.player, M.viewAway(), st.cam)
     gasstations.update(gov)
     t = mark('roads', t)
     farfield.update(gov, (gov.w1 or dtReal * 1000) / 1000, st.cam, st.player)

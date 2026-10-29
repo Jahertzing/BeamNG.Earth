@@ -418,6 +418,28 @@ the photo stays on Commons).
   two logs with the moment marked. It saves review.json and annotated.png in the folder; "Copy brief" copies (and
   saves as brief.md) Markdown for a thread. `tools/snapshots.py list`, `brief [ID]`, `scan` do the same from a shell.
 
+## Stall tools (the stutter thread, 2026-10-29; plan: docs/research/2026-10-29-stutter-plan.html)
+
+For what the mod's and the engine's own timers cannot see (a frame "mostly outside the mod and engine timers").
+- `tools/stallwatch.py [--minutes N] [--out DIR]`: samples the game's main thread from outside at 250 Hz
+  (SuspendThread / GetThreadContext / dbghelp StackWalk64; no symbols, no install, no admin; ~1 % of that thread).
+  `seconds.jsonl` (module shares a second: the exe, d3d12, dxgi, the NVIDIA driver nvwgf2umx, the kernel waits),
+  `stalls.jsonl` (every run of 50 ms or more in one module or one wait, with its stack as module+offset and the
+  waiter), `summary.json`. Run it in a second shell during a lap.
+- `tools/nsys_capture.py launch | start --minutes N | stop --out PATH | profile | report`: an Nsight Systems
+  capture (`--trace=dx12,wddm,nvtx`, the threads sampled) of a drive; nsys only launches a process, so the game is
+  started under it. `tools/nsys_report.py CAPTURE.sqlite`: the longest WDDM GPU packets, the D3D12 / DXGI calls of
+  10 ms or more by call, the busiest sampled threads.
+- `tools/warm_lap.py`: after a game or driver update, 8 teleport hops along the Frederick to Castle Rock route, each
+  in the day look and the night one, so every material's D3D12 pipeline is built before the first drive; prints the
+  pipeline cache files' growth.
+- `tools/gc_experiment.py`: LuaJIT's collector offline (lupa): the atomic step against the cycle length for a heap
+  and churn like the game's.
+- The perf log's own lines (perflog.lua): `perf stutter` (the first three 50-100 ms frames a minute, with the mod's
+  parts), the minute line's `stutter parts`, `pacing` (frames within the refresh's budget, at two refreshes or more,
+  jitter), `heap a -> b MB` on a LuaGC hitch, `gpu:` pass timings when the build gives them, and `slow terrain commit`
+  lines from 60 ms with what the grass did. `tools/perf_trend.py` sums them per drive.
+
 ## Reports (GitHub issues: map / performance / bug / idea; `report.lua`, 2026-10-13, kinds 2026-10-14)
 - **Ctrl+Shift+E:** captures the moment at once: a screenshot, the location (lat/lon, anchor), the
   vehicle and camera, the last ~10 s of frame times, the engine's per-system frame metrics, the fps limit
