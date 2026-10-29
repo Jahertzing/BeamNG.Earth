@@ -207,6 +207,8 @@ function M.frame(ms, now, ctx, hitch, mod, engine)
     if stuttersMin > 0 then line = line .. ' | stutters by cause: ' .. counts(causesMin.stutter, 5) end
     if c.extra and c.extra ~= '' then line = line .. ' | ' .. c.extra end
     if c.reloads and reloadsAt then line = line .. string.format(', %d collision rebuilds', c.reloads - reloadsAt) end
+    local okP, pop = pcall(c.popin or function() return '' end)
+    if okP and type(pop) == 'string' and pop ~= '' then line = line .. ' | popped in within 300 m: ' .. pop end
     reloadsAt = c.reloads
     out[#out + 1] = line
     frames, sumMin, hitchesMin, worstMin, summaryAt = {}, 0, 0, nil, now

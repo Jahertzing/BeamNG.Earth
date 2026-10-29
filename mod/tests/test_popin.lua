@@ -1,0 +1,13 @@
+-- luajit mod/tests/test_popin.lua  (popin.lua: what the mod makes near the camera, counted by kind)
+local T = dofile((arg[0]:match('^(.*)[/\\]') or '.') .. '/testlib.lua')
+local P = require('beamngEarth/popin')
+T.check(P.take() == '', 'nothing noted: empty')
+P.notePoint('deciduous', 0, 0)
+P.camera = function() return { x = 0, y = 0 } end
+P.notePoint('deciduous', 30, 40)
+P.notePoint('deciduous', 0, 120)
+P.notePoint('deciduous', 0, 900)           -- (far out: the rings' pop by design)
+P.noteBox('bld', 400, 0, 128)              -- (its nearest point 272 m)
+T.check(P.take() == 'deciduous 2 (50 m), bld 1 (272 m)', 'counted by kind with the nearest; no camera, far: not counted')
+T.check(P.take() == '', 'take starts the counts again')
+T.done('test_popin')

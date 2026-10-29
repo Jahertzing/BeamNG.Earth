@@ -7,6 +7,7 @@
 -- hundred per frame (~19 us each, 2026-10-13 probe).
 local M = {}
 local vienna = require('beamngEarth/vienna_convention_speed_signs')
+local popin = require('beamngEarth/popin')
 
 M.PER_FRAME = 250       -- items made or removed per frame at most
 M.SLOW_TYPE_MS = 100     -- an item type's first making (its shape loaded) this slow: logged with its name
@@ -876,7 +877,8 @@ function M.update(anchorId, player, view, frameMs)
           if allow(sh) then
             local d = data()
             if not d then stop(t, i, skipped, want, band, near); return end      -- (a new Forest: next frame)
-            if t.made[i] then removeItem(d, t.made[i], t.madeShape[i]); budget = budget - 1 end  -- solid <-> not
+            if t.made[i] then removeItem(d, t.made[i], t.madeShape[i]); budget = budget - 1  -- solid <-> not
+            else popin.notePoint(g, f[b + F_X], f[b + F_Y]) end                                -- (new: popin.lua)
             t.made[i] = makeItem(d, t, i, sh, sc, solid, g, t.variant)
             t.solid[i] = (t.made[i] and solid) or nil      -- true or nil
             t.madeShape[i] = t.made[i] and sh or nil
