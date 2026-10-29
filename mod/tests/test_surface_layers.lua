@@ -110,9 +110,11 @@ do
     for _, o in pairs(S.objects) do if o.class == 'Material' and tostring(o.name):find('^' .. gc.TINT_PREFIX) then n = n + 1 end end
     return n
   end
+  T.check(gc.TINT == true, 'tint on by default (checked in game 2026-10-29)')
+  gc.TINT = false
   T.check(gc.ensure() == true, 'ensure makes the objects ' .. tostring(gc.status().error))
-  T.check(gc.TINT == false and gc.setTint({ 140, 120, 80 }) == false and longObj().fields.material == 'm_long_grass_distant',
-    'tint off (the default): the stock material')
+  T.check(gc.setTint({ 140, 120, 80 }) == false and longObj().fields.material == 'm_long_grass_distant',
+    'tint off: the stock material')
   gc.setTintEnabled(true)
   local copy = scenetree.findObject(longObj().fields.material)
   T.check(longObj().fields.material:find('^' .. gc.TINT_PREFIX) ~= nil and copy ~= nil, 'tint on: made again on a tinted copy')

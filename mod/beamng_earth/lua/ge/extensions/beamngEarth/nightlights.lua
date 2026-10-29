@@ -7,6 +7,7 @@ local M = {}
 
 local nightglow = require('beamngEarth/nightglow')     -- a city's sky glow, the Castle Rock star
 local nightambient = require('beamngEarth/nightambient')   -- the night's ambient (a city's sky light)
+local headlights = require('beamngEarth/headlights')       -- the player car's headlamps, brighter
 
 M.CHECK_S = 1.0
 -- the materials and their night glow (emissive factor, nits: West Coast USA's highrise windows glow at 200)
@@ -389,6 +390,7 @@ function M.update(anchor, anchorId)
   pcall(nightglow.update, anchor, anchorId, M.night)
   local okA = pcall(nightambient.update, anchor, anchorId, M.night)
   if not okA then M.errors = M.errors + 1 end
+  if not pcall(headlights.update) then M.errors = M.errors + 1 end
   local now = os.clockhp()
   if now - lastCheck >= M.CHECK_S then
     lastCheck = now
@@ -419,6 +421,7 @@ function M.reset()
   stockSaved = {}
   nightglow.reset()
   nightambient.reset()
+  headlights.reset()
   M.night, lastCheck, lastLights = nil, -1e9, -1e9
   lit = {}
   for _, pool in pairs(pools) do

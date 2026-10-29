@@ -738,6 +738,7 @@ class MapData:
                     self._rails(key, layer, cd.layers[layer])
                     if layer == "roads":        # (the bridges the map lacks, found when its ranges are first asked)
                         cd.layers[layer].__dict__["_bnge_gradesep"] = gradesep.hook(self, key)
+                        cd.layers[layer].__dict__["_bnge_neighbours"] = gradesep.neighbours_hook(self, key)
                     cd.layers[layer].__dict__["_bnge_cell"] = (str(key), layer, json.dumps(self.versions(),
                                                                                            sort_keys=True))
                 elif "missing" in arrays:

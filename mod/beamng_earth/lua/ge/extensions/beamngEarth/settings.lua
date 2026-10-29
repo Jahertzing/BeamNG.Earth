@@ -68,7 +68,7 @@ M.SCHEMA = {
   -- the grass grain in the ground tiles past the 3D grass (satmat.lua GRASS_LAYER; the server's grass masks)
   groundGrass = { kind = 'bool', default = true, label = 'Grass in the distant ground' },
   -- the 3D grass in the ground photo's colour (groundcover.lua setTint; the server's surface.grass_tint, detail mode)
-  grassTint = { kind = 'bool', default = false, label = "Grass takes the ground's colour" },
+  grassTint = { kind = 'bool', default = true, label = "Grass takes the ground's colour" },
   -- grass cards on grassland from the 3D grass out to ~1 km (roads.lua M.grassCards; the server's grasscards.py)
   grassCards = { kind = 'bool', default = true, label = 'Grass to 1 km' },
   -- BeamNG's own AI traffic on our roads when the level-start configurator leaves it to the settings (its default):
@@ -96,6 +96,8 @@ M.SCHEMA = {
   -- the night's ambient light (nightambient.lua: a city's sky light, a starlit country's) and the lamps' fill
   nightAmbient = { kind = 'enum', default = 'normal', values = { 'off', 'dim', 'normal', 'bright' },
     label = 'Night ambient light' },
+  -- the player car's headlamps (headlights.lua): their brightness and reach times the car's own
+  headlights = { kind = 'enum', default = 'bright', values = { 'stock', 'bright', 'brighter' }, label = 'Headlights' },
   -- Earth imagery on supported vehicle dashboard screens (dashboard.lua)
   dashboardSatellite = { kind = 'bool', default = true, label = 'Satellite on dashboard screens' },
   hudVisible = { kind = 'bool', default = false, label = 'Status HUD at level start' },
@@ -123,7 +125,7 @@ M.SCHEMA = {
 }
 M.ORDER = { 'theDriveTime', 'theDriveAutodrive', 'rebaseDistance', 'viewDistanceMode', 'viewDistanceKm', 'hazeStrength',
   'colorGrade', 'renderFidelity', 'skyMode', 'clouds', 'weatherMode', 'realGravity', 'groundCover', 'groundCoverDensity', 'groundCoverDistance',
-  'detailDistance', 'groundGrass', 'grassTint', 'grassCards', 'rocks', 'roads', 'cityGlow', 'nightAmbient', 'aiTraffic', 'trafficPopulation', 'parkedCars', 'streetLife', 'staticCars', 'drcog', 'lidarHeights', 'dashboardSatellite', 'hudVisible', 'statusBar',
+  'detailDistance', 'groundGrass', 'grassTint', 'grassCards', 'rocks', 'roads', 'cityGlow', 'nightAmbient', 'headlights', 'aiTraffic', 'trafficPopulation', 'parkedCars', 'streetLife', 'staticCars', 'drcog', 'lidarHeights', 'dashboardSatellite', 'hudVisible', 'statusBar',
   'placeNamesOnline', 'creditsVisible', 'beammpOnLaunch',
   'creditsCorner', 'creditsSize', 'cacheCapGb', 'devOutlineKm', 'devMapKm' }
 
@@ -308,6 +310,7 @@ M.APPLY = {
     require('beamngEarth/nightambient').setMode(v)
     require('beamngEarth/nightlights').applyLook()
   end,
+  headlights = function(v) require('beamngEarth/headlights').setMode(v) end,
   rocks = function(v) require('beamngEarth/trees').setGroupEnabled({ 'rock', 'desert_rock' }, v) end,
   aiTraffic = function(v) require('beamngEarth/navgraph').setMode(v) end,     -- (from the next level start)
   trafficPopulation = function(v) require('beamngEarth/navgraph').setPopulation(v) end,   -- (from the next level start)

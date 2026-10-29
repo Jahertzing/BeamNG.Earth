@@ -100,6 +100,15 @@ class GraphTest(unittest.TestCase):
         self.assertTrue(all(e[6] == 0.9 for e in street))
         self.assertLess((navgraph.DRIVE["service"][0] / 0.9) ** 2, 0.02)
 
+    def test_the_graph_leads_a_fast_player(self):
+        # (bench8: the graphs fell behind a 75 mph player until their end stopped every car)
+        self.assertEqual(navgraph.lead(10.0, 20.0, 0.0, 0.0), (10.0, 20.0))
+        x, y = navgraph.lead(0.0, 0.0, 0.0, -10.0)
+        self.assertAlmostEqual(y, -10.0 * navgraph.LEAD_S)
+        x, y = navgraph.lead(0.0, 0.0, 33.5, 0.0)
+        self.assertAlmostEqual(x, navgraph.LEAD_MAX_M)
+        self.assertLess(navgraph.LEAD_MAX_M, navgraph.WINDOW_M - 300, "the graph still reaches well behind the player")
+
     def test_not_drivable_and_window(self):
         g = graph([[(0, 0), (50, 0)], [(0, 10), (50, 10)], [(0, 20), (50, 20)], [(5000, 0), (5100, 0)]],
                   ["footway", "service", "residential", "residential"], subclass=[(1, "parking_aisle")])

@@ -103,9 +103,12 @@ function M.nextEdge(adj, nodes, from, at, u, drivIn)
 end
 
 -- Pure: a ghost's world position and heading (x, y, z, dx, dy) on graph nodes: s m along from -> to (link l), in lane
--- `lane` (1 = the kerb side), driving on the left when left.
+-- `lane` (1 = the kerb side), driving on the left when left. nil when a node of it is not in nodes: a real car's ghost
+-- whose edge a new graph lacks is kept until its car places it again (setGraph, trackReal), and on dfc2c2d6 every
+-- update died on it (population.lua:110, "attempt to index local 'pb' (a nil value)", every 0.5 s of bench9).
 function M.pose(nodes, from, l, s, lane, left)
-  local pa, pb = nodes[from], nodes[l.to]
+  local pa, pb = nodes[from], l and nodes[l.to]
+  if not (pa and pb) then return nil end
   local t = math.max(0, math.min(1, s / l.len))
   local dx, dy = (pb[1] - pa[1]) / l.len, (pb[2] - pa[2]) / l.len
   local x, y, z = pa[1] + (pb[1] - pa[1]) * t, pa[2] + (pb[2] - pa[2]) * t, pa[3] + (pb[3] - pa[3]) * t
@@ -269,7 +272,7 @@ function M.rebalance(px, py)
       local it = pick(list, total, P.rnd())
       local gh = newGhost(it.from, it.link, P.rnd() * it.link.len, it.link.speed * 0.9)
       local x, y = M.pose(nodes, gh.from, gh.link, gh.s, gh.lane, P.left)
-      if (x - px) ^ 2 + (y - py) ^ 2 >= M.ENTRY_MIN_M ^ 2 then
+      if x and (x - px) ^ 2 + (y - py) ^ 2 >= M.ENTRY_MIN_M ^ 2 then
         P.ghosts[#P.ghosts + 1] = gh
         n = n + 1
         P.stats.seeded = P.stats.seeded + 1
@@ -281,7 +284,7 @@ function M.rebalance(px, py)
     for i, gh in ipairs(P.ghosts) do
       if not gh.real then
         local x, y = M.pose(nodes, gh.from, gh.link, gh.s, gh.lane, P.left)
-        far[#far + 1] = { i = i, d2 = (x - px) ^ 2 + (y - py) ^ 2 }
+        far[#far + 1] = { i = i, d2 = x and (x - px) ^ 2 + (y - py) ^ 2 or math.huge }
       end
     end
     table.sort(far, function(a, b) return a.d2 > b.d2 end)
@@ -334,7 +337,7 @@ function M.step(dt, px, py)
       end
       if px then
         local x, y = M.pose(nodes, g.from, g.link, g.s, g.lane, P.left)
-        if (x - px) ^ 2 + (y - py) ^ 2 > M.BEHIND_M ^ 2 then recycle(g, px, py) end
+        if not x or (x - px) ^ 2 + (y - py) ^ 2 > M.BEHIND_M ^ 2 then recycle(g, px, py) end
       end
     end
   end
@@ -347,9 +350,9 @@ function M.chooseReal(ghosts, nodes, k, px, py, b, left)
   local cand = {}
   for _, g in ipairs(ghosts) do
     local x, y = M.pose(nodes, g.from, g.link, g.s, g.lane, left)
-    local onGround = not b or (x >= b[1] + M.GROUND_IN_M and x <= b[3] - M.GROUND_IN_M and
-                               y >= b[2] + M.GROUND_IN_M and y <= b[4] - M.GROUND_IN_M)
-    local d2 = (x - px) ^ 2 + (y - py) ^ 2
+    local onGround = x ~= nil and (not b or (x >= b[1] + M.GROUND_IN_M and x <= b[3] - M.GROUND_IN_M and
+                                             y >= b[2] + M.GROUND_IN_M and y <= b[4] - M.GROUND_IN_M))
+    local d2 = x and (x - px) ^ 2 + (y - py) ^ 2 or math.huge
     if onGround and d2 <= M.REAL_M ^ 2 then cand[#cand + 1] = { g = g, d2 = d2 } end
   end
   table.sort(cand, function(a, b2) return a.d2 < b2.d2 end)
@@ -410,6 +413,7 @@ end
 local function place(id, g)
   local tr = gameplay_traffic
   local x, y, z, dx, dy = M.pose(P.graph.nodes, g.from, g.link, g.s, g.lane, P.left)
+  if not x then return false end
   local pos = vec3(x, y, z + 0.3)
   local ok = pcall(function()
     local rot = quatFromDir(vec3(dx, dy, 0), map.surfaceNormal and map.surfaceNormal(pos) or vec3(0, 0, 1))
@@ -435,8 +439,8 @@ function M.spare(b, px, py, fx, fy)
     local s = P.rnd() * it.link.len
     local g = newGhost(it.from, it.link, s, it.link.speed * 0.9)
     local x, y = M.pose(nodes, g.from, g.link, g.s, g.lane, P.left)
-    local d2 = (x - px) ^ 2 + (y - py) ^ 2
-    if M.onGround(b, x, y) and d2 >= M.SPARE_M ^ 2 and d2 <= M.REAL_M ^ 2 then
+    local d2 = x and (x - px) ^ 2 + (y - py) ^ 2 or math.huge
+    if x and M.onGround(b, x, y) and d2 >= M.SPARE_M ^ 2 and d2 <= M.REAL_M ^ 2 then
       if not fx or (x - px) * fx + (y - py) * fy < 0 then return g end
       best = best or g
     end
@@ -534,7 +538,7 @@ function M.update(b)
   for _, g in ipairs(P.ghosts) do
     if want[g] and not g.real then
       local x, y = M.pose(nodes, g.from, g.link, g.s, g.lane, P.left)
-      need[#need + 1] = { g = g, d2 = (x - pp.x) ^ 2 + (y - pp.y) ^ 2 }
+      if x then need[#need + 1] = { g = g, d2 = (x - pp.x) ^ 2 + (y - pp.y) ^ 2 } end
     end
   end
   table.sort(need, function(a, c) return a.d2 < c.d2 end)

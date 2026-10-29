@@ -86,6 +86,59 @@ na.update(anchor, 1, true)
 na.reset()
 T.check(fills() == 0 and #S.liveOf('PointLight') == 0, 'reset: the sky light gone')
 T.check(le:getField('highlightProtectStrength') == '0.75' and le.exposureBiasEV == 0.5, 'reset: the stock exposure back')
+
+-- the properties: NIGHT_PROPS at night, back by day and when no longer asked for
+local ev0 = na.NIGHT_EV
+na.NIGHT_EV = nil
+le.targetLuminance, le.autoTargetLuminance, le.autoExposure, le.manualEV = 0.2, true, true, 4.4
+na.NIGHT_PROPS = { targetLuminance = 0.6, autoTargetLuminance = false }
+clock = clock + 3
+na.update(anchor, 1, true)
+T.check(le.targetLuminance == 0.6 and le.autoTargetLuminance == false, 'NIGHT_PROPS at night')
+T.check(na.status().exposure.target == 0.6, 'status: the exposure')
+na.NIGHT_PROPS = {}
+clock = clock + 3
+na.update(anchor, 1, true)
+T.check(le.targetLuminance == 0.2 and le.autoTargetLuminance == true, 'no longer asked for: the stock values back')
+na.NIGHT_PROPS = { targetLuminance = 0.6 }
+clock = clock + 3
+na.update(anchor, 1, true)
+clock = clock + 3
+na.update(anchor, 1, false)
+T.check(le.targetLuminance == 0.2, 'day: the stock values back')
+na.NIGHT_PROPS = {}
+na.reset()
+
+-- the night's exposure by hand: by the city share, eased from where the auto exposure stood, auto again by day
+na.NIGHT_EV = ev0
+T.check(na.nightEV(1, 'normal') == ev0.urban and na.nightEV(0, 'normal') == ev0.rural, 'nightEV: urban, rural')
+T.check(math.abs(na.nightEV(0.5, 'normal') - (ev0.urban + ev0.rural) / 2) < 1e-9, '... between by the share')
+T.check(na.nightEV(0, 'bright') < na.nightEV(0, 'normal') and na.nightEV(0, 'dim') > na.nightEV(0, 'normal'),
+  '... bright opens it (lower EV), dim closes it')
+T.check(na.nightEV(0, 'off') == nil and na.nightEV(nil, 'normal') == nil, '... none when off or no share yet')
+T.check(na.easeEV(4, 1, 1, 0.5) == 3.5 and na.easeEV(4, 3.9, 1, 0.5) == 3.9 and na.easeEV(1, 4, 2, 0.5) == 2,
+  'easeEV: at most rate * dt')
+le.autoExposure, le.manualEV = true, 5.4
+na.setMode('normal')
+clock = clock + 3
+na.update(anchor, 1, true)             -- (the share is measured at this check: nothing by hand before it)
+T.check(le.autoExposure == true, 'no share yet: still auto')
+clock = clock + 0.25
+na.update(anchor, 1, true)
+T.check(le.autoExposure == false and le.manualEV == 5.4, 'night: by hand, from where the auto exposure stood')
+for _ = 1, 8 do clock = clock + 0.25; na.update(anchor, 1, true) end
+T.check(math.abs(le.manualEV - ev0.urban) < 1e-9, 'downtown: eased to the urban EV: ' .. le.manualEV)
+T.check(na.status().heldEV == le.manualEV, 'status: the EV held')
+clock = clock + 3
+na.update(anchor, 1, false)
+T.check(le.autoExposure == true, 'day: the auto exposure back')
+clock = clock + 3
+na.update(anchor, 1, true)
+clock = clock + 0.25
+na.update(anchor, 1, true)
+T.check(le.autoExposure == false, 'night again: by hand')
+na.reset()
+T.check(le.autoExposure == true, 'reset: the auto exposure back')
 camAt = vec3(0, 0, 1600)
 
 -- the lamps' fill: under the nearest street lamps (with an arm), toward the road

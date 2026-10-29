@@ -68,9 +68,10 @@ class BudgetTest(unittest.TestCase):
                 self.assertFalse(budget.large(64.0), "nor the large one")
                 self.assertFalse(budget.apply())
                 self.assertLessEqual(dem.MEM_TILES, budget.BAKE_DEM_TILES)
-                self.assertLessEqual(mapdata.MEM_MB, budget.BAKE_MAPDATA_MB)
                 self.assertLessEqual(imagery.MEM_TILES, budget.BAKE_IMAGERY_TILES)
-                self.assertLessEqual(roadwidth.WALL_CELLS, budget.BAKE_WALL_CELLS)
+                if (budget.total_gb() or 0) >= budget.LARGE_GB:
+                    self.assertGreaterEqual(mapdata.MEM_MB, budget.LARGE_MAPDATA_MB, "the road tiles' cells stay")
+                    self.assertGreaterEqual(roadwidth.WALL_CELLS, budget.LARGE_WALL_CELLS)
             with unittest.mock.patch.dict(os.environ, {"BNGE_BUDGET": "desktop"}):
                 self.assertFalse(budget.bake())
         finally:

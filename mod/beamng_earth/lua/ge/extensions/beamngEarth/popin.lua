@@ -19,7 +19,8 @@ local function note(kind, d)
 end
 
 local function cam()
-  local ok, c = pcall(M.camera or function() return nil end)
+  if not M.camera then return nil end
+  local ok, c = pcall(M.camera)
   return ok and c or nil
 end
 

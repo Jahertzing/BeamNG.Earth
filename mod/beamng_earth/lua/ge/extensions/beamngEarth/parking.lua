@@ -87,10 +87,16 @@ end
 -- The player teleported: the parked cars go inactive (their old positions have no ground) and come back on the
 -- new place's spots once it has them.
 local heldActive = nil
+local restore = nil     -- after a teleport: { n = cars active so far, target = cars to bring back, final = active amount }
+local lastRestore = -math.huge
 function M.onTeleport()
   scatterPending = true
   local gp = gameplay_parking
-  if gp and gp.getState() and not heldActive then
+  if restore and gp then                 -- (another teleport mid-way: the amount from before the first)
+    heldActive, restore = restore.final, nil
+    pcall(gp.setActiveAmount, 0)
+    M.clearNearBan()
+  elseif gp and gp.getState() and not heldActive then
     local vars = gp.getParkingVars and gp.getParkingVars() or {}
     heldActive = vars.activeAmount or math.huge
     pcall(gp.setActiveAmount, 0)
@@ -290,7 +296,7 @@ M.ACTIVATE_MIN_M = 100  -- (the stock pool's activation moves a car to a spot th
 M.MOVES_PER_PASS = 1
 M.GUARD_BACKLOG_S = 0.1
 -- ms spent this frame, by part (core.lua adds them to the frame's marks as parking.<part>, and zeroes them)
-M.parts = { view = 0, guard = 0, rebuild = 0, start = 0 }
+M.parts = { view = 0, guard = 0, rebuild = 0, spawn = 0, scatter = 0 }
 
 -- Returns the number of moves left waiting for the next pass.
 local function guard(player)
@@ -394,6 +400,11 @@ function M.update(aid, player, blk, gov)
     M.parts.guard = M.parts.guard + sw()
   end
   if player then lastPlayer = player end
+  if restore and gameplay_parking and not scatterPending then
+    local sw = stopwatch.new()
+    M.stepRestore(gameplay_parking, player)
+    M.parts.scatter = M.parts.scatter + sw()
+  end
   hookSetup()
   if not M.enabled or not player or not dirty or not next(spots) then return end
   -- no parked cars (the player's choice, or removed): the sites only every REBUILD_OFF_S (a rebuild cost 24 ms every
@@ -420,13 +431,16 @@ function M.update(aid, player, blk, gov)
   end
   local gp = gameplay_parking
   if not gp or near < M.START_MIN then return end
-  sw = stopwatch.new()
   M.start(gp, player)
-  M.parts.start = M.parts.start + sw()
 end
 
 -- The parked cars' start (the first rebuild with enough spots near), or the scatter a teleport left pending.
+-- After a teleport the stock pool's active amount comes back one car at a time, RESTORE_S apart (each car it
+-- activates goes to a free spot 100 m or more away: gameplay/parking.lua onVehicleActiveChanged), not all at once
+-- with a stock scatterParkedCars on top: that was one frame of 135 ms (south Denver 2026-10-29, parking.start).
+M.RESTORE_S = 0.1
 function M.start(gp, player)
+  local sw = stopwatch.new()
   if not started then
     started = true
     -- the player's level-start choice (navgraph.choice; the radial menu works at any time)
@@ -438,13 +452,62 @@ function M.start(gp, player)
       if okS and gp.setParkingVars then pcall(gp.setParkingVars, { radiusCoef = M.RADIUS_COEF }) end
     end
     scatterPending = false
+    M.parts.spawn = M.parts.spawn + sw()
   elseif scatterPending then
     scatterPending = false
-    if heldActive then
+    local list = gp.getParkedCarsList and gp.getParkedCarsList() or {}
+    if heldActive and gp.getState() then
+      restore = { n = 0, target = math.min(heldActive, #list), final = heldActive }
+      lastRestore = -math.huge
+      M.stepRestore(gp, player)
+    elseif heldActive then
       pcall(gp.setActiveAmount, heldActive)
-      heldActive = nil
     end
-    if gp.getState() then pcall(gp.scatterParkedCars) end
+    heldActive = nil
+    M.parts.scatter = M.parts.scatter + sw()
+  end
+end
+
+-- One more parked car active (restore), at most every RESTORE_S.
+-- Each car comes onto a spot out of view (holdView first: the guard's last pass may be another frame's or another
+-- heading's) and, while enough free ones lie past it, ACTIVATE_MIN_M or more from the player: the stock activation's own
+-- 100 m put 8 of 16 at 77-93 m from the player (bench8, 2026-10-29; its distance is from elsewhere). The spots nearer
+-- are banned for the restore only, and never when that would leave the cars none (the stock fallback is any road).
+local nearBanned = {}   -- spot object -> true: banned by the restore (nearer than ACTIVATE_MIN_M)
+function M.clearNearBan()
+  for ps in pairs(nearBanned) do
+    local tags = ps.customFields and ps.customFields.tags
+    if tags and not banned[ps] then tags.banned = nil end
+  end
+  nearBanned = {}
+end
+local clearNearBan = M.clearNearBan
+local function banNear(player, need)
+  if not player or M.freeNear(player, M.START_M, M.ACTIVATE_MIN_M) < need then return clearNearBan() end
+  local m2 = M.ACTIVATE_MIN_M * M.ACTIVATE_MIN_M
+  for _, ps in pairs(objs) do
+    local p = ps.pos
+    local tags = ps.customFields and ps.customFields.tags
+    if p and tags and not tags.banned and (p.x - player.x) ^ 2 + (p.y - player.y) ^ 2 < m2 then
+      tags.banned = true
+      nearBanned[ps] = true
+    end
+  end
+end
+
+function M.stepRestore(gp, player)
+  if not restore or os.clock() - lastRestore < M.RESTORE_S then return end
+  lastRestore = os.clock()
+  pcall(holdView, nil, {})
+  banNear(player, restore.target - restore.n)
+  restore.n = restore.n + 1
+  if restore.n >= restore.target then
+    pcall(gp.setActiveAmount, restore.final)
+    restore = nil
+    clearNearBan()
+    pcall(holdView, nil, {})
+  else
+    pcall(gp.setActiveAmount, restore.n)
   end
 end
 
@@ -461,6 +524,8 @@ function M.reset()
   hidden = {}
   banned, held, spotAt = {}, {}, {}
   backlog = 0
+  restore, lastRestore = nil, -math.huge
+  nearBanned = {}
   box, lastGuard, heldActive = nil, -math.huge, nil
   started, scatterPending = false, false
   lastPlayer = nil

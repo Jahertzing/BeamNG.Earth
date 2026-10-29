@@ -122,3 +122,49 @@ class RegionGraderTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class SharedPlansTest(unittest.TestCase):
+    """A map cell is planned once, by the region holding its centre; the other regions take it moved into their frame
+    (regiongrade.SHARE_PLANS: downtown Denver on a four-region corner planned every cell four times)."""
+
+    def test_each_cell_planned_once_and_moved(self):
+        import threading
+        import mapcells
+        made = []
+
+        class G:
+            def __init__(self, frame):
+                self.frame, self.cells, self.keeps, self.covers, self.opens = frame, {}, {}, {}, {}
+                self.lock = threading.Lock()
+
+            def _make_cell(self, key):
+                made.append(self.frame)
+                la, lo = mapcells.CellKey(*key).center()
+                e, n, _ = self.frame.geodetic_to_enu(np.array([la, la]), np.array([lo, lo + 0.001]), 0.0)
+                xy = np.stack([np.asarray(e), np.asarray(n)], 1)
+                return ([("road", grading.Plan(xy, np.array([5.0, 6.0]), 4.0))], [(xy, 2.0)], [], [])
+
+            def _cell_plans(self, key):     # (grading.Grader's: made through _make_cell, which the region patches)
+                if key not in self.cells:
+                    got = self._make_cell(key)
+                    if got is None:
+                        return []
+                    self.cells[key], self.keeps[key], self.covers[key], self.opens[key] = got
+                return self.cells[key]
+        rg = regiongrade.RegionGrader(G)
+        key = mapcells.cell_of(39.705, -105.005)
+        la, lo = mapcells.CellKey(*key).center()
+        own = regiongrade.region_of(la, lo)
+        other = (own[0] + 1, own[1])
+        p_other = rg.grader(*other)._cell_plans(key)
+        p_own = rg.grader(*own)._cell_plans(key)
+        self.assertEqual(len(made), 1, "planned once, by the owner")
+        self.assertIs(made[0], rg.grader(*own).frame)
+        # the same ground points in each frame
+        g_o, g_t = rg.grader(*own), rg.grader(*other)
+        a = g_o.frame.enu_to_geodetic(p_own[0][1].xy[:, 0], p_own[0][1].xy[:, 1], 0.0)
+        b = g_t.frame.enu_to_geodetic(p_other[0][1].xy[:, 0], p_other[0][1].xy[:, 1], 0.0)
+        np.testing.assert_allclose(np.asarray(a[:2]), np.asarray(b[:2]), atol=1e-9)
+        np.testing.assert_allclose(p_other[0][1].z, [5.0, 6.0])
+        self.assertEqual(len(g_t.keeps[key]), 1)
