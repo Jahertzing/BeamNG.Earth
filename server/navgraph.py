@@ -526,6 +526,23 @@ def region_near(db, lat, lon):
 
 
 REBUILD_M = 400.0           # a new graph once the player is this far from the last one's centre
+# The graph is built round a point ahead of the player at speed: LEAD_S of its velocity, at most LEAD_MAX_M. A build
+# can wait a long while behind the road tiles in a road process (blockworker.navgraph), and the graph it brings is the
+# one round where the player was when it was asked for: on I-25 at 75 mph the graphs fell ever further behind (bench8,
+# 2026-10-29: the cars' share of the graph 1135, 1074, 1048, 672, 559, 438 nodes, one graph in 80 s), its southern end
+# came within the cars' plan, and every car, the player's autodrive too, stopped at it for 45 s (40.0700,-104.9807,
+# the "trouble spot" of bench3, 4 and 8). Behind, the block keeps ~1.5 km; the graph then reaches 1100 - 500 m of it.
+LEAD_S = 15.0
+LEAD_MAX_M = 500.0
+
+
+def lead(x, y, vx, vy):
+    """The point the graph is built round for a player at (x, y) moving (vx, vy) m/s: LEAD_S ahead, LEAD_MAX_M at most."""
+    dx, dy = vx * LEAD_S, vy * LEAD_S
+    d = math.hypot(dx, dy)
+    if d > LEAD_MAX_M:
+        dx, dy = dx * LEAD_MAX_M / d, dy * LEAD_MAX_M / d
+    return x + dx, y + dy
 
 
 def write(out_dir, vfs_dir, aid, serial, graph):
