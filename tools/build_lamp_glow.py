@@ -30,8 +30,9 @@ HIDDEN_R = 0.01             # m: the speck drawn near the camera
 # level (lod.lua: 3 for Far, the default, 4 for Max), and every switch below moves out with it. With the speck to 60 m
 # at 2, Far kept it to 90 m and Max to 120 m, past the ~60 m where the edge-on lens is still seen: lamps between there
 # and the first ball showed nothing (the user, 2026-10-29: "some lights dont appear until i get within 100m"). From
-# 40 m the speck ends at 60 m under Far; the balls, kept longer at higher detail, are still ~3 px when they hand over.
-NEAR_M = 40.0               # m: the speck nearer (the lens shows there), at the game's detail
+# 30 m the speck ends at 45 m under Far and 60 m under Max; the balls, kept longer at higher detail, are still ~3 px
+# (Far) to ~2.5 px (Max) when they hand over.
+NEAR_M = 30.0               # m: the speck nearer (the lens shows there), at the game's detail
 MIN_PX = 5.0                # px: a ball's width on screen when the next, bigger one takes over, at the game's detail
 SCREEN_PX = 1130.0          # px per radian on screen: 1440 pixels high at the game's 65-degree field of view
 # The engine's detail size per (shape radius / distance): measured on the PC (2560 x 1440, mesh quality high, its
