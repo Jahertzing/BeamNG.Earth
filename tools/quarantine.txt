@@ -1,0 +1,5 @@
+# Tests known to fail, one a line: "<test module>: <why, since when, who decides>". tools/lua_tests.py and
+# tools/run_tests.py still run them and print their result as KNOWN, but they do not fail the run (tools/gate.py).
+# Keep this short: a line here is a bug to fix or a test to change, not a place to leave one.
+test_bmplaunch: LinuxBuild.test_built_from_the_passing_commit builds BeamMP in a podman container, which this PC has not got; the same failure in main's run of 2026-10-27. The test should skip without podman or docker. Added 2026-10-28.
+test_roads: 2 checks fail ("then the pending rebuild runs", "dropped tile: mesh deleted, collision reloaded"); failing since at least 2026-10-22 (checked at every roads.lua commit since), unseen because no luajit ran on the PC; the roads thread decides whether roads.lua or the test is right. Added 2026-10-28.

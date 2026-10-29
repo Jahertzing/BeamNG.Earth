@@ -1,0 +1,17 @@
+# Lint settings for tools/lint.py (ruff: the pyflakes rules, so an undefined name, a redefinition or a syntax error
+# is a finding before a branch is handed over). Nothing here builds or packages anything: tools/package.py does that.
+[tool.ruff]
+line-length = 120
+target-version = "py310"
+extend-exclude = [".venv", "build", "dist", "native", "docs", "probes", "tools/deshadow_prototype", "tools/roadstudy"]
+
+[tool.ruff.lint]
+# E9: syntax and read errors. F5/F6/F7/F8: broken % and .format calls, duplicate dict keys, `is` with a literal,
+# return / break outside a function or loop, redefinitions, undefined names, unused imports.
+select = ["E9", "F5", "F6", "F7", "F8"]
+# F841 unused local: often a deliberate unpack. F541 an f-string without a placeholder: harmless.
+ignore = ["F841", "F541"]
+
+[tool.ruff.lint.per-file-ignores]
+# the tests import fixtures with *; the first imports of a test module are its subject
+"server/tests/*" = ["F403", "F405"]

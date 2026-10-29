@@ -5,6 +5,16 @@ What changed in each release of BeamNG.Earth, newest first.
 ## Unreleased (fork)
 
 ### New
+- **The gate** (`tools/gate.py`, developers): one command before a branch is handed over. `tools/lint.py` (ruff's
+  pyflakes rules and duplicate definitions over the Python; every mod Lua file compiled under LuaJIT, so the
+  200-locals limit and a syntax error are findings, plus duplicate functions), `tools/lua_tests.py` (the mod's Lua
+  tests on a machine without luajit: LuaJIT inside Python through lupa, with test_scoping's bytecode listing answered
+  in-process, so a function reading the nil global of a later local is caught) and `tools/run_tests.py --changed`
+  (only the Python test modules the diff touches; `--full` for the whole suite). Known failures are listed with their
+  reason in `tools/quarantine.txt`. `server/requirements-dev.txt` (lupa, ruff, psutil), `pyproject.toml` (the ruff
+  rules). `tools/perf_trend.py`: the perflog's minutes per drive from the server log (fps, 1 % low, hitches a minute,
+  the worst frame and its causes over the driving minutes), a trend page, the newest drive against the one before and
+  a frame-time budget (`--budget` exits 1 when it is broken).
 - **The Drive**: one key, Stream Deck button or settings-page button for a timed drive from Old Town Frederick to
   downtown Castle Rock, either through downtown Denver past Union Station (Ctrl+Alt+D) or straight down I-25
   (Ctrl+Alt+I; no E-470 or other toll roads). It puts the car in Frederick, sets

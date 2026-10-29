@@ -246,6 +246,16 @@ whenever `main` gets a `VERSION` without one. Release zip of the source: `python
 Tests: `cd server && python3 -m unittest discover -s tests -t tests` and
 `cd mod/tests && for f in test_*.lua; do luajit $f; done`.
 
+Before a branch is handed over, the gate (`pip install -r server/requirements-dev.txt` once): `python tools/gate.py`
+runs the static checks (`tools/lint.py`: ruff's pyflakes rules and duplicate definitions over the Python; every mod
+Lua file compiled under LuaJIT, so a syntax error or the 200-locals limit shows here, and duplicate functions), the
+mod's Lua tests without a luajit binary (`tools/lua_tests.py`: LuaJIT inside Python through lupa, one process a file)
+and the Python test modules the diff against `origin/main` touches (`tools/run_tests.py --changed`). `--full` runs
+the whole Python suite (the nightly). Known failures live in `tools/quarantine.txt` with their reason; they are
+reported, not failing. After a drive or a ghost drive, `python tools/perf_trend.py <server.log> --html out.html
+--budget` tables the perflog's minutes per drive (fps, 1 % low, hitches a minute, the worst frame and its causes over
+the driving minutes), compares the newest drive with the one before, and exits 1 when it breaks the budget.
+
 ## Multiplayer (BeamMP)
 
 BeamNG.Earth runs on [BeamMP](https://beammp.com/) servers (in testing): drive the real world together.
