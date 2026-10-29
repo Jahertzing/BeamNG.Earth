@@ -5,10 +5,15 @@
 -- ~35 ms for 6k nodes offline; the raycasts onto a block's roads, buildings and trees are the rest.
 --
 -- This does the same steps on the new nodes in a coroutine, a few ms a frame (navgraph.lua steps it with the clip),
--- while the old graph stays the game's, then puts the result in at once: map.lua's own locals (the map table, the path
--- graph, the k-d trees, the radius, the serial and the road rules) are set through its loadMap's upvalues, the
--- vehicles' copy goes into the mailbox and onNavgraphReloaded is fired, as loadMap does. map.lua 0.40's names are
--- checked first (M.internals); a game whose loadMap has other locals keeps map.reset in one frame.
+-- while the old graph stays the game's, then puts the result in at once, as loadMap does at its end: the vehicles'
+-- copy into the mailbox and onNavgraphReloaded fired. map.lua's own locals are reached through its loadMap's upvalues,
+-- read only (the game's Lua sandbox refuses debug.setupvalue: "function not allowed by sandbox", 2026-10-29):
+--   the map table, the path graph and the two k-d trees   filled in place (the same tables, the new contents)
+--   the road rules                                       map.lua's own setRoadRules sets them
+--   the build serial                                     map.onDeserialize({editor state, serial}), its public setter
+--   the largest node radius (findClosestRoad's search)   no setter: kept when the new graph's is no larger (a wider
+--                                                         search finds the same roads); larger, map.reset this once
+-- map.lua 0.40's names are checked first (M.internals); a game whose loadMap has other locals keeps map.reset.
 local M = {}
 
 local clear = table.clear or (function()
@@ -40,11 +45,11 @@ function M.internals(mapmod)
     if not idx[n] then return nil, n end
   end
   local get = function(n) return select(2, debug.getupvalue(f, idx[n])) end
-  local set = function(n, v) debug.setupvalue(f, idx[n], v) end
-  if type(get('map')) ~= 'table' or type(get('graphpath')) ~= 'table' or type(get('surfaceNormal')) ~= 'function' then
+  if type(get('map')) ~= 'table' or type(get('graphpath')) ~= 'table' or type(get('surfaceNormal')) ~= 'function'
+      or type(mapmod.onSerialize) ~= 'function' or type(mapmod.onDeserialize) ~= 'function' then
     return nil, 'types'
   end
-  return { f = f, idx = idx, get = get, set = set, mapmod = mapmod, zones = idx.trafficExclusionZones and
+  return { f = f, idx = idx, get = get, mapmod = mapmod, zones = idx.trafficExclusionZones and
     function() return get('trafficExclusionZones') end or function() return nil end }
 end
 
@@ -141,11 +146,24 @@ function M.step(job, ms, clock)
   return false
 end
 
+-- old takes new's contents (and metatable): every holder of old sees the new graph, as with a new local.
+local function into(old, new)
+  clear(old)
+  for k, v in pairs(new) do old[k] = v end
+  local mt = getmetatable(new)
+  if getmetatable(old) ~= mt then setmetatable(old, mt) end
+end
+
 -- Puts the built graph in as map.reset(nodes) would have at its end (the caller has set up the road rules' file,
--- as for map.reset). Errors propagate (the caller pcalls).
+-- as for map.reset). Returns true; or false and why when it cannot this time, nothing changed (the caller runs
+-- map.reset). Errors propagate (the caller pcalls).
 function M.commit(job)
   local I, o = job.I, assert(job.out, 'not built')
   local mapmod, m = I.mapmod, I.get('map')
+  local gp, ek, nk = I.get('gp'), I.get('edgeKdTree'), I.get('nodeKdTree')
+  if type(gp) ~= 'table' or type(ek) ~= 'table' or type(nk) ~= 'table' then return false, 'no map to fill' end
+  local r = I.get('maxRadius')
+  if type(r) ~= 'number' or o.maxRadius > r then return false, 'a larger road radius' end
   I.get('setRoadRules')()           -- (first: what can fail before the old map is touched)
   mapmod.objects = {}
   mapmod.objectNames = {}
@@ -153,14 +171,14 @@ function M.commit(job)
   if old then clear(old) end
   clear(m)
   m.nodes = job.nodes
-  I.set('gp', o.gp)
-  I.set('edgeKdTree', o.edgeKdTree)
-  I.set('nodeKdTree', o.nodeKdTree)
-  I.set('maxRadius', o.maxRadius)
+  into(gp, o.gp)
+  into(ek, o.edgeKdTree)
+  into(nk, o.nodeKdTree)
   m.nodeAliases = {}
   if mapmod.createTrafficExclusionArea then mapmod.createTrafficExclusionArea(I.zones()) end
   local serial = (I.get('buildSerial') or -1) + 1
-  I.set('buildSerial', serial)
+  local ser = mapmod.onSerialize()
+  mapmod.onDeserialize({ type(ser) == 'table' and ser[1] or nil, serial })
   m.buildSerial = serial
   be:sendToMailbox('mapData', lpack.encodeBinWorkBuffer({
     nodeAliases = m.nodeAliases, maxRadius = o.maxRadius, graphData = o.graphData, edgeKdTree = o.kdData,
@@ -168,7 +186,7 @@ function M.commit(job)
   be:sendToMailbox('updateDrivabilities', lpack.encodeBinWorkBuffer(nil))
   if guihooks and guihooks.trigger then guihooks.trigger('NavigationMapChanged', m) end
   if extensions and extensions.hook then extensions.hook('onNavgraphReloaded') end
-  return o.count, o.edges
+  return true
 end
 
 return M

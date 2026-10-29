@@ -2,6 +2,8 @@
 local T = dofile((arg[0]:match('^(.*)[/\\]') or '.') .. '/testlib.lua')
 dofile((arg[0]:match('^(.*)[/\\]') or '.') .. '/stubs.lua')
 local NB = require('beamngEarth/navbuild')
+-- the game's sandbox refuses debug.setupvalue ("function not allowed by sandbox", in game 2026-10-29)
+debug.setupvalue = function() error('function not allowed by sandbox') end
 local vmt = getmetatable(vec3(0, 0, 0))
 local vidx = type(vmt.__index) == 'table' and vmt.__index or vmt
 vidx.distance = vidx.distance or function(a, b) return math.sqrt((a.x - b.x) ^ 2 + (a.y - b.y) ^ 2 + (a.z - b.z) ^ 2) end
@@ -16,7 +18,8 @@ extensions = { hook = function(n) if n == 'onNavgraphReloaded' then calls.hook =
 local function fakeMapModule()
   local M = {}
   local map = { nodes = { old = { pos = vec3(0, 0, 0), radius = 1, links = {} } } }
-  local gp, edgeKdTree, nodeKdTree, maxRadius, rules = 'old gp', 'old edge tree', 'old node tree', 4, nil
+  local gp, edgeKdTree, nodeKdTree, maxRadius, rules = { old = true }, { old = true }, { old = true }, 10, nil
+  local isEditorEnabled = 'editor state'
   local buildSerial = 3
   local trafficExclusionZones = {}
   local graphpath = { newGraphpath = function(n)
@@ -46,6 +49,9 @@ local function fakeMapModule()
       kdTreeBox2D, quadtree, pointBBox, trafficExclusionZones, custom }
   end
   M.reset = loadMap
+  M.onSerialize = function() return { isEditorEnabled, buildSerial } end
+  M.onDeserialize = function(st) isEditorEnabled, buildSerial = st[1], st[2] end
+  M.editor = function() return isEditorEnabled end
   M.getMap = function() return map end
   M.state = function() return gp, edgeKdTree, nodeKdTree, maxRadius, buildSerial, rules end
   M.createTrafficExclusionArea = function(z) M.zonesGiven = z end
@@ -71,6 +77,7 @@ local mm = fakeMapModule()
 local I, miss = NB.internals(mm)
 T.check(I ~= nil, 'the internals found: ' .. tostring(miss))
 local oldNodes = mm.getMap().nodes
+local gpObj, ekObj, nkObj = mm.state()
 local nodes = town(200)
 local job = NB.new(nodes, I)
 local steps = 0
@@ -84,20 +91,30 @@ T.check(err == nil, 'no error: ' .. tostring(err))
 T.check(done == true and steps > 5, 'built over several steps: ' .. steps)
 T.check(calls.drv == 201 and calls.normal == 201, 'one drivability query and one normal a node')
 local gp0 = mm.state()
-T.check(gp0 == 'old gp' and mm.getMap().nodes == oldNodes and #calls.mail == 0 and calls.hook == 0,
+T.check(gp0.old and mm.getMap().nodes == oldNodes and #calls.mail == 0 and calls.hook == 0,
   'the game\'s map left as it was until the commit')
 local single = 0
 for _, n in pairs(nodes) do for _ in pairs(n.links) do single = single + 1 end end
 T.check(single == 200, 'links single-sided, as map.reset makes them: ' .. single)
-local nn, ne = NB.commit(job)
+T.check(NB.commit(job) == true, 'committed')
 local gp, ek, nk, mr, serial, rules = mm.state()
-T.check(nn == 201 and ne == 200 and type(gp) == 'table' and gp.indexed and ek.built and nk.built and mr == 4,
-  'the new graph and trees in map.lua\'s locals')
+T.check(gp == gpObj and ek == ekObj and nk == nkObj and gp.indexed and not gp.old and ek.built and nk.built and mr == 10,
+  'the new graph and trees in map.lua\'s own tables (filled in place)')
+T.check(gp:generateEdgeIndex() == nil and gp.n == 201, '... with their methods')
+T.check(mm.editor() == 'editor state', 'the editor state kept by the serial\'s setter')
 T.check(mm.getMap().nodes == nodes and next(oldNodes) == nil and mm.getMap().buildSerial == 4 and serial == 4,
   'the new nodes, the old table emptied, the serial on')
 T.check(calls.mail[1] == 'mapData' and calls.mail[2] == 'updateDrivabilities' and calls.hook == 1 and rules,
   'the vehicles\' copy sent, the road rules set, onNavgraphReloaded fired')
 T.check(mm.zonesGiven ~= nil, 'the traffic exclusion zones made again')
+
+-- a graph with a wider road than the radius map.lua has: not this time, nothing changed (map.reset)
+local wide = town(3)
+wide.n0.radius = 20
+local job2 = NB.new(wide, I)
+repeat done = NB.step(job2, 1, stepper()) until done ~= false
+local ok2, why2 = NB.commit(job2)
+T.check(ok2 == false and why2:find('radius') and mm.getMap().nodes == nodes, 'a larger radius: map.reset this once')
 
 -- a map.lua without those locals: nothing (navgraph keeps map.reset)
 local other = { reset = function() return 1 end }

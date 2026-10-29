@@ -414,11 +414,19 @@ local function apply(b, pre)
   lastNodes = pre and pre.adj or M.adjacency(nodes)
   ours = true
   local ok, err
+  local how = 'map.reset'
   if pre and pre.job then
-    ok, err = pcall(navbuild.commit, pre.job)
-    if not ok then          -- (map.reset after it: links already single-sided stay as they are)
-      log('W', 'beamngEarth', 'navgraph: the map built over frames did not go in (' .. tostring(err) .. '); in one frame from now on')
-      M.MAP_SPREAD = false
+    local okC, done, why = pcall(navbuild.commit, pre.job)
+    if okC and done then
+      ok, how = true, 'commit'
+    else                    -- (map.reset after it: links already single-sided stay as they are)
+      if okC then
+        stats.oneFrame = (stats.oneFrame or 0) + 1      -- (this once: navbuild says why)
+        log('I', 'beamngEarth', 'navgraph: map.reset in one frame this time (' .. tostring(why) .. ')')
+      else
+        log('W', 'beamngEarth', 'navgraph: the map built over frames did not go in (' .. tostring(done) .. '); in one frame from now on')
+        M.MAP_SPREAD = false
+      end
       ok, err = pcall(map.reset, nodes)
     end
   else
@@ -456,7 +464,7 @@ local function apply(b, pre)
   stats.cuts = #cl
   if stats.applyMs >= M.SLOW_APPLY_MS then         -- (the hitch line says navgraph; this says which part)
     log('I', 'beamngEarth', string.format('navgraph apply %.0f ms: %d nodes, %d edges; %s %.0f ms, gps %.0f ms%s',
-      stats.applyMs, nn, ne, pre and pre.job and 'commit' or 'map.reset', stats.resetMs or 0, stats.gpsMs or 0,
+      stats.applyMs, nn, ne, how, stats.resetMs or 0, stats.gpsMs or 0,
       pre and pre.job and string.format(' (built over %d frames, %.0f ms)', pre.frames or 0, pre.buildMs or 0) or ''))
   end
   return true
