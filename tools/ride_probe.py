@@ -27,7 +27,16 @@ sys.path.insert(0, os.path.join(ROOT, "tools"))
 sys.path.insert(0, ROOT)
 import numpy as np  # noqa: E402
 
-from interchange_probe import PLACES  # noqa: E402
+from interchange_probe import PLACES as INTERCHANGES  # noqa: E402
+
+# the interchanges, and single deck-end joints the stage 2 solver is checked on (the bridges thread's I-25 ride
+# survey, 2026-10-29: /mnt/project-files/ride-survey/i25_cloud_2026-10-29.txt)
+PLACES = dict(INTERCHANGES)
+PLACES.update({
+    "i25_20th_st": (39.76083, -105.00413, 300),       # 56 g: an 11 m motorway stub (3a02ea23) between decks, its
+                                                       # middle 7 m spiked up by the overlapping approach fills
+    "i25_deck_ff3f9f6e": (39.74145, -105.01395, 300),  # 18 g at deck ff3f9f6e's end
+})
 
 SPEED_MS = 29.0             # 65 mph
 BASE_M = 3.0
@@ -272,8 +281,7 @@ def run(name, la, lo, radius, cache_dir, smooth):
         for k, ln in enumerate(lines):
             if ln[1] == "deck":
                 _, z_r = resample_line(ln[3], zz[k])
-                if z_r is not None:
-                    along.append(accel(z_r))
+                along.append(accel(z_r) if z_r is not None else np.full(0, np.nan))     # (one per line: worst's index)
             else:
                 along.append(accel(zz[k]))
         if label == "today":        # where the worst spikes along the parts are
@@ -281,7 +289,7 @@ def run(name, la, lo, radius, cache_dir, smooth):
             frame = geodesy.EnuFrame(la, lo)
             worst = []
             for k, a in enumerate(along):
-                if np.isfinite(a).any() and np.nanmax(np.abs(a)) > 0.6:
+                if len(a) and np.isfinite(a).any() and np.nanmax(np.abs(a)) > 0.6:
                     i = int(np.nanargmax(np.abs(a)))
                     xy = lines[k][3] if lines[k][1] == "ground" else resample_line(lines[k][3], lines[k][4])[0]
                     p_la, p_lo, _ = frame.enu_to_geodetic(xy[i, 0], xy[i, 1], 0.0)
@@ -295,7 +303,7 @@ def run(name, la, lo, radius, cache_dir, smooth):
             res["joint_moved"] = float(max((np.abs(a - b).max() for a, b in zip(jp, jp_new)), default=0.0))
             jp = jp_new
         across = [accel(p) for p in jp]
-        res[label] = (stats(np.concatenate(along)) if along else None,
+        res[label] = (stats(np.concatenate(along)) if any(len(a) for a in along) else None,
                       stats(np.concatenate(across)) if across else None)
     print(f"{name}: {sum(1 for ln in lines if ln[1] == 'ground')} ground parts, "
           f"{sum(1 for ln in lines if ln[1] == 'deck')} decks, {len(js)} deck ends on a road ({time.time() - t0:.0f} s)")
