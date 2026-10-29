@@ -173,6 +173,21 @@ class JoinNodesTest(TestCase):
         self.assertAlmostEqual(float(out[1][0]), 11.0)
 
 
+class HeldReachTest(TestCase):
+    def test_unmeasured_points_curve_off_the_measured_stretch(self):
+        s = np.arange(0.0, 60.1, 3.0)
+        z = np.r_[np.linspace(10.0, 10.6, 11), np.full(10, 12.0)]       # measured to s 30 rising 2 %, then 1.4 m up
+        held = np.r_[np.ones(11, bool), np.zeros(10, bool)]
+        cap = roads._held_reach(s, z, held, 0.3)
+        self.assertTrue(np.isinf(cap[:11]).all())
+        d = s[11:] - 30.0
+        np.testing.assert_allclose(cap[11:], 10.6 + 0.3 + 0.02 * d + d * d / (2 * roads.DECK_HELD_R))
+        self.assertLess(cap[11] - 10.6, 0.45)                           # no step off the last measured point
+
+    def test_nothing_held(self):
+        self.assertTrue(np.isinf(roads._held_reach(np.arange(5.0), np.zeros(5), np.zeros(5, bool))).all())
+
+
 class TwinLiftTest(TestCase):
     def test_a_lift_to_a_twin_fades_no_steeper_than_a_deck_climbs(self):
         # two ramps of one level side by side from a joint, parting after 120 m (the High Five, Dallas: one lifted 11 m

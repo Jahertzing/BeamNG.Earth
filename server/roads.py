@@ -2168,6 +2168,10 @@ def deck_profile_once(lines, ground_fn, crossings=(), clear=None, grade=None, li
         if meas[k] is not None:     # measured: the lidar's height, whatever the rules above want (it is as built)
             import decklidar
             cap[k] = np.where(meas[k], np.maximum(z + decklidar.OBS_TOL_M, g), cap[k])
+            # ... and off the measured stretches no higher than a vertical curve of DECK_HELD_R goes on from them: a
+            # stacked deck's clearance stood the unmeasured points of the Mousetrap's top ramp 1 m over its last
+            # measured one, 3 m before (no curve held: a step, 2026-10-29)
+            cap[k] = np.minimum(cap[k], np.maximum(_held_reach(s, z, meas[k], decklidar.OBS_TOL_M), g))
         zz = np.maximum(np.minimum(np.maximum(z, req[k]), cap[k]), g)
         if deg[a] == 1:                         # an abutment keeps the ground's height
             zz[0] = z[0]
@@ -2200,6 +2204,29 @@ def deck_profile_once(lines, ground_fn, crossings=(), clear=None, grade=None, li
             zz[0], zz[-1] = sm[0], sm[-1]
             zz = _curve_deck(s, zz, floor, cap[k])
         out.append(zz)
+    return out
+
+
+DECK_HELD_R = 300.0     # m: the vertical radius a deck curves away from its measured stretches at most (_curve_deck's)
+
+
+def _held_reach(s, z, held, tol=0.0, radius=DECK_HELD_R):
+    """Per point (at arcs s) the highest the deck z may stand off its held (measured) stretches: from each stretch's
+    end on along its grade there, curving up at most 1 / radius per m, tol over it; inf on the held points and with
+    none. Pure."""
+    s = np.asarray(s, np.float64)
+    z = np.asarray(z, np.float64)
+    held = np.asarray(held, bool)
+    out = np.full(len(s), np.inf)
+    if not held.any() or held.all():
+        return out
+    edges = np.flatnonzero(np.diff(np.r_[False, held, False].astype(np.int8)))
+    for a, b in zip(edges[::2], edges[1::2] - 1):       # held runs [a, b]
+        for end, nxt, ahead in ((b, b - 1, s > s[b]), (a, a + 1, s < s[a])):
+            d = np.abs(s - s[end])
+            g = (z[end] - z[nxt]) / max(abs(s[end] - s[nxt]), 1e-9) if nxt != end and 0 <= nxt < len(s) else 0.0
+            out = np.where(ahead, np.minimum(out, z[end] + tol + g * d + d * d / (2.0 * radius)), out)
+    out[held] = np.inf
     return out
 
 
