@@ -104,6 +104,7 @@ local cutNames = {}     -- their names
 M.MERGE = true
 M.MERGE_S = 0.5           -- (it runs with the guard, every GUARD_S at most)
 local merge = require('beamngEarth/mergeassist')
+local navbuild = require('beamngEarth/navbuild')
 local pop = require('beamngEarth/population')   -- (above its first use: the respawn guard reads it too)
 local lastNodes = nil   -- the node table of the graph applied last (toNodes': positions, links, edges with ramp flags)
 local capped = {}       -- traffic car id -> the merge assist's speed cap on it
@@ -382,12 +383,12 @@ local function setRules()
   end
 end
 
--- pre: toNodes' results built ahead (buildNodes), else made here
+-- pre: buildNodes' prep (its toNodes results, and the map built ahead when it has a job: navbuild.lua), else made here
 local function apply(b, pre)
   setRules()
   local tN = os.clock()
   local nodes, nn, ne, cl
-  if pre then nodes, nn, ne, cl = pre[1], pre[2], pre[3], pre[4]
+  if pre then nodes, nn, ne, cl = pre.result[1], pre.result[2], pre.result[3], pre.result[4]
   else nodes, nn, ne, cl = M.toNodes(graph, b, M.EDGE_M, M.rules.rightHandDrive, nil, M.OUTER_M) end
   stats.nodesMs = (os.clock() - tN) * 1000         -- (the parts of an apply's frame: the hitch hunt, 2026-10-23)
   local ts = signalsSystem()
@@ -410,9 +411,19 @@ local function apply(b, pre)
   local t0 = os.clock()
   -- both ways round, for the guard's and the merge assist's walks: map.reset makes the links single-sided (map.lua
   -- convertToSingleSided gives each node a new links table with only the edges coming into it), so keep the tables
-  lastNodes = M.adjacency(nodes)
+  lastNodes = pre and pre.adj or M.adjacency(nodes)
   ours = true
-  local ok, err = pcall(map.reset, nodes)
+  local ok, err
+  if pre and pre.job then
+    ok, err = pcall(navbuild.commit, pre.job)
+    if not ok then          -- (map.reset after it: links already single-sided stay as they are)
+      log('W', 'beamngEarth', 'navgraph: the map built over frames did not go in (' .. tostring(err) .. '); in one frame from now on')
+      M.MAP_SPREAD = false
+      ok, err = pcall(map.reset, nodes)
+    end
+  else
+    ok, err = pcall(map.reset, nodes)
+  end
   ours = false
   if trig then guihooks.trigger = trig end
   path.getPathLevelInfo = orig
@@ -443,6 +454,11 @@ local function apply(b, pre)
   stats.applies, stats.lastMs, stats.nodes, stats.edges = stats.applies + 1, (os.clock() - t0) * 1000, nn, ne
   stats.applyMs = (os.clock() - tN) * 1000
   stats.cuts = #cl
+  if stats.applyMs >= M.SLOW_APPLY_MS then         -- (the hitch line says navgraph; this says which part)
+    log('I', 'beamngEarth', string.format('navgraph apply %.0f ms: %d nodes, %d edges; %s %.0f ms, gps %.0f ms%s',
+      stats.applyMs, nn, ne, pre and pre.job and 'commit' or 'map.reset', stats.resetMs or 0, stats.gpsMs or 0,
+      pre and pre.job and string.format(' (built over %d frames, %.0f ms)', pre.frames or 0, pre.buildMs or 0) or ''))
+  end
   return true
 end
 
@@ -1098,34 +1114,70 @@ end
 
 local waited = 0
 local stopwatch = require('beamngEarth/stopwatch')
+-- The game's map built over frames too (navbuild.lua: map.reset's ~25k raycasts for a town's graph were one frame of
+-- 100-872 ms on each block move, Jeff's Frederick drive 2026-10-29), BUILD_MS a frame. A build under way is finished
+-- and applied even when the block moved or a new graph came meanwhile (at 130 mph a new one is due every few seconds:
+-- restarted each time it would never go in); the next apply follows it.
+M.MAP_SPREAD = true
+M.SLOW_APPLY_MS = 30     -- an apply's frame this long: its parts in the log
+M.BUILD_MS = 3.0
 
 -- The node tables an apply hands map.reset, built over several frames (toNodes in a coroutine, PREP_MS a frame; ~20 ms in
 -- one frame on a Steam Deck), for this graph and block box; nil until done.
 M.PREP_MS = 2.0
 M.PREP_YIELD = 256
-local prep = nil        -- { graph, box, co, result }
+local prep = nil        -- { graph, box, co, result, adj, job, ready }
 
 local function buildNodes(b)
-  if not prep or prep.graph ~= graph or not (prep.box == b or (prep.box and b and prep.box[1] == b[1] and prep.box[2] == b[2]
-      and prep.box[3] == b[3] and prep.box[4] == b[4])) then
+  local keep = prep and prep.job and prep.graph.anchor == graph.anchor     -- (a map build under way: finished)
+  if not keep and (not prep or prep.graph ~= graph or not (prep.box == b or (prep.box and b and prep.box[1] == b[1]
+      and prep.box[2] == b[2] and prep.box[3] == b[3] and prep.box[4] == b[4]))) then
     setRules()
     local g, box, rh = graph, b and { b[1], b[2], b[3], b[4] } or nil, M.rules.rightHandDrive
     prep = { graph = g, box = box, co = coroutine.create(function()
       return { M.toNodes(g, box, M.EDGE_M, rh, M.PREP_YIELD, M.OUTER_M) }
     end) }
   end
-  if prep.result then return prep.result end
+  if prep.ready then return prep end
   local sw = stopwatch.new()
-  repeat
-    local ok, res = coroutine.resume(prep.co)
-    if not ok then
-      log('W', 'beamngEarth', 'navgraph: nodes: ' .. tostring(res))
-      prep = nil
+  if not prep.result then
+    repeat
+      local ok, res = coroutine.resume(prep.co)
+      if not ok then
+        log('W', 'beamngEarth', 'navgraph: nodes: ' .. tostring(res))
+        prep = nil
+        return nil
+      end
+      if coroutine.status(prep.co) == 'dead' then prep.result = res end
+    until prep.result or sw() >= M.PREP_MS
+    if not prep.result then return nil end
+    if M.MAP_SPREAD then
+      prep.adj = M.adjacency(prep.result[1])       -- (both ways round: before the build makes the links single-sided)
+      local okJ, job = pcall(navbuild.new, prep.result[1])
+      prep.job = okJ and job or nil                -- (nil: not the map.lua it knows, map.reset in one frame)
+      if not prep.job then
+        M.MAP_SPREAD = false
+        log('W', 'beamngEarth', 'navgraph: the game\'s map.lua is not the one navbuild knows (' ..
+          tostring(okJ and select(2, navbuild.internals()) or job) .. '); map.reset in one frame')
+      end
+      prep.frames, prep.buildMs = 0, 0
+    end
+  end
+  if prep.job then
+    local t0 = sw()
+    local done, err = navbuild.step(prep.job, math.max(M.BUILD_MS, t0 + 0.5), sw)   -- (sw: since this frame's start)
+    prep.frames, prep.buildMs = prep.frames + 1, prep.buildMs + (sw() - t0)
+    if done == nil then
+      log('W', 'beamngEarth', 'navgraph: map build: ' .. tostring(err) .. '; map.reset in one frame from now on')
+      M.MAP_SPREAD = false
+      prep = nil                                    -- (its nodes' links half converted: made again)
       return nil
     end
-    if coroutine.status(prep.co) == 'dead' then prep.result = res end
-  until prep.result or sw() >= M.PREP_MS
-  return prep.result
+    if not done then return nil end
+    stats.buildFrames, stats.buildMs = prep.frames, prep.buildMs
+  end
+  prep.ready = true
+  return prep
 end
 
 -- May the apply run in this frame (gov: the frame governor; nil: always)?
@@ -1205,12 +1257,14 @@ function M.update(aid, b, gov)
   if not pre or not room(gov) then return end
   prep = nil
   lastApply = t
-  dirty, foreign = false, false
+  -- (what came while it was built goes in next: a newer graph; a block moved on is the RECLIP check's)
+  dirty, foreign = pre.graph ~= graph, false
   local sw = stopwatch.new()
-  local okA = apply(b, pre)
+  local pb = pre.box
+  local okA = apply(pb, pre)
   if gov and gov.noteFrame then gov:noteFrame(sw()) end
   if okA then
-    applied = { anchor = aid, serial = graph.serial, box = b and { b[1], b[2], b[3], b[4] } or {} }
+    applied = { anchor = aid, serial = pre.graph.serial, box = pb and { pb[1], pb[2], pb[3], pb[4] } or {} }
     if not started then
       startTraffic()
       respawnAll = false
