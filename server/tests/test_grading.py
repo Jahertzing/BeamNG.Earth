@@ -693,3 +693,38 @@ class MinorCrossingTest(unittest.TestCase):
 def types_spec(cls, link=False):
     import types
     return types.SimpleNamespace(cls=cls, link=link, kind="paved")
+
+
+class SeparatedTest(unittest.TestCase):
+    """Roads 4 m or more apart inside each other's cores (crossing over one another, neither on a bridge in the map):
+    the higher ranked keeps the ground (grading.cut_separated: 20th Street's short ground pieces 7 m under an I-25
+    ramp made a 47 g spike in it, 2026-10-29)."""
+
+    def spec(self, cls, link=False):
+        import types
+        return types.SimpleNamespace(cls=cls, link=link, kind="paved")
+
+    def test_lower_ranked_road_cut_where_far_apart(self):
+        ramp = grading.Plan(np.array([[-50.0, 0.0], [50.0, 0.0]]), np.array([9.0, 9.0]), 6.5)
+        street = grading.Plan(np.array([[0.0, y] for y in range(-40, 41, 4)], np.float64), np.full(21, 2.0), 3.0)
+        ramp.rid, street.rid = 1, 2
+        out, _s, _c = grading.cut_separated([("r", ramp), ("s", street)],
+                                            [self.spec("motorway", True), self.spec("secondary")], [False, False])
+        self.assertEqual(len(out), 3, "the ramp and the street's two ends")
+        for _f, p in out[1:]:
+            self.assertTrue((np.abs(np.asarray(p.xy)[:, 1]) > 6.5).all(), "nothing left in the ramp's core")
+        z = grading.grade_points(np.array([0.0, 0.0]), np.array([0.0, 3.0]), np.zeros(2), [p for _f, p in out])
+        np.testing.assert_allclose(z, 9.0, atol=1e-6, err_msg="the ramp's own height over the street")
+
+    def test_junctions_and_close_heights_kept(self):
+        ramp = grading.Plan(np.array([[-50.0, 0.0], [50.0, 0.0]]), np.array([9.0, 9.0]), 6.5)
+        street = grading.Plan(np.array([[0.0, -40.0], [0.0, 40.0]]), np.array([7.0, 7.0]), 7.4)   # 2 m apart: blended
+        ramp.rid, street.rid = 1, 2
+        out, _s, _c = grading.cut_separated([("r", ramp), ("s", street)],
+                                            [self.spec("motorway", True), self.spec("secondary")], [False, False])
+        self.assertEqual(len(out), 2)
+        far = grading.Plan(np.array([[-50.0, 30.0], [50.0, 30.0]]), np.array([1.0, 1.0]), 6.5)    # 30 m away
+        far.rid = 3
+        out, _s, _c = grading.cut_separated([("r", ramp), ("f", far)],
+                                            [self.spec("motorway"), self.spec("service")], [False, False])
+        self.assertEqual(len(out), 2, "not in each other's cores")

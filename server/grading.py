@@ -154,6 +154,8 @@ UNDER_ON = os.environ.get("BNE_UNDERPASS", "on") != "off"
 # + T_MAX of the crossing (cut_minor_crossings). Not trunks: their driveways and side streets do meet them at grade. Blended in, a service road on the bank 2.6 m over E-470's cutting
 # pulled a 0.7 m hump into the motorway, 17 g at 65 mph (tools/ride_probe.py, 2026-10-29).
 CROSS_CUT_ON = os.environ.get("BNE_CROSS_CUT", "on") != "off"
+SEPARATED_CUT_ON = os.environ.get("BNE_SEPARATED_CUT", "on") != "off"     # roads SEP_FULL_M apart in each other's
+                                                                          # cores: the higher ranked keeps (cut_separated)
 CROSS_MINOR = ("service", "track", "unclassified", "residential", "living_street", "path", "footway", "cycleway",
                "bridleway", "pedestrian", "steps")
 UNGRADED = {"raceway"}      # classes planned by nobody: the terrain is their surface (an oval's banking, GitHub #143) ...
@@ -777,6 +779,82 @@ def _seg_hits(a, b):
     return np.array(out).reshape(-1, 2)
 
 
+def cut_separated(plans, specs, clips):
+    """(plans, specs, clips) with every road's plan cut where it lies in another road's core at SEP_FULL_M or more
+    from that road's height there and the other road ranks higher (roads.POCKET_RANK by class, a link as its class;
+    equal ranks: the shorter plan is cut) (SEPARATED_CUT_ON). Two roads that far apart cross over one another, but
+    where the map has neither on a bridge both are ground plans, and grade_points blends a road's core with every
+    road in its own core whatever their heights: at 20th Street, the short pieces of 20th Street left off its bridge
+    7 m under an I-25 ramp pulled the ramp's middle down and up again, a 47 g spike at 65 mph (tools/ride_probe.py,
+    2026-10-29). The ground is one surface: the higher ranked road keeps it. Pure."""
+    rank = roadsmod.POCKET_RANK
+    rows = []
+    for (fid, p), sp, cl in zip(plans, specs, clips):
+        xy = np.asarray(p.xy, np.float64)[:, :2]
+        L = float(np.hypot(*np.diff(xy, axis=0).T).sum()) if len(xy) >= 2 else 0.0
+        rows.append((rank.get(sp.cls, len(rank)), -L, xy, np.asarray(p.z, np.float64), p.half))
+    drops = [np.zeros(len(r[2]), bool) for r in rows]
+    n = len(rows)
+    if n < 2:
+        return plans, specs, clips
+    lo = np.array([r[2].min(0) if len(r[2]) else (np.inf, np.inf) for r in rows])
+    hi = np.array([r[2].max(0) if len(r[2]) else (-np.inf, -np.inf) for r in rows])
+    hw = np.array([r[4] for r in rows])[:, None]
+    # (pairs whose boxes meet, b's grown by its core: the few that can matter of a cell's hundreds of plans)
+    meet = ((lo[:, None, :] <= hi[None, :, :] + hw[None]) & (hi[:, None, :] >= lo[None, :, :] - hw[None])).all(2)
+    for a, b in zip(*np.nonzero(meet)):
+        ra, la_, xa, za, _ha = rows[a]
+        rb, lb, xb, zb, hb = rows[b]
+        if a == b or len(xa) < 2 or len(xb) < 2 or (rb, lb) >= (ra, la_) or getattr(plans[a][1], "rid", -1) == getattr(
+                plans[b][1], "rid", -2):
+            continue        # (b must outrank a: a lower rank number, or the same and longer)
+        p0, p1 = xb[:-1], xb[1:]
+        ab = p1 - p0
+        L2 = np.maximum((ab * ab).sum(1), 1e-12)
+        t = np.clip(((xa[:, None, :] - p0[None]) * ab[None]).sum(2) / L2[None], 0.0, 1.0)
+        d = np.hypot(*(xa[:, None, :] - (p0[None] + t[..., None] * ab[None])).transpose(2, 0, 1))
+        k = d.argmin(1)
+        i = np.arange(len(xa))
+        zh = zb[:-1][k] + t[i, k] * (zb[1:][k] - zb[:-1][k])
+        # (in b's core only: clearing a's whole core of b's cut roads at another level beside each other, ramps by a
+        # mainline, and their ground went to the other road's height: 18-52 g at 6th Ave, the Mousetrap, I-225)
+        drops[a] |= (d[i, k] <= hb) & (np.abs(za - zh) >= SEP_FULL_M)
+    out_p, out_s, out_c = [], [], []
+    for (fid, p), sp, cl, drop in zip(plans, specs, clips, drops):
+        if not drop.any():
+            out_p.append((fid, p))
+            out_s.append(sp)
+            out_c.append(cl)
+            continue
+        for q in _split_plan(p, ~drop):
+            out_p.append((fid, q))
+            out_s.append(sp)
+            out_c.append(True)
+    return out_p, out_s, out_c
+
+
+def _split_plan(p, keep):
+    """The runs of 2+ kept vertices of plan p (keep: per vertex) as plans of their own (rid, walls, bank kept)."""
+    out = []
+    i = 0
+    while i < len(keep):
+        if not keep[i]:
+            i += 1
+            continue
+        j = i
+        while j + 1 < len(keep) and keep[j + 1]:
+            j += 1
+        if j > i:
+            sl = slice(i, j + 1)
+            q = Plan(p.xy[sl], np.asarray(p.z)[sl], p.half, (p.abut[0] and i == 0, p.abut[1] and j == len(keep) - 1),
+                     None if p.cut is None else p.cut[i:j], p.road_half)
+            q.rid, q.max_wall = p.rid, p.max_wall
+            q.bank = None if p.bank is None else np.asarray(p.bank)[sl]
+            out.append(q)
+        i = j + 1
+    return out
+
+
 def cut_minor_crossings(plans, specs, clips):
     """(plans, specs, clips) with every CROSS_MINOR road's plan cut where it crosses a motorway's (not a link: links
     join at junctions) within the motorway's core + T_MAX of the crossing (CROSS_CUT_ON); the pieces left (2+
@@ -1039,6 +1117,11 @@ class Grader:
                     plans, pspecs, pclip = cut_minor_crossings(plans, pspecs, pclip)
                 except Exception as e:      # as before rather than no grading
                     log.debug("grading: minor crossings of %s: %s: %s", key, type(e).__name__, e)
+            if SEPARATED_CUT_ON and plans:
+                try:
+                    plans, pspecs, pclip = cut_separated(plans, pspecs, pclip)
+                except Exception as e:      # as before rather than no grading
+                    log.debug("grading: separated roads of %s: %s: %s", key, type(e).__name__, e)
             if UNDER_ON and plans:
                 try:
                     self._lower_underpasses(key, plans)
