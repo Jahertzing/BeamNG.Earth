@@ -196,7 +196,8 @@ end
 -- only their way), a node with no way on that is a cut, i.e. a dead end the clip made? nil when the edge is not in nodes.
 -- The cone test (headingToCut) respawned cars for any cut node ahead within 45 degrees: a side street cut at the block's
 -- edge beside the motorway, or a motorway junction whose cross street was cut while the motorway went on. On I-25 that
--- was one respawn every ~2 s (bench4, 2026-10-28: 163 in 4 min), each car popping out and in again ahead.
+-- was one respawn every ~2 s (bench4, 2026-10-28: 163 in 4 min), each car popping out and in again ahead. A one-way road
+-- that ends counts as a cut too (the server graph's edge).
 function M.cutAhead(nodes, cutSet, a, b, px, py, dx, dy, reach)
   local na, nb = nodes[a], nodes[b]
   local e = na and nb and na.links[b]
@@ -225,7 +226,12 @@ function M.cutAhead(nodes, cutSet, a, b, px, py, dx, dy, reach)
         if dot > bestDot then best, bestDot = o, dot end
       end
     end
-    if not best then return cutSet[to] == true end
+    if not best then
+      -- a cut; or a one-way road that just ends, which is the end of the server's map data, not a real dead end (a car
+      -- does not turn round on a motorway): bench8 (2026-10-29) piled every car on I-25 southbound up there for 45 s
+      local inEdge = nodes[from].links[to]
+      return cutSet[to] == true or (inEdge ~= nil and inEdge.oneWay == true)
+    end
     d = d + math.sqrt((nodes[best].pos.x - t.x) ^ 2 + (nodes[best].pos.y - t.y) ^ 2)
     from, to = to, best
   end

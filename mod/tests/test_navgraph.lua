@@ -219,6 +219,9 @@ do
   cutSet.d = nil
   T.check(N.cutAhead(g, cutSet, 'a', 'b', 10, 0, 1, 0, 300) == false, 'cutAhead: a junction whose cross street was cut: not')
   T.check(N.cutAhead(g, cutSet, 't', 'u', -40, 50, 0, 1, 300) == false, 'cutAhead: a real dead end (no cut): left to the AI')
+  -- a one-way road that ends (the server graph's edge, not the clip's): a cut too
+  g.f = nd(400, 0) g.e.links.f = { oneWay = true, inNode = 'e', outNode = 'f' } g.f.links.e = g.e.links.f
+  T.check(N.cutAhead(g, cutSet, 'd', 'e', 250, 0, 1, 0, 300) == true, 'cutAhead: a motorway that just ends: a cut')
   T.check(N.cutAhead(g, cutSet, 'x', 'y', 0, 0, 1, 0, 300) == nil, 'cutAhead: not on this graph: nil (the cone decides)')
   local adj = N.adjacency(g)
   g.b.links = { a = g.b.links.a }       -- (map.reset's convertToSingleSided gives each node a new links table)
