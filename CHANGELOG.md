@@ -5,6 +5,14 @@ What changed in each release of BeamNG.Earth, newest first.
 ## Unreleased (fork)
 
 ### New
+- **Incremental baking**: a change rebakes only what it touches. Each kind of baked item (terrain block, base
+  photo, road tile, far geometry and texture, far and sky buildings) is keyed on the source of the functions its
+  build actually runs and the data files it reads, recorded during a bake (`server/bakedeps.py`; the record
+  merged into `server/bake_deps.json` with `tools/bake_deps.py`), instead of a hash of every server file. A
+  kind without a record keeps the whole-code key; `BNE_REVISIT_DEPS=off` returns every kind to it.
+  `tools/headless_bake.py` drives kept stretches at up to `--fly` 200 m/s, bakes only round a spot with
+  `--near lat,lon --km R`, and runs cool by default there (`--power cool`: one small server pinned to half the
+  CPUs at low priority; `normal`, `max`).
 - **The gate** (`tools/gate.py`, developers): one command before a branch is handed over. `tools/lint.py` (ruff's
   pyflakes rules and duplicate definitions over the Python; every mod Lua file compiled under LuaJIT, so the
   200-locals limit and a syntax error are findings, plus duplicate functions), `tools/lua_tests.py` (the mod's Lua

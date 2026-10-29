@@ -69,11 +69,16 @@ def faults():
     return _faults[0]
 
 
-def code_key(modules=None):
-    """A hash of the server's source files and native module (once per process). modules (names, optionally with
+def code_key(modules=None, kind=None):
+    """A hash of the server's source files and native module (once per process). kind: the kind's own key when the
+    committed manifest of its dependencies lists it (bakedeps: the functions its build runs and the files it reads,
+    recorded during a bake; _deps_key), so a change anywhere else keeps its items. modules (names, optionally with
     extra text such as one function's source): the hash of those modules' sources, the native module and the build
-    switches alone, for a kind built by them only (blockworker.far_geometry's ungraded levels: FAR_GEOMETRY_MODULES), so a change
-    anywhere else keeps its items."""
+    switches alone, for a kind built by them only (blockworker.far_geometry's ungraded levels: FAR_GEOMETRY_MODULES)."""
+    if kind is not None:
+        k = _deps_key(kind)
+        if k is not None:
+            return k
     if modules is not None:
         return _modules_key(tuple(modules))
     with _lock:
@@ -102,6 +107,25 @@ def _switches(h):
 
 
 _mod_codes = {}
+_deps_codes = {}
+
+
+def _deps_key(kind):
+    """code_key(kind): the hash of the kind's dependencies in the committed manifest (bakedeps.kind_hash), or None
+    when the manifest does not list it (or BNE_REVISIT_DEPS=off)."""
+    with _lock:
+        if kind in _deps_codes:
+            return _deps_codes[kind]
+    import bakedeps
+    deps = bakedeps.manifest().get(kind)
+    got = None
+    if deps and deps.get("functions"):
+        h = hashlib.sha1()
+        _switches(h)
+        got = bakedeps.kind_hash(deps, extra=h.digest())
+    with _lock:
+        _deps_codes[kind] = got
+    return got
 
 
 def _modules_key(modules):
@@ -136,8 +160,9 @@ def key(kind, *parts, modules=None):
     """The cache key of an item: its kind, what it was built from (the anchor's lat/lon, the tile, the settings) and
     the code (all of it, or modules': code_key). An item keyed by its modules outlives other code changes, so the
     baked generations (load) are not looked at for it."""
-    k = _key_with(kind, code_key(modules), parts)
-    if modules is not None:
+    code = code_key(modules, kind=kind)
+    k = _key_with(kind, code, parts)
+    if modules is not None or _deps_codes.get(kind) is not None:     # (its own code: no generation fallback)
         with _lock:
             if len(_stable) > 100000:
                 _stable.clear()

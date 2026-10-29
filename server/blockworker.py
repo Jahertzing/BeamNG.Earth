@@ -211,6 +211,8 @@ def init(cache_dir, offline, roads, grading, road_widths, surface, warm_q, log_l
     budget.apply()              # (this process's caches: smaller on a small machine)
     if os.environ.get("BNGE_TRACEMALLOC"):      # debug: this worker's memory (earthd's trace_mem)
         _trace_memory()
+    import bakedeps
+    bakedeps.start_recording()                  # (BNGE_BAKE_DEPS_DIR: a bake's servers record the builds' dependencies)
     import sampler
     sampler.maybe_start(f".{os.getpid()}")      # BNGE_SAMPLE: this worker's own sampling profile (debugging)
     xproc.PRIORITY = nice
@@ -485,7 +487,9 @@ def _revisit_tile(kind, k, aid, tx, ty, out_dir, vfs_dir, name, build, extra_of,
             _write_bytes(os.path.join(out_dir, revisit.swap(g, back)), data)
         return result_of(f"{vfs_dir}/{name}", extra or {})
     f0 = revisit.faults()
-    res = build()
+    import bakedeps
+    with bakedeps.building(kind):
+        res = build()
     if res is not None and revisit.ON and revisit.faults() == f0:     # (complete: nothing it read failed or was missing)
         try:
             with open(os.path.join(out_dir, name), encoding="utf-8") as f:
@@ -876,7 +880,9 @@ def far_geometry(aid, lat, lon, tile, zoom, q, ref_zoom, with_sink, layout):
     if got is not None:
         return _built_from(got[0]["built.npz"], got[1])
     f0 = revisit.faults()
-    built = _far_geometry(aid, lat, lon, tile, zoom, q, ref_zoom, with_sink, layout)
+    import bakedeps
+    with bakedeps.building("fargeo"):
+        built = _far_geometry(aid, lat, lon, tile, zoom, q, ref_zoom, with_sink, layout)
     if revisit.ON and revisit.faults() == f0:
         blob, meta = _built_blob(built)
         revisit.store(_s.cache_dir, "fargeo", k, {"built.npz": blob}, meta)
@@ -1119,14 +1125,22 @@ _cpu = {}
 _cpu_logged = [time.monotonic()]
 
 
+# the revisit kinds the accounted jobs build whole (the tiles through _revisit_tile name their own): recorded as
+# the kind's dependencies (bakedeps)
+ACCOUNTED_KINDS = {"build": "block", "base_photo": "base", "far_tile": "far"}
+
+
 def _accounted(fn):
     import functools
+    import bakedeps
+    kind = ACCOUNTED_KINDS.get(fn.__name__)
 
     @functools.wraps(fn)
     def run(*a, **kw):
         c0 = time.process_time()
         try:
-            return fn(*a, **kw)
+            with bakedeps.building(kind):
+                return fn(*a, **kw)
         finally:
             n, t = _cpu.get(fn.__name__, (0, 0.0))
             _cpu[fn.__name__] = (n + 1, t + time.process_time() - c0)

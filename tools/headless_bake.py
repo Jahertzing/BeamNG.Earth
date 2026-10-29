@@ -420,7 +420,7 @@ def priority_class(mode, power="normal"):
     return subprocess.NORMAL_PRIORITY_CLASS if power == "max" else subprocess.BELOW_NORMAL_PRIORITY_CLASS
 
 
-def start_server(cmd, log_path, timeout=START_S, mode="game", profile=False, power="normal"):
+def start_server(cmd, log_path, timeout=START_S, mode="game", profile=False, power="normal", deps_dir=None):
     """(process, port): cmd started at idle priority (mode "alone": below normal; power "max": normal), its output
     to log_path, once it listens; profile: every worker logs its memory each minute (BNGE_TRACEMALLOC); power "cool":
     the server tree pinned to cool_cpus() (its workers inherit the mask)."""
@@ -431,6 +431,8 @@ def start_server(cmd, log_path, timeout=START_S, mode="game", profile=False, pow
     env.setdefault("BNGE_BUDGET", "bake")
     if profile:
         env["BNGE_TRACEMALLOC"] = "1"
+    if deps_dir:
+        env["BNGE_BAKE_DEPS_DIR"] = deps_dir     # (the builds' dependencies recorded: bakedeps, tools/bake_deps.py)
     kw = {"cwd": ROOT, "env": env}
     if IS_WIN:
         kw["creationflags"] = priority_class(mode, power) | subprocess.CREATE_NEW_PROCESS_GROUP
@@ -1091,6 +1093,35 @@ def saying(prefix):
     return say
 
 
+def merge_deps(out):
+    """The run's deps-*.json records (its servers': bakedeps) merged into out/bake_deps.json; prints how it differs
+    from the committed server/bake_deps.json. Returns {kind: functions} counts, or None without records."""
+    import glob
+    import json
+    import bakedeps
+    recs = []
+    for p in sorted(glob.glob(os.path.join(out, "deps", "deps-*.json"))):
+        try:
+            with open(p, encoding="utf-8") as f:
+                recs.append(json.load(f).get("kinds") or {})
+        except (OSError, ValueError):
+            pass
+    if not recs:
+        return None
+    kinds = bakedeps.merge(recs)
+    path = os.path.join(out, "bake_deps.json")
+    bakedeps.write_manifest(kinds, path)
+    d = bakedeps.diff(bakedeps.read_manifest(), kinds)
+    counts = {k: len(v["functions"]) for k, v in kinds.items()}
+    if d:
+        print(f"deps: {path} differs from server/bake_deps.json for {', '.join(d)}: "
+              f"python tools/bake_deps.py accept {path} and commit it (those kinds rebuild once)", flush=True)
+    else:
+        print(f"deps: {path}: as server/bake_deps.json ({sum(counts.values())} functions over {len(counts)} kinds)",
+              flush=True)
+    return counts
+
+
 def leg_report(leg, summary):
     w = summary["waits"]
     return (f"{leg}: {summary['km']} of {summary['route_km']} km in {summary['seconds']:.0f} s ({by_text(summary)}); "
@@ -1115,7 +1146,8 @@ def drive_legs(a, legs, lines, routes_file, anchors, pin_m, distance, out, mode,
             say("server: " + " ".join(cmd[1:]), flush=True)
             tag = ("-" + prefix.strip(": ")) if prefix else ""
             log_path = os.path.join(out, f"server{tag}.log")
-            proc, port = start_server(cmd, log_path, mode=mode, profile=getattr(a, "profile", False), power=power)
+            proc, port = start_server(cmd, log_path, mode=mode, profile=getattr(a, "profile", False), power=power,
+                                      deps_dir=None if getattr(a, "no_record_deps", False) else os.path.join(out, "deps"))
             say(f"server listening on {port} (log {log_path})", flush=True)
             if getattr(a, "profile", False):
                 sampler = CpuSampler(proc.pid, os.path.join(out, f"cpu{tag}.jsonl"), say=say).start()
@@ -1180,6 +1212,8 @@ def child_command(a, legs, out, mode, workers, road_processes):
         cmd.append("--profile")
     if getattr(a, "near", None):
         cmd += ["--near", a.near, "--km", str(a.km)]
+    if getattr(a, "no_record_deps", False):
+        cmd.append("--no-record-deps")
     cmd += ["--power", getattr(a, "power", None) or "normal", "--fly", str(getattr(a, "fly", FLY_SPEED))]
     return cmd
 
@@ -1233,6 +1267,8 @@ def main(argv=None):
                          "than --speed)")
     ap.add_argument("--near", default=None, help="lat,lon: only the routes' stretches within --km of this spot")
     ap.add_argument("--km", type=float, default=5.0, help="--near's reach (default %(default)g km)")
+    ap.add_argument("--no-record-deps", action="store_true",
+                    help="do not record what each kind's builds run (bakedeps; the run's deps/ and bake_deps.json)")
     ap.add_argument("--power", choices=POWERS, default=None,
                     help="cool: one server of few workers pinned to half the CPUs (the default with --near); normal: "
                          "the servers the memory allows, below normal priority (the default); max: at normal priority")
@@ -1356,6 +1392,8 @@ def main(argv=None):
     finally:
         run["ended"] = time.strftime("%Y-%m-%d %H:%M:%S")
         run["complete"] = ok
+        if not a.no_record_deps:
+            run["deps"] = merge_deps(out)
         if a.profile:
             import glob
             run["profile"] = [rb.read_json(p) for p in sorted(glob.glob(os.path.join(out, "profile*.json")))]

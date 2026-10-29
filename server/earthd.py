@@ -2017,6 +2017,12 @@ class Server:
         return self.hm_name(key)[:-4] + ("_base.png" if not rev else f"_base_r{rev}.png")
 
     def write_base(self, anchor, cx, cy, pool=None, rev=0, photo=None, quick=False):
+        """_write_base, recorded as the "base" kind's build (bakedeps)."""
+        import bakedeps
+        with bakedeps.building("base"):
+            return self._write_base(anchor, cx, cy, pool, rev, photo, quick)
+
+    def _write_base(self, anchor, cx, cy, pool=None, rev=0, photo=None, quick=False):
         """Detail mode: the block footprint's aerial photo (BASE_PX² PNG, row 0 = north, the same imagery
         chain and corrections as the far tiles), the drawn block's base colour. The game would pack it into
         BC7 on its main thread (1.5 s for a new 1024² photo); terraincache writes that packed texture into
@@ -2359,6 +2365,13 @@ class Server:
         return f() if f is not None else 0
 
     def make_tile(self, anchor, tile, prev=None):
+        """_make_tile, recorded as the "fartex" kind's build (bakedeps: the texture rendered here; the geometry's
+        own record is the worker's, fargeo)."""
+        import bakedeps
+        with bakedeps.building("fartex"):
+            return self._make_tile(anchor, tile, prev)
+
+    def _make_tile(self, anchor, tile, prev=None):
         """Worker thread: build and write one far tile (and its texture). Returns its TileInfo.
         prev: the tile's stale TileInfo (--colormatch): only its texture is rendered again."""
         if prev is not None:
@@ -5446,6 +5459,8 @@ def main():
         tracemalloc.start(1)
     game_cpus = server_cpus = None
     small = budget.apply()
+    import bakedeps
+    bakedeps.start_recording()      # (BNGE_BAKE_DEPS_DIR: a bake's server records what its builds run)
     if small:
         # a small machine (a Steam Deck): fewer worker processes, each with smaller caches (budget.py), where the
         # player left the defaults
