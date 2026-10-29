@@ -408,6 +408,7 @@ local function loadBlock(tr)
   local layers = (type(tr.layers) == 'table' and type(tr.materials) == 'table')
     and { masks = tr.layers, materials = tr.materials } or nil -- server --surface on (surface.py)
   if layers then groundcover.ensure(); groundcover.setTint(tr.grassTint) end   -- (the grass: the photo's colour)
+  groundcover.noteBlock(lattice.coverBox(tr.cx, tr.cy))     -- (grass made past the old block: made again)
   -- detail mode: the block's aerial photo as its base colour (server write_base); else the level's
   -- (false: detail mode without a photo -> the level's flat base; nil: other modes, untouched)
   local base = nil
