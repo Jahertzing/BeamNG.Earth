@@ -5,6 +5,30 @@ What changed in each release of BeamNG.Earth, newest first.
 ## Unreleased (fork)
 
 ### New
+- **Block swaps without the grass hitch** (the stutter thread, 2026-10-29). Half of the ground block swaps on the
+  Frederick to Castle Rock drive were 100-250 ms frames: the grass was made again at a block change (a moved photo
+  tint, or cells generated past the old block's edge), and the first draw of each newly made tinted grass Material
+  built its pipeline (~120 ms; the builder's laps: grass off 12 -> 1 swap hitch, tint off 0). Now nothing is made
+  again in the swap frame: a moved tint goes on only once the car is under 3 m/s (one object a frame), stale cells
+  are remade over frames with the materials already in use, and a ready block commits without the governor's calm
+  wait past 240 m from the centre (`follow.URGENT_DIST`). The materials' prewarm shape is drawn in front of the
+  camera for a few frames at level start (far below the map it was culled and built nothing). Every graph the
+  navgraph builds carries a radius-15 sentinel node, so the map built over frames always fits the game's largest
+  road radius (no more one-frame `map.reset` fallbacks).
+- **The performance log names stutters and pacing**: the mod's largest part of each 50-100 ms frame ("stutter
+  parts"), the first three a minute as `perf stutter` lines with the parts and what the mod was doing, the display's
+  refresh budget per minute (the share of frames within it, at two refreshes or more, the frame-to-frame jitter;
+  also in the profile report), a unit of 30 ms or more with its three steps (made, registered, added), the file's size
+  and age, a LuaGC-led hitch with what the frame did to the heap, the engine's GPU pass timings in hitch lines when
+  the build gives them (`Engine.Debug.getGpuTimings`), and every commit frame over 60 ms with what the grass did.
+  `tools/perf_trend.py` carries the pacing numbers and stutter parts per drive.
+- **Stall tools** (developers, Windows): `tools/stallwatch.py` samples the game's main thread from outside (module
+  shares a second, every stall of 50 ms or more with its stack as module+offset; no install, no admin),
+  `tools/nsys_capture.py` and `tools/nsys_report.py` run and read an Nsight Systems capture of a drive (D3D12 calls,
+  WDDM GPU queues, sampled threads), `tools/warm_lap.py` hops along the route in the day and night looks after a
+  game or driver update so the D3D12 pipeline cache is warm before the first drive (the cold cache after 0.40.4
+  froze a drive four times for 4.6-8.8 s), `tools/gc_experiment.py` measures LuaJIT's collector offline (its atomic
+  step stays under 4 ms on a 200 MB heap: the 100-190 ms LuaGC frames are something else).
 - **Bake servers hold their road plans within a budget**: the cell plans every grader of a process keeps are
   capped (`grading.PLANS_MB`, 384 MB; 192 in the bake profile, which also keeps fewer merged plan sets, road parts
   and region graders), the least recently used cells forgotten and read back from the shared plan cache when
