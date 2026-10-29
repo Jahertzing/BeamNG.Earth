@@ -64,7 +64,10 @@ M.JUMP_M = 30           -- a car this much farther than at the last check was re
 -- edge guard (in town it still goes behind). 150 m on: at 100 m one popped in where the player saw it on an open
 -- Interstate, and 350 m keeps it near enough to be caught up with or to pass (I-25, 2026-10-28).
 M.AHEAD_MS = 20         -- (45 mph)
-M.AHEAD_M = { 150, 350 }
+-- 250-450 m since 2026-10-29 (Jeff's drive: "its weird having cars appear in front of me"): with less room ahead than
+-- 250 m the car goes behind the camera instead of nearer (AHEAD_TIGHT_M was 90 m), and every car put somewhere fades in
+-- (FADE_S) instead of appearing whole.
+M.AHEAD_M = { 250, 450 }
 -- ... and starts at speed: gameplay_traffic.forceTeleport leaves a car standing (only the stock respawn gives it a
 -- speed, at most 14 m/s), so on I-25 each car put ahead was a standing car 150-350 m in front of a player at 75 mph,
 -- the traffic ran at 40-55 mph and the player's autodrive behind it averaged 46 (the traffic bench, 2026-10-28)
@@ -530,7 +533,34 @@ local function playerId() return be and be.getPlayerVehicleID and be:getPlayerVe
 -- there was within its cut reach at once and respawned again, the traffic bench on I-25, 2026-10-28: 20 cut and 22
 -- ahead respawns in 164 s, each of the 7 cars moved every ~27 s.) Less room than AHEAD_M[1]: from AHEAD_TIGHT_M; less
 -- than that: nil, behind the camera.
-M.AHEAD_TIGHT_M = 90
+M.AHEAD_TIGHT_M = 250
+-- A car put somewhere by this module (or by population.lua) is drawn see-through for FADE_DELAY_S while it lands, then
+-- fades in over FADE_S (setMeshAlpha; the stock respawn's own fade takes 0.25 s, and forceTeleport has none).
+M.FADE_S = 1.5
+M.FADE_DELAY_S = 0.3
+local fades = {}        -- car id -> os.clock() it was put where it is
+
+-- Pure: a fading car's alpha `dt` s after it was put somewhere.
+function M.fadeAlpha(dt)
+  return math.max(0, math.min(1, (dt - M.FADE_DELAY_S) / M.FADE_S))
+end
+
+-- Car id was just put somewhere: hidden now, faded in by update.
+function M.fadeIn(id)
+  local o = getObjectByID and getObjectByID(id)
+  if not (o and o.setMeshAlpha) then return end
+  pcall(o.setMeshAlpha, o, 0, '')
+  fades[id] = os.clock()
+end
+
+local function stepFades(now)
+  for id, t in pairs(fades) do
+    local o = getObjectByID(id)
+    local a = M.fadeAlpha(now - t)
+    if o and o.setMeshAlpha then pcall(o.setMeshAlpha, o, a, '') end
+    if not o or a >= 1 then fades[id] = nil end
+  end
+end
 M.AHEAD_MARGIN_M = 20
 
 -- Pure: the room (m) a car put ahead of a player moving at psp m/s needs before the block's edge.
@@ -815,11 +845,13 @@ local function guard(b, all)
             stats.aheadRespawns = (stats.aheadRespawns or 0) + 1
             putAhead[id] = 'next'       -- (its jump, seen at the next check, is ours)
             pcall(gt.forceTeleport, id, vec3(ax, ay, pp.z), vec3(adx, ady, 0), amin, amax)
+            M.fadeIn(id)
             -- pushed to speed gently once it has landed (PUSH_ACCEL; not the stock boost's 0.25 s)
             local td = gt.getTrafficData and gt.getTrafficData()[id]
             if td and not td.hasTrailer then pushes[id] = { v = M.aheadSpeed(pu:length()), at = now } end
           elseif cp and cf then
             pcall(gt.forceTeleport, id, cp, -cf, M.RESPAWN_M[1], M.RESPAWN_M[2])
+            M.fadeIn(id)
           else
             pcall(gt.forceTeleport, id)
           end
@@ -1201,6 +1233,7 @@ end
 function M.update(aid, b, gov)
   if not M.enabled or not graph then return end
   local t0 = os.clock()
+  if next(fades) then pcall(stepFades, t0) end
   if applied and t0 - lastGuard >= M.GUARD_S then
     lastGuard = t0
     local ok, err = pcall(guard, b, false)
@@ -1370,6 +1403,7 @@ function M.reset()
   seenAt = {}
   putAhead = {}
   pushes = {}
+  fades = {}
   paced = {}
   installedAt = {}
   cuts = {}
