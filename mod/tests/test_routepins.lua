@@ -80,3 +80,23 @@ T.check(la2 == 40.01, '... to D')
 T.check(at(C[1] + 720 * m, C[2], D) == false, 'in D already: stay')
 T.check(at(C[1] + 400 * m, C[2], D) == true, '400 m up, in D: C nearer by 312 m: move back')
 T.done('test_routepins')
+
+-- set: the server's planned route anchors (route_anchors, earthd buildahead.py) join the file's, under the larger pin
+-- distance; nil clears them
+write({ version = 1, pinM = 5000, anchors = { { 40.10, -104.94 } } })
+pins.set({ { 39.70, -105.00 }, { lat = 39.60, lon = -105.00 }, { 'x', 1 } }, 6750)
+local all, pm = pins.load()
+T.check(#all == 3 and pm == 6750, 'the file\'s anchor and the route\'s two (a bad entry dropped), the larger pinM')
+T.check(pins.pin(39.71, -105.0) == 39.70, 'a route anchor pins')
+T.check(pins.pin(40.09, -104.94) == 40.10, 'the file\'s still does')
+pins.set({ { 39.50, -105.00 } }, 99999)
+all, pm = pins.load()
+T.check(#all == 2 and pm == pins.MAX_PIN_M, 'a new route replaces the last one\'s anchors; pinM capped')
+pins.set(nil)
+all, pm = pins.load()
+T.check(#all == 1 and pm == 5000, 'cleared: the file alone')
+files = {}
+pins.forget()
+pins.set({ { 39.50, -105.00 } }, 6750)
+T.check(pins.pin(39.51, -105.0) == 39.50, 'no file at all: the route anchors still pin')
+pins.set(nil)

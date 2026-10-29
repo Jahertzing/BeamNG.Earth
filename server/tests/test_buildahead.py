@@ -1,0 +1,409 @@
+"""buildahead.py: the build-ahead cursor (the near tier built live ahead of the car along the route or heading): the
+line's sampling, the mod's anchor rules along it (distance rule, pinned-anchor rule, planned anchors), the road tiles
+and terrain blocks predicted, the cursor's horizon, ready front, rate and job limits; and earthd's wiring: the route
+message's own points, route_anchors to the mod, the pose tick starting jobs, load_progress "ahead"."""
+import asyncio
+import math
+import os
+import sys
+import tempfile
+import types
+import unittest
+from pathlib import Path
+from unittest import mock
+
+import numpy as np
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import buildahead as ba  # noqa: E402
+import geodesy  # noqa: E402
+import roads as roadsmod  # noqa: E402
+
+A = (39.90, -104.99)            # Denver's north side: a straight line of route north from here
+M_LAT = 1 / 111195.0            # degrees of latitude per metre
+
+
+def north(start, km, step_m=250.0):
+    """A route due north from start, km long, a point every step_m."""
+    n = int(km * 1000 / step_m)
+    return [[start[0] + i * step_m * M_LAT, start[1]] for i in range(n + 1)]
+
+
+class LineTest(unittest.TestCase):
+    def test_resample_walks_the_line_every_step(self):
+        la, lo, s = ba.resample(north(A, 2.0), 128.0)
+        self.assertAlmostEqual(s[1] - s[0], 128.0)
+        self.assertAlmostEqual(s[-1], 2000.0, delta=2.0)
+        self.assertEqual(len(s), 16 + 1, "15 full steps, then the end")
+        self.assertAlmostEqual(float(la[-1]), A[0] + 2000.0 * M_LAT, places=5)
+        la2, lo2, s2 = ba.resample(north(A, 20.0), 128.0, max_m=3000.0)
+        self.assertAlmostEqual(s2[-1], 3000.0, delta=1.0)
+        self.assertEqual(len(ba.resample([[1.0, 2.0]], 128.0)[2]), 1)
+
+    def test_snap_anchor_is_the_mods_grid(self):
+        self.assertEqual(ba.snap_anchor(39.9049, -104.9951), (39.9, -105.0))
+        self.assertEqual(ba.snap_anchor(39.9051, -104.9949), (39.91, -104.99))
+
+    def test_heading_line_runs_from_the_car(self):
+        fr = geodesy.EnuFrame(*A)
+        pts = ba.heading_line(fr, 100.0, 200.0, 0.0, 1.0, 1000.0, 250.0)
+        self.assertEqual(len(pts), 5)
+        e, n, _ = fr.geodetic_to_enu(pts[-1][0], pts[-1][1], 0.0)
+        self.assertAlmostEqual(float(e), 100.0, delta=0.5)
+        self.assertAlmostEqual(float(n), 1200.0, delta=0.5)
+
+
+class FramesTest(unittest.TestCase):
+    def test_distance_rule_lands_on_the_grid_at_the_rebase_distance(self):
+        la, lo, s = ba.resample(north(A, 32.0), 250.0)
+        anchors, idx, planned = ba.frames(la, lo, A, 15000.0, pins=(), pinned_rule=False)
+        self.assertEqual(anchors[0], A)
+        first = int(np.argmax(idx != 0))
+        self.assertAlmostEqual(s[first], 14700.0, delta=250.0, msg="a new anchor at distance - PREFETCH_MARGIN")
+        self.assertEqual(anchors[1], ba.snap_anchor(float(la[first]), float(lo[first])))
+        self.assertEqual(planned, anchors[1:], "the anchors landed on are planned for the mod")
+        self.assertEqual(len(anchors), 3, "two re-centres in 32 km")
+        self.assertTrue(all(idx[i] <= idx[i + 1] for i in range(len(idx) - 1)), "frames only move forward")
+
+    def test_pinned_rule_moves_to_the_planned_anchor_as_soon_as_it_is_nearer(self):
+        la, lo, s = ba.resample(north(A, 32.0), 250.0)
+        anchors, idx, planned = ba.frames(la, lo, A, 15000.0, pins=(), pinned_rule=True)
+        anchors0, idx0, planned0 = ba.frames(la, lo, A, 15000.0, pins=(), pinned_rule=False)
+        self.assertEqual(planned, planned0, "the same anchors (the distance rule placed them) ...")
+        first = int(np.argmax(idx != 0))
+        d_next = ba.metres(anchors[1], (float(la[first]), float(lo[first])))
+        d_cur = ba.metres(A, (float(la[first]), float(lo[first])))
+        self.assertLessEqual(d_next, ba.pin_m(15000.0), "... entered once the next one is within the pin distance")
+        self.assertGreaterEqual(d_cur - d_next, ba.PIN_HYST_M)
+        self.assertLess(s[first], 9000.0, "about 7.95 km out, not 14.7")
+
+    def test_a_known_pin_is_landed_on_and_never_planned_again(self):
+        la, lo, s = ba.resample(north(A, 20.0), 250.0)
+        pin = (A[0] + 14000.0 * M_LAT + 0.004, A[1] + 0.006)     # a bake's anchor near where the car would re-centre
+        anchors, idx, planned = ba.frames(la, lo, A, 15000.0, pins=[pin], pinned_rule=True)
+        self.assertIn((round(pin[0], 7), round(pin[1], 7)), anchors)
+        self.assertEqual(planned, [], "known to the mod already")
+
+    def test_empty_and_short_lines(self):
+        anchors, idx, planned = ba.frames([], [], A)
+        self.assertEqual((anchors, len(idx), planned), ([A], 0, []))
+        la, lo, s = ba.resample(north(A, 3.0), 250.0)
+        anchors, idx, planned = ba.frames(la, lo, A)
+        self.assertEqual(len(anchors), 1)
+        self.assertTrue(np.all(idx == 0))
+
+
+class ItemsTest(unittest.TestCase):
+    def test_road_tiles_are_the_trackers_within_send_m(self):
+        xs = np.array([0.0, 128.0, 256.0])
+        ys = np.zeros(3)
+        items = ba.road_items(A, xs, ys, np.array([0.0, 128.0, 256.0]))
+        keys = {it.key for it in items}
+        self.assertEqual(keys, set(roadsmod.tiles_near(0.0, 0.0, roadsmod.SEND_M)) |
+                         set(roadsmod.tiles_near(256.0, 0.0, roadsmod.SEND_M)))
+        by = {it.key: it.due for it in items}
+        self.assertEqual(by[(0, 0)], 0.0)
+        far_east = max(k[0] for k in keys)
+        self.assertGreater(by[(far_east, 0)], 0.0, "a tile only the later samples reach is due later")
+        self.assertTrue(all(it.kind == "roads" and it.anchor == A for it in items))
+
+    def test_blocks_follow_the_rule_along_the_line(self):
+        grid, prepare = 256.0, 300.0
+
+        def follow(px, py, vx, vy, cx, cy):          # a simple follow: the 256 m grid point ahead once out of the box
+            if cx is not None and max(abs(px - cx), abs(py - cy)) <= prepare:
+                return cx, cy
+            return (round((px + vx * 4.0) / grid) * grid, round((py + vy * 4.0) / grid) * grid)
+        s = np.arange(0.0, 3000.0 + 1, 128.0)
+        xs, ys = np.zeros(len(s)), s.copy()
+        items = ba.block_items(A, xs, ys, s, 30.0, follow, start=(0.0, 0.0))
+        self.assertTrue(all(it.kind == "block" for it in items))
+        self.assertEqual([it.key for it in items], sorted({it.key for it in items}, key=lambda k: k[1]),
+                         "each block once, in order")
+        self.assertNotIn((0.0, 0.0), [it.key for it in items], "the block the car has is not an item")
+        self.assertGreaterEqual(len(items), 4, "a block every ~600 m of straight driving")
+        self.assertTrue(all(items[i].due < items[i + 1].due for i in range(len(items) - 1)))
+        self.assertEqual(ba.block_items(A, xs[:1], ys[:1], s[:1], 30.0, follow), [])
+
+
+def follow_simple(px, py, vx, vy, cx, cy):
+    if cx is not None and max(abs(px - cx), abs(py - cy)) <= 300.0:
+        return cx, cy
+    return (round((px + vx * 4.0) / 256.0) * 256.0, round((py + vy * 4.0) / 256.0) * 256.0)
+
+
+class CursorTest(unittest.TestCase):
+    def cursor(self, route_km=12.0, pinned=True):
+        c = ba.Cursor(follow_simple, road_jobs=2, block_jobs=1)
+        c.set_route(north(A, route_km), pinned_rule=pinned, rebase_m=15000.0)
+        fr = geodesy.EnuFrame(*A)
+        return c, fr
+
+    def test_plan_from_the_car_on_the_route(self):
+        c, fr = self.cursor()
+        items = c.plan(A, fr, 0.0, 0.0, 0.0, 30.0, block=(0.0, 0.0))
+        self.assertTrue(items)
+        self.assertEqual(items, sorted(items, key=lambda it: (it.due, it.kind != "block")))
+        kinds = {it.kind for it in items}
+        self.assertEqual(kinds, {"roads", "block"})
+        self.assertEqual(len({it.id for it in items}), len(items), "no item twice")
+        self.assertFalse(c.off_route)
+        self.assertEqual(c.anchors, [A], "12 km: all in the car's frame")
+        self.assertEqual(c.planned, [])
+        # 3 km up the route: planned from there (the first items are the ones due around 3 km)
+        c.plan(A, fr, 0.0, 3000.0, 0.0, 30.0)
+        self.assertTrue(3000.0 - 2 * ba.STEP_M <= c.s_car <= 3000.0, c.s_car)   # (the sample before the car's)
+        self.assertLess(abs(c.items[0].due - 3000.0), 800.0)
+
+    def test_off_the_route_the_heading_is_the_line(self):
+        c, fr = self.cursor()
+        c.plan(A, fr, 2000.0, 0.0, 30.0, 0.0)           # 2 km east of the route, heading east
+        self.assertTrue(c.off_route)
+        self.assertTrue(c.items)
+        self.assertLessEqual(max(it.due for it in c.items), ba.HEADING_MAX_M + roadsmod.SEND_M)
+        self.assertFalse(c.stale(A, fr, 2100.0, 0.0, 30.0, 0.0))
+        self.assertTrue(c.stale(A, fr, 2600.0, 0.0, 30.0, 0.0), "moved HEADING_MOVE_M")
+        self.assertTrue(c.stale(A, fr, 2100.0, 0.0, 0.0, 30.0), "turned north")
+        self.assertTrue(c.stale(A, fr, 10.0, 500.0, 0.0, 30.0), "back on the route")
+
+    def test_a_long_route_plans_the_anchors_for_the_mod_and_builds_in_their_frames(self):
+        c, fr = self.cursor(route_km=30.0)
+        c.plan(A, fr, 0.0, 0.0, 0.0, 30.0)
+        self.assertEqual(len(c.planned), 1, "one re-centre within MAX_M + REPLAN_M")
+        self.assertEqual(c.anchors, [A] + c.planned)
+        frames = {it.anchor for it in c.items}
+        self.assertEqual(frames, set(c.anchors), "items in both frames")
+        far = [it for it in c.items if it.anchor == c.planned[0]]
+        self.assertTrue(all(it.due >= 7500.0 for it in far), "the next frame's items come after the pinned switch")
+        # a tile in the next frame is keyed in that frame
+        it = next(it for it in far if it.kind == "roads")
+        fr2 = geodesy.EnuFrame(*it.anchor)
+        la, lo, _ = fr.enu_to_geodetic(0.0, it.due, 0.0)
+        e, n, _ = fr2.geodetic_to_enu(la, lo, 0.0)
+        self.assertLess(roadsmod.tile_distance(it.key[0], it.key[1], float(e), float(n)), roadsmod.SEND_M + 1)
+
+    def test_stale_along_the_route(self):
+        c, fr = self.cursor(route_km=30.0)
+        self.assertTrue(c.stale(A, fr, 0.0, 0.0, 0.0, 30.0), "no plan yet")
+        c.plan(A, fr, 0.0, 0.0, 0.0, 30.0)
+        self.assertFalse(c.stale(A, fr, 0.0, 1000.0, 0.0, 30.0))
+        self.assertTrue(c.stale(A, fr, 0.0, ba.REPLAN_M + 200.0, 0.0, 30.0), "REPLAN_M further")
+        self.assertTrue(c.stale(c.planned[0], fr, 0.0, 1000.0, 0.0, 30.0), "another anchor")
+        self.assertAlmostEqual(c.car_s(fr, 0.0, 2000.0), 2000.0, delta=130.0)
+
+    def test_tick_starts_the_items_within_the_horizon_by_the_jobs(self):
+        c, fr = self.cursor()
+        c.plan(A, fr, 0.0, 0.0, 0.0, 30.0, block=(0.0, 0.0))
+        h = c.horizon(30.0)
+        self.assertEqual(h, max(ba.MIN_M, 30.0 * (ba.LATENCY_K * ba.LATENCY_S0 + ba.MARGIN_S)))
+        self.assertGreater(c.horizon(90.0), h, "faster: farther")
+        self.assertLessEqual(c.horizon(300.0), c.max_m)
+        start = c.tick(10.0, 0.0, 30.0)
+        self.assertEqual(sorted(it.kind for it in start), ["block", "roads", "roads"], "the kinds' jobs")
+        self.assertTrue(all(it.due <= h for it in start))
+        self.assertEqual(start[0], c.items[0], "nearest first")
+        for it in start:
+            c.started(it, 10.0)
+        self.assertEqual(c.tick(10.5, 0.0, 30.0), [], "all jobs busy")
+        c.done_item(start[1], 12.0, "built")
+        nxt = c.tick(12.0, 0.0, 30.0)
+        self.assertEqual(len(nxt), 1)
+        self.assertEqual(nxt[0].kind, "roads")
+        self.assertNotIn(nxt[0].id, {it.id for it in start})
+        self.assertAlmostEqual(c.stats.latency, ba.LATENCY_S0 + ba.LATENCY_ALPHA * (2.0 - ba.LATENCY_S0))
+        self.assertEqual(c.stats.built, 1)
+
+    def test_the_front_and_the_rate(self):
+        c, fr = self.cursor()
+        c.plan(A, fr, 0.0, 0.0, 0.0, 30.0, block=(0.0, 0.0))
+        self.assertEqual(c.front(), c.items[0].due)
+        self.assertEqual(c.ready_m(), c.items[0].due)
+        now = 0.0
+        c.tick(now, 0.0, 30.0)
+        # everything due within 2 km done over 40 s of ticks: the front moves to the first item past it
+        for it in c.items:
+            if it.due <= 2000.0:
+                c.done_item(it, now, "cached")
+        now = 40.0
+        c.tick(now, 0.0, 30.0)
+        first_left = next(it for it in c.items if it.due > 2000.0)
+        self.assertEqual(c.front(), first_left.due)
+        self.assertGreaterEqual(c.stats.busy_s, 40.0 - 1e-9)
+        self.assertAlmostEqual(c.stats.advance_m, first_left.due - c.items[0].due)
+        self.assertIsNotNone(c.stats.rate)
+        self.assertAlmostEqual(c.stats.rate, c.stats.advance_m / c.stats.busy_s)
+        self.assertIn("keeps up to", c.status())
+        # all done: the front is past the plan's end, nothing pending: not busy
+        for it in c.items:
+            c.done_item(it, now, "cached")
+        c.tick(41.0, 0.0, 30.0)
+        busy = c.stats.busy_s
+        c.tick(50.0, 0.0, 30.0)
+        self.assertEqual(c.stats.busy_s, busy, "nothing queued: not busy")
+        self.assertGreater(c.ready_m(), c.items[-1].due - c.s_car)
+
+    def test_skip_marks_the_live_paths_items_done(self):
+        c, fr = self.cursor()
+        c.plan(A, fr, 0.0, 0.0, 0.0, 30.0, block=(0.0, 0.0))
+        first = c.items[0]
+        start = c.tick(0.0, 0.0, 30.0, skip=lambda it: it is first)
+        self.assertNotIn(first, start)
+        self.assertIn(first.id, c.done)
+        self.assertEqual(c.stats.cached, 1)
+
+    def test_set_route_none_means_the_heading(self):
+        c, fr = self.cursor()
+        c.set_route(None)
+        self.assertIsNone(c.route)
+        c.plan(A, fr, 0.0, 0.0, 0.0, 30.0)
+        self.assertTrue(c.items)
+        self.assertEqual(c.rebase_m, 15000.0, "kept")
+        c.set_route(north(A, 5.0), rebase_m=50000.0)
+        self.assertEqual(c.rebase_m, 16000.0, "the mod's MAX_DISTANCE")
+
+
+class ServerTest(unittest.TestCase):
+    """earthd's wiring, with a Server over stand-ins (no data): the route message's own points, the cursor planned at
+    the pose, jobs started through build_ahead_block / build_ahead_roads, route_anchors sent, load_progress ahead."""
+
+    def server(self):
+        import earthd
+        import surface as sf
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        sur = sf.Surface(None)
+        self.addCleanup(sur.close)
+        md = types.SimpleNamespace(has=lambda key, layer: False, versions=lambda: "v")
+        s = earthd.Server(tmp.name, os.path.join(tmp.name, "cache"), imagery=None, cells=64, block=512, surface=sur,
+                          mapdata=md)
+        self.addCleanup(s.hm_pool.shutdown)
+        self.addCleanup(s.tile_pool.shutdown)
+        self.addCleanup(s.ahead_pool.shutdown)
+        s.dem = None                    # (no elevation profile or corridor download for the route here)
+        return s, earthd
+
+    def test_route_points_plan_the_cursor_and_the_pose_starts_jobs(self):
+        from test_gasstations import _Writer
+        s, earthd = self.server()
+        built = []
+
+        def block(anchor, cx, cy):
+            built.append(("block", (round(anchor.lat, 7), round(anchor.lon, 7)), (cx, cy), anchor.id))
+            return "built"
+
+        def roads(anchor, tx, ty):
+            built.append(("roads", (round(anchor.lat, 7), round(anchor.lon, 7)), (tx, ty), anchor.id))
+            return "built"
+        s.build_ahead_block, s.build_ahead_roads = block, roads
+        a = s.new_anchor(*A)
+        s.anchors[a.id] = a
+
+        async def go():
+            with mock.patch.object(earthd.revisitmod, "ON", True):
+                w = _Writer()
+                c = earthd.Connection(s, None, w)
+                self.assertIsNotNone(c.ahead, "the cursor: mapdata and the revisit cache are on")
+                c.ahead.jobs["roads"] = 2                    # (no road processes here: roads would be off)
+                c.active = a.id
+                c.focus, c.vel = (0.0, 0.0), (0.0, 30.0)
+                c.block = earthd.farfield.Block(0.0, 0.0, 512)
+                await c.route({"id": 7, "points": north(A, 30.0), "pins": True, "rebaseM": 15000})
+                res = next(m for m in w.msgs if m["type"] == "route_result")
+                self.assertEqual(res["id"], 7)
+                self.assertEqual(len(res["points"]), len(north(A, 30.0)))
+                self.assertAlmostEqual(res["dist"], 30000.0, delta=30.0)
+                self.assertTrue(c.ahead.items, "planned at once: the anchor is known")
+                pins = [m for m in w.msgs if m["type"] == "route_anchors"]
+                self.assertEqual(len(pins), 1, "the anchor planned 14.7 km up the route, for the mod")
+                self.assertEqual(pins[0]["anchors"], [list(p) for p in c.ahead.planned])
+                self.assertEqual(pins[0]["pinM"], 6750)
+                # the pose: the tick starts the first items (1 block + 2 road tiles), in phantom anchors
+                c.ahead_tick(a.id)
+                await asyncio.sleep(0.2)
+                self.assertEqual(sorted(b[0] for b in built), ["block", "roads", "roads"])
+                self.assertTrue(all(b[1] == A for b in built), "the car's own frame, as a phantom")
+                self.assertTrue(all(b[3] >= earthd.PHANTOM_BASE for b in built), "never the mod's anchor id")
+                self.assertEqual(c.ahead.stats.built, 3)
+                self.assertEqual(c.ahead.active, {})
+                # another tick (TICK_S later) starts more; the live path's tiles are skipped
+                c.roads.aid = a.id
+                nxt = [it for it in c.ahead.items if it.id not in c.ahead.done][0]
+                if nxt.kind == "roads":
+                    c.roads.sent.add(nxt.key)
+                c.ahead.last_tick -= 1.0
+                c.ahead_tick(a.id)
+                await asyncio.sleep(0.2)
+                if nxt.kind == "roads":
+                    self.assertIn(nxt.id, c.ahead.done)
+                    self.assertNotIn(nxt.key, [b[2] for b in built])
+                # load_progress carries what is ready ahead
+                c.send_progress(a.id)
+                prog = [m for m in w.msgs if m["type"] == "load_progress"][-1]
+                self.assertEqual(len(prog["ahead"]), 2)
+                self.assertGreaterEqual(prog["ahead"][1], ba.MIN_M)
+                return w.msgs
+        asyncio.run(go())
+
+    def test_phantom_anchors_and_the_mods_find_each_other(self):
+        s, earthd = self.server()
+        p = s.phantom_anchor(*A)
+        self.assertGreaterEqual(p.id, earthd.PHANTOM_BASE)
+        self.assertIs(s.phantom_anchor(A[0], A[1]), p, "one per place")
+        self.assertIs(s.anchor_by_id(p.id), p)
+        self.assertIsNone(s.anchor_by_id(p.id + 1))
+        p.q = 1 / 32
+        a = s.new_anchor(*A)
+        self.assertEqual(a.q, 1 / 32, "the mod's anchor there takes the phantom's survey")
+        self.assertLess(a.id, earthd.PHANTOM_BASE)
+        for i in range(6):
+            s.phantom_anchor(A[0] + 0.1 * (i + 1), A[1])
+        self.assertLessEqual(len(s.phantoms), 4, "only the last few kept")
+
+    def connection(self, s, earthd, on=True):
+        from test_gasstations import _Writer
+
+        async def make():
+            with mock.patch.object(earthd.revisitmod, "ON", on):
+                return earthd.Connection(s, None, _Writer())
+        return asyncio.run(make())
+
+    def test_no_cursor_without_the_revisit_cache_or_map_data(self):
+        s, earthd = self.server()
+        self.assertIsNone(self.connection(s, earthd, on=False).ahead)
+        with mock.patch.object(earthd, "BUILD_AHEAD_ON", False):
+            self.assertIsNone(self.connection(s, earthd).ahead)
+        c = self.connection(s, earthd)
+        self.assertIsNotNone(c.ahead)
+        self.assertEqual(c.ahead.jobs["roads"], 0, "no road processes: tiles are not cached, so none ahead")
+
+    def test_follow_rule_keeps_the_block_inside_the_prepare_box(self):
+        s, earthd = self.server()
+        c = self.connection(s, earthd)
+        rule = s.follow
+        self.assertEqual(c._ahead_follow(10.0, 10.0, 0.0, 30.0, 0.0, 0.0), (0.0, 0.0), "inside: the same block")
+        nxt = c._ahead_follow(0.0, rule.prepare + 50.0, 0.0, 30.0, 0.0, 0.0)
+        self.assertNotEqual(nxt, (0.0, 0.0))
+        self.assertEqual(nxt[0] % rule.grid, 0.0)
+        self.assertGreater(nxt[1], 0.0, "ahead of the car")
+        first = c._ahead_follow(0.0, 0.0, 0.0, 30.0, None, None)
+        self.assertEqual(len(first), 2)
+
+
+class ToolTest(unittest.TestCase):
+    def test_headless_options(self):
+        sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "tools"))
+        import headless_bake as hb
+        with tempfile.TemporaryDirectory() as user:
+            cmd = hb.server_command(user, 0, "/c", win=True, ahead=False)
+            self.assertEqual(cmd[cmd.index("--build-ahead") + 1], "off")
+            self.assertNotIn("--build-ahead", hb.server_command(user, 0, "/c", win=True))
+        a = types.SimpleNamespace(speed=30, roads_q=1, backlog_q=1, edge_m=1, max_wait=1, ground_wait=1, ahead="off",
+                                  cache_dir=None, world_dir=None, user_dir=None, rebase_m=None, profile=False, near=None,
+                                  no_record_deps=False, power=None, fly=200)
+        cmd = hb.child_command(a, [("i25", False, None)], "/out", "alone", 2, 2)
+        self.assertEqual(cmd[cmd.index("--ahead") + 1], "off")
+
+
+if __name__ == "__main__":
+    unittest.main()

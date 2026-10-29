@@ -1080,6 +1080,10 @@ local function onMessage(msg)
   elseif t == 'route_download' then
     -- the planned route's corridor prefetch (server routeahead.py): total/done tile+cell count, shown on the map
     gps.onRouteDownload(msg)
+  elseif t == 'route_anchors' then
+    -- the anchors the server's build-ahead plans along the route (buildahead.py): the car re-centres on them (the
+    -- pinned-anchor rule, routepins.want), where it builds the blocks and road tiles before the car arrives
+    require('beamngEarth/routepins').set(msg.anchors, msg.pinM)
   elseif t == 'geocode_result' then
     if msg.id then geocodeResults[msg.id] = { results = msg.results or {}, error = msg.error } end
   elseif t == 'map_tiles_ready' then
@@ -2516,8 +2520,10 @@ end
 -- class it keeps off ('toll')
 function M.requestRoute(id, lat0, lon0, lat1, lon1, bearing, via, avoid)
   if not net.isConnected() then return false end
+  -- pins: this mod re-centres on the anchors the server plans along the route (route_anchors); rebaseM: its rebase
+  -- distance, which the server's plan follows
   net.send({ type = 'route', id = id, lat0 = lat0, lon0 = lon0, lat1 = lat1, lon1 = lon1, bearing = bearing, via = via,
-    avoid = avoid })
+    avoid = avoid, pins = M.SNAP_TELEPORTS and true or false, rebaseM = rebase.distance })
   return true
 end
 function M.takeRoute(id)

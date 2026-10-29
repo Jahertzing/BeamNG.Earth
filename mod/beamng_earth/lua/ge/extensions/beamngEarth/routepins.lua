@@ -21,19 +21,39 @@ M.MAX_PIN_M = 9000          -- never farther (the player's float precision in th
 
 M.CACHE_S = 2               -- load(): the file read again after this long (want() asks every PIN_CHECK_M of driving)
 local cache = nil           -- { at = os.clock(), anchors = {...}, pinM = n }
+local route = nil           -- { anchors = {...}, pinM = n }: the server's planned anchors along the GPS route (set)
 
 -- The anchors (a list of {lat, lon}) and the pin distance, from FILE (empty when there is none or it is broken). Read
 -- again CACHE_S after the last read (clock: os.clock, or the caller's; nil: read now), so a bake planned while the game
 -- runs applies within seconds and a pin check every few metres of driving costs no file reads.
 function M.load(clock)
   local now = clock or os.clock()
-  if cache and now - cache.at < M.CACHE_S and now >= cache.at then return cache.anchors, cache.pinM end
-  local anchors, pinM = M.read()
-  cache = { at = now, anchors = anchors, pinM = pinM }
-  return anchors, pinM
+  if not (cache and now - cache.at < M.CACHE_S and now >= cache.at) then
+    local anchors, pinM = M.read()
+    cache = { at = now, anchors = anchors, pinM = pinM }
+  end
+  if not route then return cache.anchors, cache.pinM end
+  -- the file's anchors and the route's together (the larger pin distance: both are under core's maxM anyway)
+  local all = {}
+  for _, a in ipairs(cache.anchors) do all[#all + 1] = a end
+  for _, a in ipairs(route.anchors) do all[#all + 1] = a end
+  return all, math.max(cache.pinM, route.pinM)
 end
 
 function M.forget() cache = nil end
+
+-- The anchors the server planned along the GPS route (its route_anchors message, earthd buildahead.py): it builds the
+-- blocks and road tiles ahead of the car in those frames, so the car must re-centre on them (want), not on the grid
+-- point it happens to cross the rebase distance at. Kept until the next route's (nil clears them).
+function M.set(anchors, pinM)
+  if type(anchors) ~= 'table' then route = nil return end
+  local out = {}
+  for _, a in ipairs(anchors) do
+    local lat, lon = tonumber(a[1] or a.lat), tonumber(a[2] or a.lon)
+    if lat and lon and math.abs(lat) <= 90 and math.abs(lon) <= 180 then out[#out + 1] = { lat, lon } end
+  end
+  route = { anchors = out, pinM = math.min(math.max(tonumber(pinM) or 0, 0), M.MAX_PIN_M) }
+end
 
 function M.read()
   if not (FS and FS.fileExists and FS:fileExists(M.FILE)) then return {}, 0 end
