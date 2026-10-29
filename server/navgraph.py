@@ -17,10 +17,16 @@ import numpy as np
 import roads
 import staging
 
-# classes the AI drives on: drivability (path cost divisor) and a default speed limit (mph, US practice)
+# classes the AI drives on: drivability (path cost divisor) and a default speed limit (mph, US practice). The stock
+# traffic picks its way on at every fork at random, weighted by the drivability ratio squared and the straightness
+# squared (graphpath getPathTWithState): at 0.4 an alley off a downtown street was taken about one time in twenty at each
+# of its several entrances a block, and the cars in it braked hard to turn in, gave way, met a dead end or a parked car
+# and turned round across the street (Jeff's drive downtown, 2026-10-28: "slam on brakes, burnouts, drive
+# perpendicular"). Service roads and living streets now are a way through only when there is no other (the GPS routes
+# them the same: the path cost divides by drivability), and still never a spawn point (the spawner wants 0.5 and up).
 DRIVE = {"motorway": (1.0, 65), "trunk": (1.0, 55), "primary": (1.0, 45), "secondary": (1.0, 40),
-         "tertiary": (0.9, 35), "residential": (0.8, 25), "unclassified": (0.8, 30), "living_street": (0.5, 15),
-         "service": (0.4, 15), "unknown": (0.6, 25)}
+         "tertiary": (0.9, 35), "residential": (0.8, 25), "unclassified": (0.8, 30), "living_street": (0.25, 15),
+         "service": (0.1, 15), "unknown": (0.6, 25)}
 SKIP_SUBCLASSES = {"driveway", "parking_aisle", "sidewalk", "crosswalk", "cycle_crossing"}
 URBAN_MPH_CAP = {"primary": 35, "secondary": 35, "tertiary": 30}   # in town (spec.urban) unless mapped
 # the km/h countries' rural defaults for the fast classes (Europe's 120-130 motorways: Bavaria's A9, unmapped, was

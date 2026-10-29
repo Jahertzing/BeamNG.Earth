@@ -87,6 +87,19 @@ class GraphTest(unittest.TestCase):
         self.assertTrue(connector and all(e[6] == 1.0 for e in connector), "a motorway-to-motorway ramp too")
         self.assertTrue(all(e[6] == 1.0 for e in g["edges"] if e[8] == 0 and e[0] in ("cA", "cJ")))
 
+    def test_alleys_are_a_way_through_only_when_there_is_no_other(self):
+        # (the stock traffic's fork choice weighs the drivability ratio squared: an alley at 0.1 off a 0.9 street is
+        # about one in eighty of a straight way on, against one in five at the old 0.4)
+        g = graph([[(0, 0), (100, 0)], [(100, 0), (200, 0)], [(100, 0), (100, 60)]], ["tertiary", "tertiary", "service"],
+                  connectors=[(0, "A", 0.0, 0.0), (0, "J", 1.0, 1.0), (1, "J", 0.0, 0.0), (1, "B", 1.0, 1.0),
+                              (2, "J", 0.0, 0.0), (2, "C", 1.0, 1.0)])
+        alley = [e for e in g["edges"] if "cC" in e[:2] or any(n.startswith("s") and "id002" in n for n in e[:2])]
+        street = [e for e in g["edges"] if e not in alley]
+        self.assertTrue(alley and street)
+        self.assertTrue(all(e[6] == navgraph.DRIVE["service"][0] == 0.1 for e in alley))
+        self.assertTrue(all(e[6] == 0.9 for e in street))
+        self.assertLess((navgraph.DRIVE["service"][0] / 0.9) ** 2, 0.02)
+
     def test_not_drivable_and_window(self):
         g = graph([[(0, 0), (50, 0)], [(0, 10), (50, 10)], [(0, 20), (50, 20)], [(5000, 0), (5100, 0)]],
                   ["footway", "service", "residential", "residential"], subclass=[(1, "parking_aisle")])
