@@ -119,8 +119,12 @@ M.TINT_STRENGTH = 0.7
 -- (Jeff's drive with the first version, 2026-10-28: the grass "sometimes looked white": the green textures need ~5x
 -- red and ~10x blue for tan, and lit blades read brighter than the photo's ground; kept lower until tuned in game)
 M.TINT_BRIGHT = 0.75
-M.TINT_MIN_CHANGE = 0.08    -- a smaller change (per channel, relative) keeps the copies in use
-M.TINT_STEP = 1.06          -- the copies' factors are powers of this (per channel)
+-- Each new copy costs a frame: the builder's I-25 laps (2026-10-29, 45 m/s, ~20 block commits each) had a ~120 ms
+-- Render spike on 12 of them with the tint on and none with it off (the objects made again on stale cells alone cost
+-- nothing): the first draw with a just-made Material. At 8 % and steps of 6 % nearly every block's colour made a new
+-- copy; at these, a drive's colours fall on a few copies, each made once and re-used after.
+M.TINT_MIN_CHANGE = 0.18    -- a smaller change (per channel, relative) keeps the copies in use
+M.TINT_STEP = 1.25          -- the copies' factors are powers of this (per channel)
 M.TINT_RANGE = { 0.2, 4.0 } -- the factor's bounds per channel (the green grass has almost no blue: tan wants ~10x)
 M.TINT_PREFIX = 'bngEarthGT_'
 -- material name -> { r, g, b } (linear 0-1), see above: the opaque texels' mean of the full-size base colour map

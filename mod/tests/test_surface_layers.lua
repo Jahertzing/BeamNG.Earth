@@ -136,7 +136,7 @@ do
   T.check(longObj().fields.material == 'm_long_grass_distant' and mLong.fields.baseColorFactor == '0.9 0.95 0.8 1',
     'tint off: the stock material again, untouched')
   local q, key = gc.tintStep({ 1.0, 2.0, 0.5, 1 })
-  T.check(math.abs(q[1] - 1) < 1e-9 and math.abs(q[2] / 2 - 1) < 0.031 and key:find('m') ~= nil, 'tintStep: snapped, negative steps named m')
+  T.check(math.abs(q[1] - 1) < 1e-9 and math.abs(q[2] / 2 - 1) <= math.sqrt(gc.TINT_STEP) - 1 + 1e-9 and key:find('m') ~= nil, 'tintStep: snapped, negative steps named m')
   local o = scenetree.findObject(gc.PREFIX .. gc.DEFS[1].src)
   T.check(o and o.fields.useNewPlacement == '1' and o.fields.useNewPlacementGpu == '0', 'CPU placement over the stock GPU setting')
   T.check(o.fields.layer == gc.DEFS[1].layer and o.canSave == false, 'on our layer, not saved')
