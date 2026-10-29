@@ -46,16 +46,12 @@ local lastKind = 'map'
 local wallMs = require('beamngEarth/stopwatch').clock()
 local function now() return wallMs() / 1000 end
 
--- The display's refresh period (ms): the pacing numbers' frame budget (getDesktopVideoMode; 60 Hz when unknown).
+-- The display's refresh period (ms): the pacing numbers' frame budget (perflog.gameRefresh; 60 Hz when unknown).
 M.BUDGET_MS = nil
 local function budgetMs()
   if M.BUDGET_MS then return M.BUDGET_MS end
-  local hz = 60
-  pcall(function()
-    local vm = rawget(_G, 'getDesktopVideoMode') and getDesktopVideoMode()
-    if type(vm) == 'table' and tonumber(vm.refreshRate) and vm.refreshRate > 0 then hz = vm.refreshRate end
-  end)
-  M.BUDGET_MS = 1000 / hz
+  local okR, hz = pcall(require('beamngEarth/perflog').gameRefresh)
+  M.BUDGET_MS = 1000 / ((okR and hz) or 60)
   return M.BUDGET_MS
 end
 

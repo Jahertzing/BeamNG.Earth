@@ -1906,10 +1906,8 @@ end
 local function perfFrame(ms, hrec)
   if not st.refreshSet then        -- (the display's refresh: the frame budget of the minute line's pacing numbers)
     st.refreshSet = true
-    pcall(function()
-      local vm = rawget(_G, 'getDesktopVideoMode') and getDesktopVideoMode()
-      if type(vm) == 'table' and tonumber(vm.refreshRate) and vm.refreshRate > 0 then perflog.setRefresh(vm.refreshRate) end
-    end)
+    local okR, hz = pcall(perflog.gameRefresh)
+    if okR and hz then perflog.setRefresh(hz) end
   end
   local lines = perflog.frame(ms, st.clock, perfContext, hrec, marks, perfEngine)
   if hrec then                             -- (the first long LuaGC: where the heap goes, census.lua)

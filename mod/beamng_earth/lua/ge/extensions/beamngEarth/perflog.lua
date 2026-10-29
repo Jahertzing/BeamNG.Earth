@@ -56,6 +56,33 @@ function M.setRefresh(hz)
   return M.BUDGET_MS
 end
 
+-- Pure: the refresh (Hz) from the game's video mode (GFXDevice.getVideoMode(): a table with refreshRate) or the
+-- desktop video mode (getDesktopVideoMode(): "3440 1440 Window 32 85 0", width height mode depth refresh ...; or a
+-- table), nil when neither says. (Lap 1 of 2026-10-29 ran at 85 Hz and the minute lines said "within 16.7 ms".)
+function M.refreshFrom(videoMode, desktopMode)
+  if type(videoMode) == 'table' and tonumber(videoMode.refreshRate) and videoMode.refreshRate > 0 then
+    return tonumber(videoMode.refreshRate)
+  end
+  if type(desktopMode) == 'table' and tonumber(desktopMode.refreshRate) and desktopMode.refreshRate > 0 then
+    return tonumber(desktopMode.refreshRate)
+  end
+  if type(desktopMode) == 'string' then
+    local f = {}
+    for w in desktopMode:gmatch('%S+') do f[#f + 1] = w end
+    local hz = tonumber(f[5])
+    if hz and hz > 0 then return hz end
+  end
+  return nil
+end
+
+-- The refresh from the game itself (GFXDevice, getDesktopVideoMode), or nil.
+function M.gameRefresh()
+  local G = rawget(_G, 'GFXDevice')
+  local okV, vm = pcall(function() return G and G.getVideoMode and G.getVideoMode() end)
+  local okD, dm = pcall(function() local f = rawget(_G, 'getDesktopVideoMode'); return f and f() end)
+  return M.refreshFrom(okV and vm or nil, okD and dm or nil)
+end
+
 -- The largest numeric entry of a {name = ms} table: name, ms (nil when none).
 local function largest(t)
   local bk, best = nil, 0

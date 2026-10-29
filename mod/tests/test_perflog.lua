@@ -116,4 +116,16 @@ m = find('perf minute')
 within, two = m[#m]:match('pacing: (%d+)%% within 11.8 ms, (%d+)%% at 2%+ refreshes')
 local jit = m[#m]:match('jitter ([%d.]+) ms')
 T.check(tonumber(two) >= 1 and tonumber(jit) > 0.3, 'vsync misses (23.5 ms frames): counted at two refreshes, the jitter up (' .. tostring(two) .. '%, ' .. tostring(jit) .. ' ms)')
+-- the refresh from the game's video mode, the desktop mode's string or table, else nothing
+T.check(P.refreshFrom({ width = 3440, height = 1440, refreshRate = 85 }, nil) == 85, 'the video mode table')
+T.check(P.refreshFrom(nil, '3440 1440 Window 32 85 0') == 85, 'the desktop mode string (lap 1 said 16.7 ms at 85 Hz)')
+T.check(P.refreshFrom({ refreshRate = 0 }, { refreshRate = 100 }) == 100, 'a zero rate falls through to the desktop table')
+T.check(P.refreshFrom(nil, 'garbage') == nil and P.refreshFrom(nil, nil) == nil, 'neither: nil')
+GFXDevice = { getVideoMode = function() return { refreshRate = 100 } end }
+T.check(P.gameRefresh() == 100, 'gameRefresh reads GFXDevice')
+GFXDevice = nil
+getDesktopVideoMode = function() return '2560 1440 Borderless 32 144 0' end
+T.check(P.gameRefresh() == 144, 'gameRefresh falls back to the desktop mode')
+getDesktopVideoMode = nil
+T.check(P.gameRefresh() == nil, 'gameRefresh: nothing known')
 T.done('test_perflog')

@@ -160,7 +160,7 @@
       <li><b>Tint changes wait.</b> A moved tint is noted, not applied, while the car moves faster than a crawl; it goes on at the next stop, teleport or origin rebase (which rebuilds the grass anyway). The change threshold rises from 8 % to 15 %, so neighbouring fields stop toggling it.</li>
       <li><b>Stale cells without a hitch.</b> A ready block now commits past 240 m from the centre without waiting for a calm frame (the wait held commits for up to 60 frames), which keeps the grass square inside the old block; where a block is still late, the stale remake runs one object per frame, flushed only when the car is slow, instead of all cells in one render. A centre further ahead at speed (384 m, 25 % fewer swaps) is a later step: the server mirrors the follow rule for its prefetch, so both sides change together.</li>
       <li><b>What is left</b> is the .ter apply (7 ms) plus about 10 ms of render: a 25-30 ms swap frame every 7 s, under the stutter line. The governor already isolates it.</li>
-      <li>Verify: the builder's lap with swap_render_ms median ≤ 20 and no "ground block swap" hitch lines.</li>
+      <li><b>Result, lap 1 on the branch (16:55 MDT, same 8 km at 100 mph):</b> 0 swap hitches (3 with the quick fix, 12 before); 84.2 fps, p50 11.7 ms, p99 21.7, worst 126, 7 frames over 50 ms in 3 min (22 before). What is left in that lap: one road piece's shape registration (126 ms) and the origin rebase (185 ms, one per 7-15 km).</li>
     </ul>
   </div>
 
@@ -221,7 +221,7 @@
     <ul>
       <li><b>What it is.</b> The GPU takes 12-14 ms a frame and a refresh at 85 Hz is 11.8 ms. With vsync on, a frame that misses its refresh waits for the next one, so frames alternate between 11.8 and 23.5 ms: the profiles show p50 12 ms with p95 at 15-20 and a 1 % low of 37-42 fps, which an fps counter averages into 45-85. The fps cap on top of vsync (FPSLimiter 3-5 ms a frame) made the pacing worse; it comes off at the next game close.</li>
       <li><b>The fix is adaptive sync, which needs DisplayPort.</b> The game runs on the LG 34" WQHD curved (EDID "LG HDR WQHD") over HDMI, where it tops out at 85 Hz and NVIDIA has no variable refresh (the port is HDMI 2.0; FreeSync-over-HDMI is AMD-only). On DisplayPort the same monitor runs FreeSync Premium to 160 Hz, which NVIDIA drives as G-Sync Compatible (NVIDIA app → Set up G-SYNC, for full screen and windowed, since the game is borderless). A 13 ms frame then shows after 13 ms, not 23.5. A cable, not a monitor change. Staying on HDMI means the only cure is GPU frames under 11.8 ms every frame.</li>
-      <li><b>Measured, not felt.</b> The perf minute line and the profile report get pacing numbers: the share of frames inside the 11.8 ms budget, the share that took two refreshes or more, and the mean frame-to-frame change (jitter). The profile after the cap change gives the before/after, and the graphics thread's settings sweep then has a target: p95 under 11.8 ms.</li>
+      <li><b>Measured, not felt.</b> The perf minute line and the profile report get pacing numbers: the share of frames inside the refresh budget, the share that took two refreshes or more, and the mean frame-to-frame change (jitter). Lap 1 at 85 Hz without the cap: 97-99 % of frames within budget, 0 % at two refreshes, jitter 1.4-2.0 ms. Jeff has the LG on DisplayPort at 100 Hz with G-Sync now; the next lap measures that.</li>
     </ul>
   </div>
 
