@@ -23,6 +23,7 @@ import numpy as np
 
 import geodesy
 import mapcells
+import profilesolve
 
 ON = os.environ.get("BNE_REGION_GRADING", "on") != "off"
 REGION_DEG = 0.1            # region edge (degrees of latitude and of longitude): ~11 x 8.5 km at 40° N
@@ -122,6 +123,8 @@ class RegionGrader:
         if SHARE_PLANS and hasattr(g, "_make_cell"):     # (a grading.Grader; test doubles may lack it)
             own_make = g._make_cell
             g._make_cell = lambda key, g=g, k=k, own=own_make: self._make_cell(g, k, own, key)
+        if getattr(self, "_layer", None) is not None:
+            g.plan_adjust = self._layer         # (the bridge ends' corrections: profilesolve.JointLayer)
         with self._lock:
             g = self._regions.setdefault(k, g)
             self._regions.move_to_end(k)
@@ -168,6 +171,8 @@ class RegionGrader:
         if base.size == 0:
             return base
         la, lo, b = lat.ravel(), lon.ravel(), base.ravel()
+        if profilesolve.ON and not planned_only and not profilesolve.is_raw():
+            self._joints().ensure(la, lo)       # the bridge ends near solved: their roads' plans corrected (adjust)
         ri, rj, w = self._weights(la, lo)
         out = np.zeros(len(b))
         used = w > 0
@@ -178,6 +183,35 @@ class RegionGrader:
             z = self.grader(i, j).apply(la[pts], lo[pts], b[pts], lift, roads_only, planned_only)
             out[pts] += wt * np.asarray(z, np.float64).ravel()
         return out.reshape(shape)
+
+    def _joints(self):
+        """The JointLayer of these regions (made at first use, in the frame of the first region asked for): its
+        BridgeProfiles reads this grading through profilesolve.raw() and the decks' lidar as the road tiles' do."""
+        with self._lock:
+            if getattr(self, "_layer", None) is not None:
+                return self._layer
+        if not self.graders():
+            self.grader(0, 0)
+        import grading
+        import roads as roadsmod
+        g0 = self.graders()[0]
+        md = g0.md
+
+        def cell_fn(key):
+            return md.cell(key, layers=("roads",), kind="demand").layers.get("roads")
+
+        def elev(la, lo):
+            return self.apply(la, lo, g0.elev(la, lo), grading.ROAD_LIFT)
+        bp = roadsmod.BridgeProfiles(g0.frame, cell_fn, elev)
+        bp.surface = getattr(g0, "surface", None)
+        bp.wet = getattr(g0, "wet", None)
+        layer = profilesolve.JointLayer(bp, cell_fn)
+        with self._lock:
+            if getattr(self, "_layer", None) is None:
+                self._layer = layer
+                for g in self._regions.values():
+                    g.plan_adjust = layer
+            return self._layer
 
     def open_tunnels(self, lat, lon):
         """grading.Grader.open_tunnels over the regions the points touch, each section once."""

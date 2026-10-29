@@ -135,8 +135,16 @@ def lines_of(name, la, lo, radius, cache_dir):
     dem = demmod.Dem(os.path.join(cache_dir, "dem"), fetcher=net)
     frame = geodesy.EnuFrame(la, lo)
     sample = lambda a, b: dem.sample(a, b, grading.PROFILE_ZOOM)  # noqa: E731
-    grader = grading.Grader(frame, md, sample)
-    grader.surface = decklidar.surface_for(md, dem)
+    import profilesolve
+    import regiongrade
+
+    def make(fr):
+        g = grading.Grader(fr, md, sample)
+        g.surface = decklidar.surface_for(md, dem)
+        return g
+    # with BNE_JOINT_SOLVE=on the servers' grading (region graders, the bridge ends' correction layer); else one
+    # Grader in the place's frame as before
+    grader = regiongrade.RegionGrader(make) if profilesolve.ON else make(frame)
 
     def elev(a, b):
         return grader.apply(a, b, sample(a, b), grading.ROAD_LIFT)

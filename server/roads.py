@@ -32,6 +32,7 @@ import numpy as np
 import junctions
 import mapcells
 import mapgeom
+import profilesolve
 import roadmesh
 import staging
 
@@ -4520,6 +4521,9 @@ class BridgeProfiles:
         self.done = {}                          # (fid, j) -> (spec, xy (k, 2), z (k,), lon)
         self.piers = {}                         # (fid, j) -> pier_sites of its deck
         self.trusses = {}                       # a chain's first part key -> its truss beams (bridgetypes)
+        self.approach = {}                      # (fid, j, end) -> (road xy (k, 2), dz (k,), core half width, road
+                                                # fid): the
+                                                # road halves of the joint solves (profilesolve.JointLayer)
         self.lock = threading.Lock()
 
     def _water(self, lines, nav=0.0):
@@ -4560,7 +4564,9 @@ class BridgeProfiles:
 
     def _ground(self, xy):
         la, lo, _ = self.frame.enu_to_geodetic(xy[:, 0], xy[:, 1], 0.0)
-        return self.frame.geodetic_to_enu(la, lo, np.asarray(self.elev(la, lo), np.float64))[2]
+        with profilesolve.raw():        # (the decks on the graded ground without their own joints' corrections)
+            h = np.asarray(self.elev(la, lo), np.float64)
+        return self.frame.geodetic_to_enu(la, lo, h)[2]
 
     specs_of = staticmethod(lambda feats: bridge_specs(feats))
     parts_of = staticmethod(lambda feats, i: bridge_parts(feats, i))
@@ -4714,12 +4720,68 @@ class BridgeProfiles:
         rails = [(c[0], c[1], z, DECK_ROAD_CLEAR if clear_of is None else clear_of[c[0]]) for c, z in zip(rcr, rail_z)]
         zs = deck_profile(lines, self._ground, required + rails + self._water(lines, nav), levels=levels, widths=widths,
                           pins=_ground_pins(lines, gl), observed=observed, clear_of=clear_of)
+        if profilesolve.ON:     # each abutment solved with the road going on from it (profilesolve.py)
+            zs = self._joint_solve(comp, lines, zs, ground, pool)
         deficits = _clearance_deficits(lines, zs, required + [r[:3] for r in rails],
                                        None if observed is None else [o is not None for o in observed])
         if deficits:
             log.warning("bridge clearance below %.1f m target: %s; abutment/grade or map constraints prevent full headroom",
                         MIN_BRIDGE_HEADROOM_M, [(comp[i], round(h, 2)) for i, h in deficits[:3]])
         return zs
+
+    def _joint_solve(self, comp, lines, zs, ground, pool):
+        """zs with every abutment a ground road goes on from (a deck end no other part of the chain shares, a road's
+        end within END_M) solved with that road as one line (profilesolve.joint_solve): the deck's half applied here,
+        the road's kept in self.approach for the grading's JointLayer."""
+        nk = _EndJoin()
+        deg = {}
+        for ln in lines:
+            for p in (ln[0], ln[-1]):
+                deg[nk(p)] = deg.get(nk(p), 0) + 1
+        roads_ = [(k[0], np.asarray(gl, np.float64)[:, :2]) for k, v in sorted(ground.items()) if k[1] == "g"
+                  for gl in v if len(gl) >= 2]
+        hws = self.__dict__.get("road_hw", {})
+        step, jm = profilesolve.STEP_M, profilesolve.JOINT_M
+        out = []
+        for key, ln, z in zip(comp, lines, zs):
+            xy = np.asarray(ln, np.float64)[:, :2]
+            z = np.asarray(z, np.float64).copy()
+            s = np.r_[0.0, np.cumsum(np.hypot(*np.diff(xy, axis=0).T))]
+            if len(xy) < 2 or s[-1] < 4 * step:
+                out.append(z)
+                continue
+            for at_end in (False, True):
+                p = xy[-1] if at_end else xy[0]
+                if deg.get(nk(p), 0) != 1:
+                    continue
+                road = None
+                for fid, gl in roads_:
+                    for r_end in (True, False):
+                        if np.hypot(*(gl[-1 if r_end else 0] - p)) < profilesolve.END_M:
+                            road = (fid, gl if r_end else gl[::-1])      # (toward the joint)
+                            break
+                    if road is not None:
+                        break
+                if road is None:
+                    continue
+                fid, gl = road
+                gs = np.r_[0.0, np.cumsum(np.hypot(*np.diff(gl, axis=0).T))]
+                sa = np.arange(min(2 * jm, gs[-1]), -1e-9, -step)        # m from the joint, far first
+                if len(sa) < 3:
+                    continue
+                xa = profilesolve._along(gl, sa, True)
+                za = self._ground(xa)
+                sd = np.arange(0.0, min(2 * jm, s[-1]) + 1e-9, step)    # m into the deck
+                zd = np.interp(s[-1] - sd if at_end else sd, s, z)
+                na_, nd_ = profilesolve.joint_solve(za, zd, profilesolve.speed_of(pool[key][0].cls))
+                dd = nd_ - zd
+                pos = s[-1] - sd if at_end else sd
+                order = np.argsort(pos)
+                z = z + np.interp(s, pos[order], dd[order], left=0.0, right=0.0)
+                with self.lock:
+                    self.approach[(key[0], key[1], int(at_end))] = (xa, na_ - za, hws.get(fid, 4.0) + 1.0, fid)
+            out.append(z)
+        return out
 
     def _observed(self, lines, widths, levels, others=()):
         """(per part the lidar's deck heights or None, per part the clearance it keeps over what it crosses), or (None,
