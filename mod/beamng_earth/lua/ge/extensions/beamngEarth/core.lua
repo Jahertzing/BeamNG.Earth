@@ -1056,6 +1056,11 @@ local function onMessage(msg)
     roads.onFarTile(msg, st.anchorId, 'G')
   elseif t == 'grfar_drop' then
     roads.onFarDrop(msg, 'G')
+  elseif t == 'grsub_tile' then
+    -- ... a near one's 64 m squares again, each hidden near the car on its own (roads.lua grassUpdate)
+    roads.onGrassSubs(msg, st.anchorId)
+  elseif t == 'grsub_drop' then
+    roads.onGrassSubsDrop(msg)
   elseif t == 'where_result' then
     statusbar.onResult(msg)
   elseif t == 'place_previews_ready' then      -- the level select's place pictures are there (levelinfo.lua)

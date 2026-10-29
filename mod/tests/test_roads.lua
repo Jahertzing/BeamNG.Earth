@@ -485,6 +485,107 @@ do
   T.check(not scenetree.findObjectById(far.id) or far.deleted, 'grass cards: dropped')
   roads.reset()
 end
+-- grass card squares (2026-10-29, "grass still pops in a lot weirdly"): near the player a tile is drawn as its 64 m
+-- squares, each hidden only near its own square; the whole tile shows until they are all made
+do
+  T.check(roads.squareNearest({ 0, 0, 0 }, 64, { x = 100, y = 10 }, nil) == 36, 'square distance: Chebyshev')
+  T.check(roads.squareNearest({ 0, 0, 0 }, 64, { x = 100, y = 10 }, { x = 70, y = 70 }) == 6, 'square distance: the nearer')
+  T.check(roads.squareNearest({ 0, 0, 0 }, 64, nil, nil) == math.huge, 'square distance: nobody')
+  roads.reset()
+  local g = {}
+  function g:try() return true end
+  function g:charge() end
+  function g:chargeMotion() end
+  local aid = 7
+  local function shapeObj(name)
+    for _, o in pairs(S.objects) do
+      if o.class == 'TSStatic' and o.fields.shapeName == name and not o.deleted then return o end
+    end
+  end
+  local subs = {}
+  for i = 0, 3 do
+    for j = 0, 3 do subs[#subs + 1] = { shape = '/t/grs_' .. i .. j .. '.cdae', pos = { i * 64, j * 64, 0 } } end
+  end
+  local function sendTile()
+    roads.onFarTile({ anchorId = aid, key = '0_0', data = { v = 1, shape = '/t/grs.cdae', pos = { 0, 0, 0 }, subSize = 64,
+      subs = subs } }, aid, 'G')
+  end
+  local function sendSubs()
+    return roads.onGrassSubs({ anchorId = aid, key = '0_0', path = '/t/grs.json', n = #subs,
+      data = { v = 1, shape = '/t/grs.cdae', pos = { 0, 0, 0 }, subSize = 64, subs = subs } }, aid)
+  end
+  T.check(not sendSubs(), 'grass squares: before their tile, nothing')
+  sendTile()
+  roads.update(g, aid, { x = 2000, y = 2000 }, nil)             -- far: the whole tile only
+  roads.update(g, aid, { x = 2000, y = 2000 }, nil)
+  local whole = shapeObj('/t/grs.cdae')
+  T.check(whole ~= nil and not whole.hidden, 'grass squares: far, the whole tile shown')
+  T.check(shapeObj('/t/grs_00.cdae') == nil, 'grass squares: far, no squares made')
+  for _ = 1, 4 do roads.update(g, aid, { x = 270, y = 30 }, nil) end      -- 14 m east of the tile's square
+  T.check(shapeObj('/t/grs_00.cdae') == nil and whole.hidden == true,
+    'grass squares: near before they come, the whole tile as before (hidden within 48 m)')
+  T.check(sendSubs(), 'grass squares: come')
+  for _ = 1, 4 do roads.update(g, aid, { x = 270, y = 30 }, nil) end
+  local s00, s30, s31 = shapeObj('/t/grs_00.cdae'), shapeObj('/t/grs_30.cdae'), shapeObj('/t/grs_31.cdae')
+  T.check(s00 ~= nil and s30 ~= nil, 'grass squares: near, made')
+  T.check(whole.hidden == true, 'grass squares: near, the whole tile hidden once they are all made')
+  T.check(s00 and not s00.hidden, 'grass squares: the far square shown')
+  T.check(s30 and s30.hidden == true, 'grass squares: the square by the player hidden (14 m)')
+  T.check(s31 and not s31.hidden, 'grass squares: the next square up shown (34 m)')
+  roads.grassCards = false
+  roads.update(g, aid, { x = 270, y = 30 }, nil)
+  T.check(whole.hidden == true and s00.hidden == true, 'grass squares: the setting off hides them all')
+  roads.grassCards = true
+  for _ = 1, 3 do roads.update(g, aid, { x = 270, y = 30 }, nil) end
+  T.check(not s00.hidden, 'grass squares: back on, shown again')
+  for _ = 1, 3 do roads.update(g, aid, { x = 600, y = 30 }, nil) end      -- away: the whole tile, the squares hidden
+  T.check(not whole.hidden and s00.hidden == true, 'grass squares: away, the whole tile shown, the squares hidden')
+  roads.onGrassSubsDrop({ anchorId = aid, key = '0_0' })
+  roads.update(g, aid, { x = 600, y = 30 }, nil)
+  T.check(shapeObj('/t/grs_00.cdae') == nil and not whole.hidden, 'grass squares: their drop, deleted')
+  sendSubs()
+  for _ = 1, 4 do roads.update(g, aid, { x = 100, y = 100 }, nil) end
+  T.check(shapeObj('/t/grs_00.cdae') ~= nil, 'grass squares: back near, made again')
+  roads.onFarDrop({ anchorId = aid, key = '0_0' }, 'G')
+  roads.update(g, aid, { x = 100, y = 100 }, nil)
+  T.check(shapeObj('/t/grs_00.cdae') == nil and shapeObj('/t/grs.cdae') == nil, 'grass squares: dropped with the tile')
+  sendTile()
+  for _ = 1, 2 do roads.update(g, aid, { x = 100, y = 100 }, nil) end
+  sendSubs()
+  for _ = 1, 4 do roads.update(g, aid, { x = 100, y = 100 }, nil) end
+  local again = shapeObj('/t/grs_00.cdae')
+  T.check(again ~= nil, 'grass squares: the tile sent again, and its squares')
+  -- a rebase: the squares move with their tile (a ghost: shown or hidden as they were until the new anchor's come)
+  local shift = { apply = function(_, x, y, z) return x, y - 20, z end, beamngQuat = function() return 0, 0, 0, 1 end }
+  roads.transform(shift, { quatMul = function(ax, ay, az, aw) return ax, ay, az, aw end })
+  T.check(again.pos.y == -20, 'grass squares: moved by the rebase')
+  local was, wholeWas = again.hidden, shapeObj('/t/grs.cdae').hidden
+  roads.update(g, aid, { x = 2000, y = 80 }, nil)
+  T.check(again.hidden == was and shapeObj('/t/grs_00.cdae') == again, 'grass squares: a ghost kept as it was')
+  T.check(shapeObj('/t/grs.cdae').hidden == wholeWas and wholeWas == true, 'grass squares: its ghost tile too (no double)')
+  T.check(not sendSubs(), 'grass squares: none for a ghost')
+  roads.clear()
+  roads.update(g, aid, { x = 100, y = 100 }, nil)
+  T.check(shapeObj('/t/grs_00.cdae') == nil and shapeObj('/t/grs.cdae') == nil, 'grass squares: cleared with the tile')
+  -- pooled: the squares load their slot paths, held while made, reported once their drop deletes them
+  roads.setSession('sG')
+  roads.takeSlotsGone('sG')
+  sendTile()
+  for _ = 1, 2 do roads.update(g, aid, { x = 100, y = 100 }, nil) end
+  local slots = {}
+  for i = 1, #subs do slots['s' .. (i - 1)] = { string.format('/temp/beamngEarth/sG/slot_%05d.cdae', 100 + i), 500 + i } end
+  roads.onGrassSubs({ anchorId = aid, key = '0_0', path = '/t/grs.json', n = #subs, slots = slots,
+    data = { v = 1, subSize = 64, subs = subs } }, aid)
+  for _ = 1, 4 do roads.update(g, aid, { x = 100, y = 100 }, nil) end
+  T.check(shapeObj('/temp/beamngEarth/sG/slot_00101.cdae') ~= nil and shapeObj('/t/grs_00.cdae') == nil,
+    'grass squares: their slot paths loaded')
+  T.check(#roads.slotsHeld('sG') == #subs, 'grass squares: their slots held')
+  roads.onGrassSubsDrop({ anchorId = aid, key = '0_0' })
+  T.check(#roads.takeSlotsGone('sG') == 0, 'grass squares: dropped, not deleted yet: still held')
+  roads.update(g, aid, { x = 100, y = 100 }, nil)
+  T.check(#roads.takeSlotsGone('sG') == #subs, 'grass squares: deleted, every slot reported')
+  roads.reset()
+end
 -- urgent rebuilds (2026-10-28, Jeff's Drive: one every second near the car and for 10+ s after a rebase, each a 15-80 ms
 -- frame): only for a collider the car reaches within URGENT_S (URGENT_MIN_M at least), not behind a moving car, not
 -- where a rebase's ghost of the same kind still collides

@@ -1203,6 +1203,20 @@ class Server:
         return self.far_bld_pool.submit(blockworker.grass_cards_tile, aid, anchor.lat, anchor.lon, anchor.zooms[0],
                                         tx, ty, self.out_dir, self.vfs_dir, tex).result()
 
+    def grass_sub_tile(self, aid, tx, ty, sent):
+        """A Connection's grsub Tracker's build (worker threads): the grass card tile (tx, ty) of anchor aid once its
+        grfar Tracker sent it (sent: that Tracker's keys; the squares come after the tile), as (vfs path of its JSON,
+        square count), or None (asked again on a later pose)."""
+        if (tx, ty) not in sent:
+            return None
+        name = f"grfar_{aid}_{tx}_{ty}.json"
+        try:
+            with open(os.path.join(self.out_dir, name)) as f:
+                data = json.load(f)
+        except (OSError, ValueError):
+            return None
+        return f"{self.vfs_dir}/{name}", len(data.get("subs") or ())
+
     def build_far_bridge_tile(self, aid, tx, ty):
         """buildings.far_bridge_tile: a far bridge (render-only) tile of anchor aid, or None (its road cells not at
         hand, or no worker processes: none then). Worker threads."""
@@ -3094,6 +3108,9 @@ class Connection:
         # grass cards past the 3D grass (grasscards.py, --grass-cards on): not under it (skip_m)
         self.grfar = vegetationmod.Tracker(grasscardsmod.SEND_M, grasscardsmod.DROP_M, grasscardsmod.PER_POSE, "grfar",
                                            skip_m=grasscardsmod.SKIP_M)
+        # ... and the near ones again as their squares (grasscards.SUB: the mod hides each near the car on its own)
+        self.grsub = vegetationmod.Tracker(grasscardsmod.SUB_SEND_M, grasscardsmod.SUB_DROP_M,
+                                           grasscardsmod.SUB_PER_POSE, "grsub")
         self.sky = skylinemod.Tracker()         # the skyline's z12 cells (--skyline on): after the far buildings
         self.mid = skylinemod.mid_tracker()     # ... and its mid ring of z14 cells (2-6 km)
         self.nav = navgraphmod.Tracker()        # the AI road graph around the player (--traffic on)
@@ -3482,8 +3499,8 @@ class Connection:
             self.s.connections.discard(self)
             self.s.slots_let_go(list(self.slot_holds))
             self.slot_holds = {}
-            for tr in (self.roads, self.veg, self.bldfar, self.bldsky, self.brfar, self.grfar, self.sky, self.mid,
-                       self.nav):
+            for tr in (self.roads, self.veg, self.bldfar, self.bldsky, self.brfar, self.grfar, self.grsub, self.sky,
+                       self.mid, self.nav):
                 if tr is not None:
                     tr.close()
             self.s.drop_claims(self)
@@ -4102,6 +4119,8 @@ class Connection:
             # (after the road tiles round the car: the least urgent of the near things)
             self.grfar.on_pose(self, aid, *self.focus, asyncio.get_running_loop(), self.s.build_grass_card_tile,
                                view=self.view_at)
+            self.grsub.on_pose(self, aid, *self.focus, asyncio.get_running_loop(),
+                               lambda a, tx, ty: self.s.grass_sub_tile(a, tx, ty, self.grfar.sent), view=self.view_at)
         if self.s.traffic and aid == self.active and self.nav_may_start(aid):
             self.nav.on_pose(self, aid, *self.focus, asyncio.get_running_loop(), self.s.build_navgraph)
         if aid == self.active:

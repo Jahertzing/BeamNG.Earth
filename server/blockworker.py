@@ -762,7 +762,7 @@ def grass_cards_tile(aid, lat, lon, zoom, tx, ty, out_dir, vfs_dir, tex=None):
                             lambda la, lo: ground(frame, la, lo, _s.dem.sample(la, lo, zoom)), photo)
     if mesh is None:
         return grasscards.empty_tile(out_dir, vfs_dir, aid, tx, ty)
-    return grasscards.write_tile(mesh, out_dir, vfs_dir, aid, tx, ty, x0, y0)
+    return grasscards.write_tile(mesh, out_dir, vfs_dir, aid, tx, ty, x0, y0, size)
 
 
 def skyline_tile(aid, lat, lon, zoom, ux, uy, out_dir, vfs_dir, lamp_region=None):

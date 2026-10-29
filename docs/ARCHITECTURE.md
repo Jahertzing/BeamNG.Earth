@@ -987,10 +987,16 @@ three days of testing: dem 741 MB / 7.5k files, imagery 1.4 GB / 35k, deshadow 7
   from world position, kept by the grass mask's weight, cropland left out, 0.6-1.1 m tall, sunk 0.15 m), each coloured (vertex
   colour) from the ground photo under it (blurred to 20 m: no crop rows) and lit as the ground (normals up). The texture is our own grey blade clump
   (`tools/make_grass_card.py`) with coverage-preserving opacity mips, so the alpha-tested cards don't thin out with
-  distance. A `vegetation.Tracker` (kind `grfar`, pooled shape slots) sends `grfar_tile` / `grfar_drop`; it skips
-  tiles within `SKIP_M` (128 m) when it builds, and the mod (`roads.lua` far kind 'G') hides a tile while the player
-  or the camera is within `GRASS_CARD_NEAR_M` (48 m) of its square (cards up close are flat crosses and may lean
-  over a road edge). The settings page's "Grass to 1 km" hides them at once. ~3.6 k cards (1.7 MB) for a full tile.
+  distance. A `vegetation.Tracker` (kind `grfar`, pooled shape slots) sends `grfar_tile` / `grfar_drop`. Each tile is
+  also written as 4 x 4 squares of 64 m (`grasscards.split`); a second Tracker (kind `grsub`, `SUB_SEND_M` 192 m /
+  `SUB_DROP_M` 384 m) sends a near tile again as `grsub_tile` / `grsub_drop`, its squares' shapes pooled (slots
+  `s<i>`: the engine's frame cost grows with every shape file it ever loaded, so squares are only pooled near the
+  car). Within `GRASS_SUB_M` (128 m) of the player or camera the mod (`roads.lua` grassUpdate) draws the squares
+  instead of the tile, each hidden within `GRASS_SUB_NEAR_M` (24 m) of its own square (cards up close are flat
+  crosses and may lean over a road edge); without them the whole tile hides within `GRASS_CARD_NEAR_M` (48 m). Until
+  2026-10-29 that whole-tile hide was the only one, and `SKIP_M` (128 m) left the tiles round the car unbuilt: in
+  Jeff's drive whole 256 m patches of cards out to ~300 m (the 3D short grass ends at 80 m) came and went, and every
+  teleport and rebase left a hole round the car. The settings page's "Grass to 1 km" hides them at once. ~3.6 k cards (1.7 MB) for a full tile.
 - Optional preload library `tools/gcpatch` (Linux, 0.39.4 only, README there): at game start it
   changes the handler's `and esi, 0x0E` to `and esi, 0` in memory (after checking its first 54
   bytes), so block imports and moves free no grass at all. BeamNG's Lua FFI refuses C function

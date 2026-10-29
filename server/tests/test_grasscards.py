@@ -135,6 +135,13 @@ class FilesTest(unittest.TestCase):
             self.assertEqual(data["pos"], [256.0, -512.0, 0.0])
             shape = cdae.read(os.path.join(d, "grfar_3_1_-2.cdae"))
             self.assertEqual([m["name"] for m in shape["materials"]], [gc.MATERIAL])
+            # its SUB x SUB squares (drawn near the player): every square of a full tile, at its corner
+            self.assertEqual(data["subSize"], 64.0)
+            self.assertEqual(len(data["subs"]), gc.SUB * gc.SUB)
+            self.assertEqual(data["subs"][0], {"shape": "/temp/bne/grfar_3_1_-2_00.cdae", "pos": [256.0, -512.0, 0.0]})
+            self.assertEqual(data["subs"][-1]["pos"], [256.0 + 192.0, -512.0 + 192.0, 0.0])
+            for e in data["subs"]:
+                self.assertTrue(os.path.exists(os.path.join(d, os.path.basename(e["shape"]))))
             path, n = gc.empty_tile(d, "/temp/bne", 3, 2, -2)
             self.assertEqual(n, 0)
             self.assertNotIn("shape", _load((os.path.join(d, "grfar_3_2_-2.json"))))
@@ -147,6 +154,36 @@ class FilesTest(unittest.TestCase):
         self.assertTrue(m["Stages"][0]["vertColor"] and m["alphaTest"] and m["doubleSided"])
         for k in ("baseColorMap", "opacityMap"):
             self.assertTrue(os.path.exists(os.path.join(root, m["Stages"][0][k].lstrip("/"))), k)
+
+
+class SplitTest(unittest.TestCase):
+    def test_squares_hold_every_card_once(self):
+        """split: each card in the square of its foot, positions relative to that square, triangles re-indexed."""
+        frame = geodesy.EnuFrame(40.0, -105.0)
+        mask = np.full((gc.MASK_PX, gc.MASK_PX), 255, np.uint8)
+        mask[:, gc.MASK_PX // 2:] = 0                       # (x half 128-256 m bare: squares i 2, 3 left out)
+        mesh = gc.build(frame, 0.0, 0.0, 256.0, mask, flat(5.0))
+        parts = gc.split(mesh, 256.0)
+        n = len(mesh[0]) // 8
+        self.assertEqual(sum(len(m[0]) // 8 for _, _, m in parts), n)
+        self.assertEqual(sorted({i for i, _, _ in parts}), [0, 1])
+        P = mesh[0].reshape(n, 8, 3)
+        foot = P[:, :2, :2].mean(1)
+        for i, j, (p, uv, t, c, nm) in parts:
+            k = len(p) // 8
+            self.assertEqual(len(t), 4 * k)
+            self.assertEqual(int(t.min()), 0)
+            self.assertEqual(int(t.max()), 8 * k - 1)
+            f = p.reshape(k, 8, 3)[:, :2, :2].mean(1)
+            self.assertTrue(((f >= -1e-9) & (f < 64.0 + 1e-9)).all(), (i, j))
+            self.assertEqual(len(uv), len(p))
+            self.assertEqual(len(c), len(p))
+            self.assertEqual(len(nm), len(p))
+            # the same cards: shifted back they are among the tile's
+            back = f + np.array([i * 64.0, j * 64.0])
+            self.assertTrue(np.isin(np.round(back[:, 0], 6), np.round(foot[:, 0], 6)).all())
+            # triangles pick the right vertices: triangle 0 of the square's card 0 is its own first three
+            self.assertEqual(t[0].tolist(), [0, 1, 2])
 
 
 class GrassMaskExTest(unittest.TestCase):
@@ -173,15 +210,59 @@ class GrassMaskExTest(unittest.TestCase):
 
 
 class TrackerTest(unittest.TestCase):
-    def test_not_under_the_3d_grass(self):
-        """The Tracker's wanted tiles: out to SEND_M, none whose square comes within SKIP_M."""
-        import roads as roadsmod
+    def test_the_tiles_round_the_car_too(self):
+        """The Tracker's wanted tiles: out to SEND_M, the car's own too (the mod hides the squares under it; left out
+        before 2026-10-29: a hole round the car after every teleport and rebase)."""
         tr = vegetation.Tracker(gc.SEND_M, gc.DROP_M, gc.PER_POSE, "grfar", skip_m=gc.SKIP_M)
-        near = set(roadsmod.tiles_near(128.0, 128.0, gc.SKIP_M))
+        self.assertFalse(tr.skip_m)
         far = set(tr._near(128.0, 128.0, gc.SEND_M))
-        self.assertIn((0, 0), near)
-        self.assertTrue(near < far)
-        self.assertIn((4, 0), far - near)
+        self.assertIn((0, 0), far)
+        self.assertIn((4, 0), far)
+
+
+class SubsTest(unittest.TestCase):
+    """The near tiles' squares again (grsub): only once the tile itself was sent, their shapes pooled."""
+
+    def test_grass_sub_tile(self):
+        import earthd
+        frame = geodesy.EnuFrame(40.0, -105.0)
+        mask = np.full((gc.MASK_PX, gc.MASK_PX), 255, np.uint8)
+        mesh = gc.build(frame, 0.0, 0.0, 256.0, mask, flat(10.0))
+        with tempfile.TemporaryDirectory() as d:
+            gc.write_tile(mesh, d, "/temp/bne", 3, 1, -2, 0.0, 0.0)
+            srv = type("S", (), {"out_dir": d, "vfs_dir": "/temp/bne"})()
+            self.assertIsNone(earthd.Server.grass_sub_tile(srv, 3, 1, -2, set()), "not sent yet")
+            self.assertEqual(earthd.Server.grass_sub_tile(srv, 3, 1, -2, {(1, -2)}),
+                             ("/temp/bne/grfar_3_1_-2.json", gc.SUB * gc.SUB))
+            self.assertIsNone(earthd.Server.grass_sub_tile(srv, 3, 2, -2, {(2, -2)}), "no file")
+
+    def test_squares_pooled(self):
+        from concurrent.futures import Future
+        frame = geodesy.EnuFrame(40.0, -105.0)
+        mask = np.full((gc.MASK_PX, gc.MASK_PX), 255, np.uint8)
+        mesh = gc.build(frame, 0.0, 0.0, 256.0, mask, flat(10.0))
+        with tempfile.TemporaryDirectory() as d:
+            gc.write_tile(mesh, d, "/temp/bne", 3, 1, -2, 0.0, 0.0)
+            asked, sent = [], []
+
+            def pool(conn, files):
+                asked.append(files)
+                return {k: [f"/temp/bne/slot_{i:05d}.cdae", i] for i, k in enumerate(files)}
+
+            conn = type("C", (), {"s": type("S", (), {"out_dir": d, "pool_shapes": staticmethod(pool)})(),
+                                  "send": lambda self, m: sent.append(m)})()
+            tr = vegetation.Tracker(gc.SUB_SEND_M, gc.SUB_DROP_M, gc.SUB_PER_POSE, "grsub")
+            tr.aid = 3
+            fut = Future()
+            fut.set_result(("/temp/bne/grfar_3_1_-2.json", gc.SUB * gc.SUB))
+            tr._built(conn, 3, (1, -2), fut)
+            self.assertEqual(len(asked), 1)
+            self.assertEqual(asked[0]["s0"], "grfar_3_1_-2_00.cdae")
+            self.assertEqual(len(asked[0]), gc.SUB * gc.SUB)
+            m = sent[0]
+            self.assertEqual((m["type"], m["key"], m["n"]), ("grsub_tile", "1_-2", gc.SUB * gc.SUB))
+            self.assertEqual(len(m["data"]["subs"]), gc.SUB * gc.SUB)
+            self.assertEqual(m["slots"]["s0"], ["/temp/bne/slot_00000.cdae", 0])
 
 
 class WorkerTest(unittest.TestCase):
@@ -220,7 +301,8 @@ class WorkerTest(unittest.TestCase):
         got, files = self.run_tile(30)
         self.assertEqual(got[0], "/temp/bne/grfar_4_2_-1.json")
         self.assertGreater(got[1], 1000)
-        self.assertEqual(files, ["grfar_4_2_-1.cdae", "grfar_4_2_-1.json"])
+        self.assertEqual(files[:2], ["grfar_4_2_-1.cdae", "grfar_4_2_-1.json"])
+        self.assertEqual(len(files), 2 + gc.SUB * gc.SUB)
 
     def test_no_cards_on_cropland(self):
         self.assertEqual(self.run_tile(40)[0][1], 0)
