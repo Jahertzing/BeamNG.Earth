@@ -91,6 +91,40 @@ class Lettering(unittest.TestCase):
             self.assertTrue(f.polys and f.tris and not f.texts)          # (lettering as geometry)
             self.assertGreater(w, 0.3)
 
+    def test_no_panel_under_its_fill(self):
+        """A border is a ring in the panel's own plane, not a white panel a layer behind the green (the two fought in
+        the depth buffer from a few hundred metres: the user's I-25 gantries, 2026-10-29); the ring and the fill
+        together cover the outer outline exactly, and the steel back covers the outer outline."""
+        def bbox(pts):
+            xs, ys = [p[0] for p in pts], [p[1] for p in pts]
+            return min(xs), min(ys), max(xs), max(ys)
+
+        def covers(a, b):
+            return a[0] <= b[0] + 1e-9 and a[1] <= b[1] + 1e-9 and a[2] >= b[2] - 1e-9 and a[3] >= b[3] - 1e-9
+        faces = [gs.guide_face([("I", "25", "SOUTH"), ("CO", "7", "EAST")], ["Denver"], "228", "1 MILE")[0],
+                 gs.gore_face("220")[0], gs.mile_face(214)[0], gs.blade_face("Main St", 0.2)[0],
+                 gs.shield("I", "25")[0], gs.shield("CO", "7")[0], gs.shield("toll", "E-470")[0]]
+        for f in faces:
+            self.assertTrue(f.backs)
+            for layer, outline, color, _ in f.polys:
+                if color == gs.WHITE:
+                    continue
+                for l2, o2, c2, _ in f.polys:
+                    if c2 == gs.WHITE and l2 < layer:
+                        self.assertFalse(covers(bbox(o2), bbox(outline)), "a white panel under a fill")
+            for layer, outer, inner in f.backs:
+                ring = [t for t in f.tris if t[0] == layer and t[1] == outer + inner]
+                self.assertEqual(len(ring), 1)
+                pts, tris = ring[0][1], ring[0][2]
+                ring_area = sum(abs(gs._area([pts[a], pts[b], pts[c]])) for a, b, c in tris)
+                self.assertAlmostEqual(ring_area + abs(gs._area(inner)), abs(gs._area(outer)), places=6)
+                for a, b, c in tris:            # the same winding as the fill's (facing the viewer)
+                    self.assertGreater(gs._area([pts[a], pts[b], pts[c]]) * gs._area(outer), 0)
+        m = gs.Mesh()
+        f, _ = gs.gore_face("220")
+        gs.draw_face(m, f, (0, 0, 0), (1, 0, 0), (0, -1, 0))
+        self.assertGreater(len(m), 0)
+
     def test_triangulate_concave(self):
         tris = gs.triangulate(gs.INTERSTATE)
         self.assertEqual(len(tris), len(gs.INTERSTATE) - 2)

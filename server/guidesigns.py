@@ -51,7 +51,9 @@ YELLOW = (248, 192, 0)
 POST = (196, 198, 200)          # a delineator's post
 STEEL = (150, 152, 152)
 
-LAYER_M = 0.012                 # m between a face's layers (panel, border, shield, lettering): toward the viewer
+# m between a face's layers (panel and border, shield, lettering): toward the viewer. 2 cm, not 1.2: a layer over the
+# one behind it must win the depth test from a few hundred metres too (2026-10-29: the gantries' panels fought)
+LAYER_M = 0.02
 PANEL_DEPTH = 0.05              # m from a panel's face to its back
 
 # MUTCD 2009 freeway overhead sizes (inches as metres: the capitals' heights), a fifth bigger: a screen shows a
@@ -275,6 +277,7 @@ class Face:
         self.polys = []         # (layer, outline, colour or None for white, material)
         self.texts = []         # (layer, quads, ink "w" / "k")
         self.tris = []          # (layer, points, triangles, colour, material): lettering as geometry (vtext)
+        self.backs = []         # (layer, outer, inner): framed panels' outlines (draw_face's steel back: the outer)
 
     def poly(self, outline, color, layer):
         mat = M_WHITE if color == WHITE else M_PANEL
@@ -282,6 +285,25 @@ class Face:
 
     def rect(self, x0, y0, x1, y1, color, layer):
         self.poly([(x0, y0), (x1, y0), (x1, y1), (x0, y1)], color, layer)
+
+    def framed(self, outer, inner, ring, fill, layer):
+        """A panel with a border in one plane: the ring between outer and inner (outlines of as many points, in
+        step: rounded_rect's or _scaled's of one shape) in `ring`, inner filled with `fill`. Not a fill drawn over a
+        full panel a layer behind: from a few hundred metres the two fought in the depth buffer and the panel
+        showed through in long triangles of its fan (the user's I-25 gantries, 2026-10-29)."""
+        outer, inner = list(outer), list(inner)
+        assert len(outer) == len(inner), (len(outer), len(inner))
+        n = len(outer)
+        pts = outer + inner
+        sign = 1 if _area(outer) >= 0 else -1
+        tris = []
+        for i in range(n):
+            j = (i + 1) % n
+            a, b, c, d = i, j, n + j, n + i
+            tris += [(a, b, c), (a, c, d)] if sign > 0 else [(a, c, b), (a, d, c)]
+        self.tris.append((layer, pts, tris, ring, M_WHITE if ring == WHITE else M_PANEL))
+        self.poly(inner, fill, layer)
+        self.backs.append((layer, outer, inner))
 
     def text(self, s, cap, x, y, ink="w", layer=3, atlas=False):
         """s with its pen at x on the baseline y, as geometry (vtext; atlas: textured quads of the glyph atlas, which
@@ -313,6 +335,9 @@ class Face:
                                ink))
         for layer, pts, tris, color, mat in other.tris:
             self.tris.append((layer + dlayer, [(x + dx, y + dy) for x, y in pts], tris, color, mat))
+        for layer, outer, inner in other.backs:
+            self.backs.append((layer + dlayer, [(x + dx, y + dy) for x, y in outer],
+                               [(x + dx, y + dy) for x, y in inner]))
 
     def bounds(self):
         xs = [x for _, o, _, _ in self.polys for x, _ in o] + [q[i] for _, qs, _ in self.texts for q in qs
@@ -367,9 +392,8 @@ def shield(network, number, h=SHIELD_H):
     num = str(number)
     if kind == "I":
         w = h * (1.0 if len(num) <= 2 else 1.25)
-        f.poly(_scaled(INTERSTATE, w, h, 0, 0), WHITE, 1)
         inner = _scaled(INTERSTATE, w * 0.9, h * 0.9, w * 0.05, h * 0.05)
-        f.poly(inner, BLUE, 2)
+        f.framed(_scaled(INTERSTATE, w, h, 0, 0), inner, WHITE, BLUE, 1)
         f.poly([(w * 0.12, h * 0.74), (w * 0.88, h * 0.74), (w * 0.895, h * 0.885), (w * 0.80, h * 0.875),
                 (w * 0.65, h * 0.865), (w * 0.5, h * 0.855), (w * 0.35, h * 0.865), (w * 0.20, h * 0.875),
                 (w * 0.105, h * 0.885)], RED, 3)
@@ -383,8 +407,8 @@ def shield(network, number, h=SHIELD_H):
         f.text_c(num, h * (0.42 if len(num) <= 2 else 0.37), w / 2, h * 0.30, "k", 3)
     elif kind == "CO":
         w = h * (1.0 if len(num) <= 2 else 1.25)
-        f.poly(rounded_rect(0, 0, w, h, h * 0.06), WHITE, 1)
-        f.poly(rounded_rect(h * 0.04, h * 0.04, w - h * 0.04, h - h * 0.04, h * 0.04), GREEN, 2)
+        f.framed(rounded_rect(0, 0, w, h, h * 0.06), rounded_rect(h * 0.04, h * 0.04, w - h * 0.04, h - h * 0.04,
+                                                                  h * 0.04), WHITE, GREEN, 1)
         peaks = [(0.04 + x * 0.92, y) for x, y in CO_PEAKS]
         f.poly(_scaled([(0.04, 0.62)] + peaks + [(0.96, 0.62)], w, h, 0, 0), WHITE, 3)
         f.text_c("COLORADO", h * 0.075, w / 2, h * 0.655, "k", 4)
@@ -392,8 +416,8 @@ def shield(network, number, h=SHIELD_H):
     elif kind == "toll":
         label = num if not network or "TOLL" in network.upper() else f"{network}-{num}"
         w = max(h * 1.2, text_width(label, h * 0.32) + h * 0.3)
-        f.poly(rounded_rect(0, 0, w, h, h * 0.08), WHITE, 1)
-        f.poly(rounded_rect(h * 0.04, h * 0.04, w - h * 0.04, h - h * 0.04, h * 0.06), (0, 92, 150), 2)
+        f.framed(rounded_rect(0, 0, w, h, h * 0.08), rounded_rect(h * 0.04, h * 0.04, w - h * 0.04, h - h * 0.04,
+                                                                  h * 0.06), WHITE, (0, 92, 150), 1)
         f.rect(h * 0.04, h * 0.62, w - h * 0.04, h * 0.80, (236, 120, 30), 3)
         f.text_c("TOLL", h * 0.12, w / 2, h * 0.65, "w", 4)
         f.text_c(label, h * 0.32, w / 2, h * 0.18, "w", 4)
@@ -463,17 +487,18 @@ def guide_face(shields, dests, exit_ref=None, bottom=None, arrow_kind=None, exit
         ax = (W - MARGIN - 0.45) if arrow_kind == "up_right" else (MARGIN + 0.45)
         body.poly([(ax + x, H / 2 - 0.35 + yy) for x, yy in arrow(45.0 if arrow_kind == "up_right" else -45.0,
                                                                     0.8)], WHITE, 3)
-    f.poly(rounded_rect(0, 0, W, H, CORNER), WHITE, 0)
-    f.poly(rounded_rect(BORDER, BORDER, W - BORDER, H - BORDER, CORNER - BORDER), GREEN, 1)
+    f.framed(rounded_rect(0, 0, W, H, CORNER), rounded_rect(BORDER, BORDER, W - BORDER, H - BORDER, CORNER - BORDER),
+             WHITE, GREEN, 0)
     f.add(body, 0, 0)
     if exit_ref:
         label = f"EXIT {exit_ref}"
         tw = text_width(label, CAP_TAB) + 2 * 0.22
         th = CAP_TAB + 2 * 0.2
         tx0 = 0.0 if exit_left else W - tw
-        f.poly(rounded_rect(tx0, H - 0.1, tx0 + tw, H + th, 0.15), WHITE, 0)
-        f.poly(rounded_rect(tx0 + BORDER, H - 0.1, tx0 + tw - BORDER, H + th - BORDER, 0.12), GREEN, 1)
-        f.text(label, CAP_TAB, tx0 + 0.22, H + 0.17)
+        # on the panel's top edge, not over it (a tab overlapping the panel fought it in the depth buffer)
+        f.framed(rounded_rect(tx0, H, tx0 + tw, H + th, 0.15),
+                 rounded_rect(tx0 + BORDER, H + BORDER, tx0 + tw - BORDER, H + th - BORDER, 0.12), WHITE, GREEN, 0)
+        f.text(label, CAP_TAB, tx0 + 0.22, H + 0.2)
         H_all = H + th
     else:
         H_all = H
@@ -504,8 +529,7 @@ def gore_face(exit_ref):
     cap = 0.30
     W = max(1.5, max(text_width(s, cap) for s in lines) + 0.9)
     H = 0.25 + len(lines) * (cap + 0.18) + 0.65
-    f.poly(rounded_rect(0, 0, W, H, 0.15), WHITE, 0)
-    f.poly(rounded_rect(0.04, 0.04, W - 0.04, H - 0.04, 0.12), GREEN, 1)
+    f.framed(rounded_rect(0, 0, W, H, 0.15), rounded_rect(0.04, 0.04, W - 0.04, H - 0.04, 0.12), WHITE, GREEN, 0)
     y = H - 0.22 - cap
     for s in lines:
         f.text_c(s, cap, W / 2, y)
@@ -524,8 +548,7 @@ def mile_face(mile):
     cap = 0.25
     W = 0.45 if len(s) <= 2 else 0.38
     H = 0.20 + 0.14 + len(digits) * (cap + 0.08) + 0.12
-    f.poly(rounded_rect(0, 0, W, H, 0.05), WHITE, 0)
-    f.poly(rounded_rect(0.02, 0.02, W - 0.02, H - 0.02, 0.04), GREEN, 1)
+    f.framed(rounded_rect(0, 0, W, H, 0.05), rounded_rect(0.02, 0.02, W - 0.02, H - 0.02, 0.04), WHITE, GREEN, 0)
     y = H - 0.08 - 0.10
     f.text_c("MILE", 0.10, W / 2, y)
     y -= 0.10 + cap
@@ -693,9 +716,10 @@ def draw_face(mesh, face, o, right, normal, back=True):
             mesh.quad(P(x0, y0, layer), P(x1, y0, layer), P(x1, y1, layer), P(x0, y1, layer), mat, WHITE,
                       [(u0, v0), (u1, v0), (u1, v1), (u0, v1)])
     if back:
-        for layer, outline, color, mat in face.polys:
-            if layer != 0:
-                continue
+        inners = [inner for layer, _, inner in face.backs if layer == 0]
+        outlines = [outer for layer, outer, _ in face.backs if layer == 0]
+        outlines += [ol for layer, ol, _, _ in face.polys if layer == 0 and ol not in inners]
+        for outline in outlines:
             pts = [P(x, y, 0) for x, y in outline]
             pts = [tuple(np.asarray(p) - normal * PANEL_DEPTH) for p in pts]
             tris = [(a, c, b) for a, b, c in triangulate(outline)]
@@ -1628,8 +1652,8 @@ def blade_face(text, cap):
     H = round(cap * 2.0 + 0.03, 3)
     W = max(0.6, text_width(text, cap) + cap * 1.4)
     f = Face()
-    f.poly(rounded_rect(-W / 2, 0, W / 2, H, cap * 0.25), WHITE, 0)
-    f.poly(rounded_rect(-W / 2 + 0.012, 0.012, W / 2 - 0.012, H - 0.012, cap * 0.2), GREEN, 1)
+    f.framed(rounded_rect(-W / 2, 0, W / 2, H, cap * 0.25),
+             rounded_rect(-W / 2 + 0.012, 0.012, W / 2 - 0.012, H - 0.012, cap * 0.2), WHITE, GREEN, 0)
     f.text_c(text, cap, 0.0, (H - cap) / 2, "w", 2, vector=True)
     return f, (W, H)
 

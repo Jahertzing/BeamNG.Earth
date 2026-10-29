@@ -666,8 +666,8 @@ def _green(lines, pad=0.22, gap=0.14, min_w=1.2):
     f = Face()
     W = max([min_w] + [gs.text_width(s, c) + 2 * pad for s, c in lines])
     H = pad * 2 + sum(c for _, c in lines) + gap * (len(lines) - 1)
-    f.poly(gs.rounded_rect(-W / 2, 0, W / 2, H, 0.10), gs.WHITE, 0)
-    f.poly(gs.rounded_rect(-W / 2 + 0.03, 0.03, W / 2 - 0.03, H - 0.03, 0.08), gs.GREEN, 1)
+    f.framed(gs.rounded_rect(-W / 2, 0, W / 2, H, 0.10), gs.rounded_rect(-W / 2 + 0.03, 0.03, W / 2 - 0.03, H - 0.03, 0.08),
+             gs.WHITE, gs.GREEN, 0)
     y = H - pad
     for s, c in lines:
         y -= c
