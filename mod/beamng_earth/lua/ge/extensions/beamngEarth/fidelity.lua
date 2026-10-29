@@ -285,7 +285,12 @@ function M.captureReflection(res)
   reflect.slot = reflect.slot == 'a' and 'b' or 'a'
   local prefix = M.REFLECT.dir .. reflect.slot .. '_skybox'
   if FS and FS.directoryCreate then FS:directoryCreate(M.REFLECT.dir, true) end
+  local t0 = os.clock()
   captureCameraCubemap(prefix, tonumber(res) or M.REFLECT.res)
+  local ms = (os.clock() - t0) * 1000
+  -- whether the faces are written inside the call (then a capture can hide the player's car around it unseen)
+  log('I', 'beamngEarth', string.format('fidelity: captureCameraCubemap %s in %.1f ms, faces %s', prefix, ms,
+    facesReady(prefix) and 'written in the call' or 'not yet written'))
   reflect.pending = { prefix = prefix, t = os.clock() }
   return true, prefix
 end
