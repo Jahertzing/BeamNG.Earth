@@ -37,7 +37,7 @@ M.SHADERS = {
 }
 
 local mode = 'on'
-local features = { ao = true, shafts = true }
+local features = { ao = true, shafts = true, reflect = false }   -- reflect: automatic captures (experimental)
 local debug = false
 local lastCheck = -math.huge
 local aoSaved = nil       -- the player's AO values before ours (nil: not applied)
@@ -242,8 +242,20 @@ end
 -- level's environment map (normalised: the sky's live ambient scales it, so it follows the time of day), the city
 -- reflects the city. Two file sets in turn, so a capture never overwrites the faces in use.
 
-M.REFLECT = { name = 'BeamNGEarthLiveReflection', dir = '/temp/beamngEarth/reflect/', res = 256, waitS = 5 }
-local reflect = { slot = 'b', pending = nil, savedEnv = nil }
+M.REFLECT = { name = 'BeamNGEarthLiveReflection', dir = '/temp/beamngEarth/reflect/', res = 256, waitS = 5,
+  moveM = 600, sunDeg = 8, minGapS = 20, maxSpeed = 3 }
+-- core_camera names (prefixes) with the camera in the car: the driver's seat, onboard (hood, rider), occupants
+M.INSIDE_CAMS = { 'driver', 'onboard', 'occupant', 'passenger' }
+
+-- Pure: is a core_camera name one inside the car (unknown: yes)?
+function M.insideCam(name)
+  if type(name) ~= 'string' then return true end
+  for _, p in ipairs(M.INSIDE_CAMS) do
+    if name:sub(1, #p) == p then return true end
+  end
+  return false
+end
+local reflect = { slot = 'b', pending = nil, savedEnv = nil, sync = nil, last = nil }
 
 local function levelInfo()
   if not scenetree or not scenetree.findClassObjects then return nil end
@@ -279,20 +291,79 @@ local function assignReflection(prefix)
   return true
 end
 
--- Capture a cubemap at the camera now; it becomes the level's environment map when its faces are on disk.
-function M.captureReflection(res)
+-- Pure: should the automatic capture run now? `s` = { dist = m from the last capture (nil: none yet), sunDelta = degrees
+-- the sun moved since, since = s since the last one, speed = m/s, inside = the camera is in the car, sync = the
+-- capture writes its faces inside the call (nil: not known yet) }.
+function M.wantCapture(s, r)
+  r = r or M.REFLECT
+  if s.since and s.since < r.minGapS then return false end
+  if s.inside and s.sync ~= true then return false end     -- the cabin would be in the cubemap
+  if (s.speed or 0) > r.maxSpeed then return false end      -- the capture's hitch: only when (nearly) stopped
+  if s.dist == nil then return true end
+  return s.dist >= r.moveM or (s.sunDelta or 0) >= r.sunDeg
+end
+
+local function removeFaces(prefix)
+  if not FS or not FS.removeFile or not FS.fileExists then return end
+  for i = 0, 5 do
+    local f = prefix .. i .. '.hdr.dds'
+    if FS:fileExists(f) then FS:removeFile(f) end
+  end
+end
+
+-- Capture a cubemap at the camera now; it becomes the level's environment map when its faces are on disk. With
+-- `hideCar`, the player's car is hidden for the call (its cabin when the camera is inside it).
+function M.captureReflection(res, hideCar)
   if type(captureCameraCubemap) ~= 'function' then return false, 'no captureCameraCubemap in this build' end
   reflect.slot = reflect.slot == 'a' and 'b' or 'a'
   local prefix = M.REFLECT.dir .. reflect.slot .. '_skybox'
   if FS and FS.directoryCreate then FS:directoryCreate(M.REFLECT.dir, true) end
+  removeFaces(prefix)
+  local veh = hideCar and getPlayerVehicle and getPlayerVehicle(0) or nil
+  if veh and veh.setMeshAlpha then veh:setMeshAlpha(0, '') end
   local t0 = os.clock()
-  captureCameraCubemap(prefix, tonumber(res) or M.REFLECT.res)
+  local ok, err = pcall(captureCameraCubemap, prefix, tonumber(res) or M.REFLECT.res)
   local ms = (os.clock() - t0) * 1000
+  if veh and veh.setMeshAlpha then veh:setMeshAlpha(1, '') end
+  if not ok then return false, tostring(err) end
   -- whether the faces are written inside the call (then a capture can hide the player's car around it unseen)
+  reflect.sync = facesReady(prefix)
   log('I', 'beamngEarth', string.format('fidelity: captureCameraCubemap %s in %.1f ms, faces %s', prefix, ms,
-    facesReady(prefix) and 'written in the call' or 'not yet written'))
+    reflect.sync and 'written in the call' or 'not yet written'))
   reflect.pending = { prefix = prefix, t = os.clock() }
   return true, prefix
+end
+
+local function cameraInside()
+  if not core_camera or not core_camera.getActiveCamName then return true end
+  local ok, name = pcall(core_camera.getActiveCamName, 0)
+  if not ok then return true end
+  return M.insideCam(name)
+end
+
+-- The automatic capture (feature 'reflect'): where the player is, again after moving REFLECT.moveM or the sun
+-- moving REFLECT.sunDeg, only while (nearly) stopped.
+local function autoReflection(sunEl)
+  if reflect.pending then return end
+  local veh = getPlayerVehicle and getPlayerVehicle(0)
+  if not veh then return end
+  local okP, pos = pcall(function() return veh:getPosition() end)
+  local okV, vel = pcall(function() return veh:getVelocity() end)
+  if not okP or not pos then return end
+  local speed = okV and vel and math.sqrt(vel.x * vel.x + vel.y * vel.y + vel.z * vel.z) or 0
+  local last = reflect.last
+  local inside = cameraInside()
+  local st = { speed = speed, inside = inside, sync = reflect.sync }
+  if last then
+    local dx, dy = pos.x - last.x, pos.y - last.y
+    st.dist = math.sqrt(dx * dx + dy * dy)
+    st.sunDelta = math.abs((sunEl or 0) - (last.el or 0))
+    st.since = os.clock() - last.t
+  end
+  if not M.wantCapture(st) then return end
+  if M.captureReflection(nil, inside) then
+    reflect.last = { x = pos.x, y = pos.y, el = sunEl or 0, t = os.clock() }
+  end
 end
 
 local function updateReflection()
@@ -317,6 +388,7 @@ function M.restoreReflection()
     if li.postApply then pcall(li.postApply, li) end
   end
   reflect.savedEnv = nil
+  reflect.last = nil
   return true
 end
 
@@ -355,6 +427,10 @@ function M.update(inOurLevel)
   if mode ~= 'on' then M.restore() return end
   if features.ao then applyAo() else restoreAo() end
   if features.shafts then updateShafts() else stopShafts() end
+  if features.reflect then
+    local _, el = sun()
+    autoReflection(el)
+  end
 end
 
 -- Leaving our level (or off): the player's AO back, the shafts off (they stay registered, as the game's effects do).

@@ -151,4 +151,17 @@ T.check(li.fields.globalEnviromentMap == 'BNG_Sky_01_cubemap', 'a capture that w
 captureCameraCubemap = nil
 T.check(not F.captureReflection(), 'no capture function: refused')
 
+-- the automatic capture's policy
+local W = function(s) return F.wantCapture(s) end
+T.check(W({ speed = 0, inside = false }), 'first capture: outside, stopped')
+T.check(not W({ speed = 20, inside = false }), 'not while driving')
+T.check(not W({ speed = 0, inside = true }), 'inside the car, sync unknown: no')
+T.check(W({ speed = 0, inside = true, sync = true }), 'inside, sync: the car hidden for the call')
+T.check(not W({ speed = 0, dist = 100, sunDelta = 1, since = 60 }), 'close by, same sun: no')
+T.check(W({ speed = 0, dist = 700, sunDelta = 1, since = 60 }), 'moved far enough')
+T.check(W({ speed = 0, dist = 10, sunDelta = 9, since = 60 }), 'the sun moved')
+T.check(not W({ speed = 0, dist = 700, since = 5 }), 'too soon after the last')
+T.check(F.insideCam('driver') and F.insideCam('onboard.hood') and F.insideCam(nil) and not F.insideCam('orbit')
+  and not F.insideCam('chase') and not F.insideCam('free'), 'inside cameras')
+
 T.done('test_fidelity')
