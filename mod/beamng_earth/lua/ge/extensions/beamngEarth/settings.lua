@@ -66,7 +66,7 @@ M.SCHEMA = {
   -- the grass grain in the ground tiles past the 3D grass (satmat.lua GRASS_LAYER; the server's grass masks)
   groundGrass = { kind = 'bool', default = true, label = 'Grass in the distant ground' },
   -- the 3D grass in the ground photo's colour (groundcover.lua setTint; the server's surface.grass_tint, detail mode)
-  grassTint = { kind = 'bool', default = false, label = "Grass takes the ground's colour" },
+  grassTint = { kind = 'bool', default = true, label = "Grass takes the ground's colour" },
   -- grass cards on grassland from the 3D grass out to ~1 km (roads.lua M.grassCards; the server's grasscards.py)
   grassCards = { kind = 'bool', default = true, label = 'Grass to 1 km' },
   -- BeamNG's own AI traffic on our roads when the level-start configurator leaves it to the settings (its default):
