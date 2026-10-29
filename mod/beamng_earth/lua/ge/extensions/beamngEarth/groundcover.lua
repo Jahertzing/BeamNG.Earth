@@ -119,13 +119,14 @@ M.TINT_STRENGTH = 0.7
 -- (Jeff's drive with the first version, 2026-10-28: the grass "sometimes looked white": the green textures need ~5x
 -- red and ~10x blue for tan, and lit blades read brighter than the photo's ground; kept lower until tuned in game)
 M.TINT_BRIGHT = 0.75
-M.TINT_MIN_CHANGE = 0.15    -- a smaller change (per channel, relative) keeps the copies in use (was 0.08: the fields
-                            -- along I-25 toggled it block after block, each toggle a remake; 2026-10-29)
+M.TINT_MIN_CHANGE = 0.18    -- a smaller change (per channel, relative) keeps the copies in use (was 0.08: the fields
+                            -- along I-25 toggled it block after block; the perf thread's 661bcc3, 2026-10-29: the first
+                            -- draw of each new tinted copy is a ~120 ms frame, so few copies, and only made at a stop)
 -- A moved tint goes on (the objects made again, one a frame: M.update) only at or under this speed (m/s), or at the
 -- next teleport / rebase (M.rebuild, which makes them again anyway). At a block change while driving it waits
 -- (tintPending): the remake in that frame was the hitching half of Jeff's block swaps (M.update).
 M.TINT_APPLY_V = 3
-M.TINT_STEP = 1.06          -- the copies' factors are powers of this (per channel)
+M.TINT_STEP = 1.25          -- the copies' factors are powers of this (per channel; 1.06 made a copy per block)
 M.TINT_RANGE = { 0.2, 4.0 } -- the factor's bounds per channel (the green grass has almost no blue: tan wants ~10x)
 M.TINT_PREFIX = 'bngEarthGT_'
 -- material name -> { r, g, b } (linear 0-1), see above: the opaque texels' mean of the full-size base colour map

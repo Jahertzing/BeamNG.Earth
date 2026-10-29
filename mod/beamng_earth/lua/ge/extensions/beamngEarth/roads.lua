@@ -1166,6 +1166,17 @@ end
 local viewAt = nil  -- core.viewAway(): the camera's { x, y } when it is away from the car, else nil (M.nextWalk)
 local prewarmId, prewarmPath, prewarmWant = nil, nil, nil     -- (the materials' prewarm shape, below)
 local prewarmNow
+-- The prewarm shape is drawn in front of the camera for PREWARM_FRAMES frames when made (M.update), then kept far
+-- below the map: a shape the camera never sees is culled before its materials' pipelines are built (the streaming
+-- research, 2026-10-29: the D3D12 pipeline cache fills at the first draw, and the cold cache after a game update
+-- froze Jeff's drive four times for 4.6-8.8 s). Its triangles are 5 cm, PREWARM_AHEAD_M ahead: specks for a few frames
+-- at level start, under the loading screen when the scene renders there. The frames' wall times are logged
+-- (prewarmFrames: a slow one is the pipelines being built, which then never happens on the road).
+M.PREWARM_FRAMES = 4
+M.PREWARM_AHEAD_M = 2.0
+local prewarmShow = 0           -- frames left in front of the camera
+local prewarmFrames = {}        -- their wall ms (the log line after the last)
+local prewarmT = nil
 
 -- The last update's slow units, "bldcol 62 ms (bldcol_5_3_-2.cdae), reloadCollision 21 ms", slowest first ('' if none).
 -- (core's perf log reads it before this frame's update: the units of the frame a hitch line is about.)
@@ -1183,12 +1194,39 @@ function M.frameUnits()
   return table.concat(out, ', ')
 end
 
-function M.update(gov, currentAnchor, player, view)
+-- The prewarm shape in front of the camera (cam: core's {x, y, z, fx, fy, fz}), or far below without one.
+local function placePrewarm(cam)
+  local o = prewarmId and scenetree.findObjectById(prewarmId)
+  if not o then return end
+  if cam and cam.x then
+    o:setPosition(vec3(cam.x + (cam.fx or 0) * M.PREWARM_AHEAD_M, cam.y + (cam.fy or 0) * M.PREWARM_AHEAD_M,
+      cam.z + (cam.fz or 0) * M.PREWARM_AHEAD_M))
+  else
+    o:setPosition(vec3(0, 0, -5000))
+  end
+end
+
+function M.update(gov, currentAnchor, player, view, cam)
   for i = #frameUnits, 1, -1 do frameUnits[i] = nil end
   viewAt = view
   if prewarmWant then prewarmNow()
   elseif prewarmId and not scenetree.findObjectById(prewarmId) then   -- (the level loaded again: gone with it)
     prewarmId, prewarmWant = nil, prewarmPath
+  end
+  if prewarmShow > 0 then           -- (drawn: in front of the camera this frame; the frame's time noted next frame)
+    if prewarmT then prewarmFrames[#prewarmFrames + 1] = prewarmT() end
+    prewarmT = stopwatch.new()
+    prewarmShow = prewarmShow - 1
+    placePrewarm(cam)
+    if prewarmShow == 0 then
+      local ms = {}
+      for i, v in ipairs(prewarmFrames) do ms[i] = string.format('%.0f', v) end
+      log('I', 'beamngEarth', 'roads: materials prewarm drawn for ' .. M.PREWARM_FRAMES .. ' frames (ms: ' .. table.concat(ms, ' ') .. ')')
+    end
+  elseif prewarmT then
+    prewarmFrames[#prewarmFrames + 1] = prewarmT()
+    prewarmT = nil
+    placePrewarm(nil)
   end
   if currentAnchor then switchAnchor(currentAnchor) end
   releaseGhosts(player)
@@ -1537,8 +1575,12 @@ prewarmNow = function()
   local ok, id = pcall(createWalk, { shape = path, pos = { 0, 0, -5000 } }, false)
   if not ok then lastError = tostring(id); return end
   prewarmId, prewarmPath = id, path
+  prewarmShow, prewarmFrames, prewarmT = M.PREWARM_FRAMES, {}, nil     -- (drawn from the next update on)
   log('I', 'beamngEarth', string.format('roads: materials prewarmed in %.0f ms (%s)', t(), path))
 end
+
+-- (tests, the dev tools) frames the prewarm shape still has in front of the camera, and the frame times so far
+function M.prewarmState() return prewarmShow, prewarmFrames end
 
 function M.prewarm(path)
   if type(path) ~= 'string' then return false end
