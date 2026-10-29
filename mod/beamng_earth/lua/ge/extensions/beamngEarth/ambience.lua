@@ -369,6 +369,7 @@ end
 -- system has seen the listener leave it (2026-10-29, the Speer crash: driving south into a pinned anchor crashed the
 -- game 7 of 7 times, 4-40 s after the rebase, a main-thread call through a freed object, never with the roads off;
 -- a rebase's ghost road tiles go then, with the bridge spaces the car was under).
+M.retireSpaces = true   -- false: the old way, deleted at once (an A/B switch)
 M.RETIRE_S = 1
 M.RETIRE_Z = -100000
 local retired = {}      -- { id, at } spaces and points moved away, deleted RETIRE_S on
@@ -376,6 +377,7 @@ local retired = {}      -- { id, at } spaces and points moved away, deleted RETI
 local function retire(id)
   local o = scenetree.findObjectById(id)
   if not o then return end
+  if not M.retireSpaces then o:delete(); return end
   if (o.getClassName and o:getClassName() or o.class) == 'SFXEmitter' then o:stop() end
   o:setPosition(vec3(0, 0, M.RETIRE_Z))
   retired[#retired + 1] = { id, os.clockhp() }
