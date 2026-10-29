@@ -112,7 +112,9 @@ M.FADE_SHARE = 0.5
 -- few dozen at most, re-used, never deleted), fully set up before it is registered, and the GroundCover objects are
 -- made again on it at the next block change (as at a teleport: afterBlockChange regenerates them that frame), only
 -- when the colour moved more than TINT_MIN_CHANGE.
-M.TINT = false
+-- On by default since 2026-10-29: checked in game (dry gold matching the photo, not white; no fps cost, p99 16.2 vs
+-- 16.4 ms off; no crash; Jeff's two crashes trace to rebases, not to the tint).
+M.TINT = true
 M.TINT_STRENGTH = 0.7
 -- (Jeff's drive with the first version, 2026-10-28: the grass "sometimes looked white": the green textures need ~5x
 -- red and ~10x blue for tan, and lit blades read brighter than the photo's ground; kept lower until tuned in game)

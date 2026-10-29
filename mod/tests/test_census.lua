@@ -15,6 +15,12 @@ T.check(r.byRoot[1][1] == 'a' and r.byRoot[1][3] > 30000, 'the upvalue tables co
 T.check(r.byRoot[2][1] == 'b' and r.byRoot[2][3] == 2, 'b: its own table and small, not a again')
 T.check(r.biggest[1][1] == 'a.get:big' and r.biggest[1][2] == 30000, 'the biggest table named by its path')
 T.check(r.items < 31000 + 10, 'the excluded game table not walked')
+-- a module holding another (core's `local trees = require(...)`): each counted to itself
+local modC = { other = function() return modA end }
+local r3 = C.measure({ { 'a', modA }, { 'c', modC } }, { exclude = { game } })
+local r4 = C.measure({ { 'c', modC }, { 'a', modA } }, { exclude = { game } })
+local function tablesOf(r, n) for _, e in ipairs(r.byRoot) do if e[1] == n then return e[3] end end end
+T.check(tablesOf(r3, 'a') == tablesOf(r4, 'a') and tablesOf(r4, 'c') == 1, 'a module\'s upvalue module not counted to it')
 local r2 = C.measure({ { 'a', modA } }, { exclude = { game }, maxItems = 100 })
 T.check(r2.truncated, 'a cap on the walk')
 
