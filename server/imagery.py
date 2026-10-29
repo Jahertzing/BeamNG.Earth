@@ -955,26 +955,34 @@ class Imagery:
         done, want = set(), None    # keys of this list found done: not looked at on disk again at every wake
         while True:
             with self._warm_cv:
-                key = None
-                while key is None:
+                if self._closed:
+                    return
+                if self._warm_want is not want:     # a new list (the player moved on): looked at afresh
+                    done, want = set(), self._warm_want
+            # the list looked at on disk outside _warm_cv: warm() (the server's event loop, at every pose) waits on
+            # it, and the scan's cache.exists calls over a big list held it for minutes (the bake's downtown leg,
+            # 2026-10-29: "roads tile building for 91 s, 0 sent", py-spy: on_pose in warm's lock, img-warm in exists)
+            key, now, passed = None, time.monotonic(), False
+            for k in want:
+                if self._warm_want is not want:     # a new list came meanwhile: that one
+                    break
+                if k in done:
+                    continue
+                if self._warm_done(k):
+                    done.add(k)
+                    continue
+                if self._warm_failed.get(k, 0.0) > now:     # (not done: asked again once it expires)
+                    passed = True
+                    continue
+                key = k
+                break
+            if key is None:
+                with self._warm_cv:
                     if self._closed:
                         return
-                    if self._warm_want is not want:     # a new list (the player moved on): looked at afresh
-                        done, want = set(), self._warm_want
-                    now, passed = time.monotonic(), False
-                    for k in self._warm_want:
-                        if k in done:
-                            continue
-                        if self._warm_done(k):
-                            done.add(k)
-                            continue
-                        if self._warm_failed.get(k, 0.0) > now:     # (not done: asked again once it expires)
-                            passed = True
-                            continue
-                        key = k
-                        break
-                    if key is None:
+                    if self._warm_want is want:     # (else a new list came during the scan: no wait)
                         self._warm_cv.wait(WARM_RETRY_S if passed else None)
+                continue
             src, z, x, y = key
             last = (1 << src.export) - 1
             try:
