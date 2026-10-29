@@ -2179,6 +2179,16 @@ def deck_profile_once(lines, ground_fn, crossings=(), clear=None, grade=None, li
             if meas[k] is not None:     # ... nor take it off the measured deck
                 import decklidar
                 floor = np.maximum(floor, np.minimum(np.where(meas[k], z - decklidar.OBS_TOL_M, -np.inf), cap[k]))
+                # ... and off a pinned abutment no floor over the measured profile by more than DECK_END_FLOOR_GRADE
+                # of the way: a clearance over I-25 held a deck at the top of its band to 3 m off its abutment, no
+                # curve held (_curve_deck kept the profile as it was): a 0.45 m step in the deck's last 3 m, a launch
+                # at its end (Jeff, 2026-10-28)
+                off = np.full(len(s), np.inf)
+                if deg[a] == 1:
+                    off = np.minimum(off, s)
+                if deg[b] == 1:
+                    off = np.minimum(off, s[-1] - s)
+                floor = np.maximum(np.minimum(floor, z + DECK_END_FLOOR_GRADE * off), g)
             zz = np.maximum(sm, floor)
             zz[0], zz[-1] = sm[0], sm[-1]
             zz = _curve_deck(s, zz, floor, cap[k])
@@ -2230,6 +2240,7 @@ def _observed_start(zs, edges, deg, observed):
 OTHERS_NEAR_M = 40.0    # m round a chain's decks the other chains' decks are looked at for the lidar (occluders)
 DECK_CREST_R = 60.0     # m: the ground under a deck is its floor rounded to vertical curves this wide (deck_profile_once)
 DECK_SIGMA = 12.0       # m, deck profile smoothing (at least) ...
+DECK_END_FLOOR_GRADE = 0.03     # a measured deck's floor rises over its profile off a pinned abutment at most this
 DECK_SIGMA_SHARE = 25.0  # ... a 25th of the part's length ...
 DECK_SIGMA_MAX = 40.0   # ... at most
 

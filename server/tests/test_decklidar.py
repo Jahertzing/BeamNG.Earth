@@ -92,6 +92,18 @@ class SurfaceTest(TestCase):
 
 
 class DeckProfileTest(TestCase):
+    def test_no_step_where_a_clearance_holds_a_measured_deck_up_by_its_abutment(self):
+        # a road under the deck's last 8 m wants more headroom than the lidar measured: the deck may rise to the top of
+        # its band there, but not hold it to its pinned abutment (a 0.4 m step in its last 2 m, 2026-10-28)
+        ln = line(0, 0, 200, 0, step=2.0)
+        s = ln[:, 0]
+        real = np.minimum(np.minimum(s * 0.05, (200 - s) * 0.05), 4.0)
+        ground = lambda xy: np.where(np.abs(xy[:, 0] - 192.0) < 6.0, -6.4, 0.0)  # noqa: E731
+        z = roads.deck_profile([ln], ground, [(0, 192.0, -6.4)], levels=[1.0], widths=[12.0], observed=[real.copy()],
+                               clear_of=[decklidar.lidar_road_clear()])[0]
+        self.assertAlmostEqual(z[-1], 0.0, places=3)
+        self.assertLess(float(np.abs(np.diff(z[-6:]) / np.diff(s[-6:])).max()), 0.1)
+
     def test_a_measured_viaduct_keeps_its_height_and_its_abutments(self):
         # a 600 m viaduct between abutments at 0 m whose middle stands 9 m over a road; the lidar measured it at 9 m
         # where the old rule wanted DECK_ROAD_CLEAR (8.35 m + shoulders) and climbed only 6 %

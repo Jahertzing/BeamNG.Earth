@@ -604,5 +604,58 @@ class NeverRaisedTest(unittest.TestCase):
         self.assertFalse(grading._never_raised(S(8.0, "paved", False, "secondary", False)))
 
 
+class BridgeEndLiftTest(unittest.TestCase):
+    """A motorway's lidar lift at a bridge's end: the deck it leads onto is no occluder, and its measured surface
+    carries the fit to the joint (2026-10-28: the approach held ~1 m under the deck, a ramp at every end)."""
+
+    def test_decks_onto(self):
+        road = np.c_[np.arange(0.0, 41.0, 2.0), np.zeros(21)]
+        onto = np.array([[40.5, 0.0], [100.0, 0.0]])         # leads on from its end
+        over = np.array([[20.0, -30.0], [20.0, 30.0]])       # crosses over it
+        back = np.array([[40.0, 0.5], [10.0, 0.5]])          # ends there but runs back over the road
+        got, rest = grading._decks_onto(road, [(onto, 6.0), (over, 6.0), (back, 6.0)])
+        self.assertEqual(len(got), 1)
+        self.assertTrue(got[0][0])
+        self.assertTrue(np.allclose(got[0][1][0], [40.5, 0.0]))
+        self.assertEqual(len(rest), 2)
+
+    def test_samples_past_a_decks_end_are_read(self):
+        xy = np.c_[np.arange(0.0, 60.0, 1.5), np.zeros(40)]
+        z = np.zeros(40)
+        surf = np.where(xy[:, 0] < 9.0, 2.0, np.nan)          # measured only by the abutment (a fill the DEM lacks)
+        deck = (np.array([[-60.0, 0.0], [-0.5, 0.0]]), 6.0)    # a deck ending at the road's start
+        add = grading.lidar_lift(xy, z, surf, [deck])
+        self.assertGreater(float(add[0]), 1.4, "past the deck's end: the road's own, not under the deck")
+
+
+class UnderGradeTest(unittest.TestCase):
+    def test_fast_roads_dip_gently(self):
+        self.assertEqual(grading.under_grade("residential", 0.7), grading.UNDER_GRADE)
+        g = grading.under_grade("motorway", 0.7)
+        self.assertLess(g, 0.025)
+        self.assertLessEqual(2 * g * g / 0.7, grading.UNDER_FAST_BEND * 1.25)    # the cosine ramp's bend per m
+        self.assertEqual(grading.under_grade("motorway", 0.05), grading.UNDER_FAST_GRADES[0])
+        self.assertEqual(grading.under_grade("trunk", 20.0), grading.UNDER_GRADE)
+
+
+class DehumpTest(unittest.TestCase):
+    def test_bare_earths_hump_under_a_deck_comes_off(self):
+        xy = np.c_[np.arange(-60.0, 60.1, 2.0), np.zeros(61)]
+        z = 0.01 * xy[:, 0] + 3.5 * np.exp(-0.5 * (xy[:, 0] / 3.0) ** 2)     # a 3.5 m hill under the overpass
+        deck = (np.array([[0.0, -40.0], [0.0, 40.0]]), 5.0)
+        out = grading.dehump(xy, z, [deck])
+        self.assertLess(float(np.abs(out - 0.01 * xy[:, 0]).max()), 0.25)
+        self.assertTrue((out <= z + 1e-9).all(), "never raised")
+
+    def test_a_crest_and_a_deck_beside_are_left(self):
+        xy = np.c_[np.arange(-60.0, 60.1, 2.0), np.zeros(61)]
+        crest = -0.0005 * xy[:, 0] ** 2                         # a 300 m vertical curve's crest: 0.16 m in 18 m
+        deck = (np.array([[0.0, -40.0], [0.0, 40.0]]), 5.0)
+        self.assertTrue(np.allclose(grading.dehump(xy, crest, [deck]), crest))
+        hill = 3.5 * np.exp(-0.5 * (xy[:, 0] / 6.0) ** 2)
+        beside = (np.array([[0.0, 20.0], [0.0, 60.0]]), 5.0)     # ends 20 m off the road: not over it
+        self.assertTrue(np.allclose(grading.dehump(xy, hill, [beside]), hill))
+
+
 if __name__ == "__main__":
     unittest.main()

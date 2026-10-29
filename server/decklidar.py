@@ -27,8 +27,9 @@ import numpy as np
 log = logging.getLogger("earthd.decklidar")
 
 ON = os.environ.get("BNE_DECK_LIDAR", "on") != "off"
-VERSION = 3             # in the plan caches' signature (plancache.lidar_tag): a change grades the roads again
-                        # (2: lidar_lift's fitted road, abutment checks, same-level crossings free; 3: smoothed decks)
+VERSION = 4             # in the plan caches' signature (plancache.lidar_tag): a change grades the roads again
+                        # (2: lidar_lift's fitted road, abutment checks, same-level crossings free; 3: smoothed decks;
+                        # 4: approaches fitted on through their decks, no floor step at an abutment, gentle dips)
 SIDE_SHARE = 0.25       # samples this share of the deck's width either side of its centre line (and on it)
 RUN_N = 5               # stations in the running median (DECK_STEP apart: 16 m)
 SPIKE_UP_M = 1.0        # a station this far over the running median: a vehicle, a gantry, a pole
