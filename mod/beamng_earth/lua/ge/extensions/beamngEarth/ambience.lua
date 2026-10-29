@@ -365,12 +365,36 @@ function M.onSpaces(key, flat)
   spaces[key] = list
 end
 
+-- A space or point that goes is first moved far away (an emitter stopped) and deleted RETIRE_S later, once the sound
+-- system has seen the listener leave it (2026-10-29, the Speer crash: driving south into a pinned anchor crashed the
+-- game 7 of 7 times, 4-40 s after the rebase, a main-thread call through a freed object, never with the roads off;
+-- a rebase's ghost road tiles go then, with the bridge spaces the car was under).
+M.RETIRE_S = 1
+M.RETIRE_Z = -100000
+local retired = {}      -- { id, at } spaces and points moved away, deleted RETIRE_S on
+
+local function retire(id)
+  local o = scenetree.findObjectById(id)
+  if not o then return end
+  if (o.getClassName and o:getClassName() or o.class) == 'SFXEmitter' then o:stop() end
+  o:setPosition(vec3(0, 0, M.RETIRE_Z))
+  retired[#retired + 1] = { id, os.clockhp() }
+end
+
+local function deleteRetired(all)
+  local keep, now = {}, not all and os.clockhp()
+  for _, r in ipairs(retired) do
+    if all or now - r[2] >= M.RETIRE_S then
+      local o = scenetree.findObjectById(r[1])
+      if o then o:delete() end
+    else keep[#keep + 1] = r end
+  end
+  retired = keep
+end
+
 -- The tile goes (roads.lua dropTile).
 function M.dropSpaces(key)
-  for _, s in ipairs(spaces[key] or {}) do
-    local o = scenetree.findObjectById(s.id)
-    if o then o:delete() end
-  end
+  for _, s in ipairs(spaces[key] or {}) do retire(s.id) end
   spaces[key] = nil
 end
 
@@ -479,6 +503,7 @@ function M.update(anchorId, sea)
   listener.x, listener.y, listener.z = SFXSystem.getPositionXYZ()
   updateRivers(anchorId, sea, listener.x, listener.y)
   updateRain()
+  if retired[1] then deleteRetired(false) end
   if not next(tiles) and not current then return end
   local now = os.clockhp()
   for k, t in pairs(tiles) do
@@ -513,9 +538,10 @@ function M.clear()
   ribbonCache, boxes, cacheAnchor = {}, {}, nil
 end
 
--- The level goes.
+-- The level goes (and its objects with it).
 function M.reset()
   M.clear()
+  deleteRetired(true)
 end
 
 function M.status()
@@ -524,6 +550,7 @@ function M.status()
   return { tiles = n, nodes = M.nodes, builds = M.builds, buildMs = M.buildMs, wind = current and current[1],
     roomtone = current and current[2], ribbons = M.ribbons,
     ribbonMs = M.ribbonMs, ribbonBuilds = M.ribbonBuilds, spacesMade = M.spacesMade, shoreRibbons = M.shoreRibbons,
+    retired = #retired,
     rain = M.rainVol }
 end
 

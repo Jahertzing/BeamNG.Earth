@@ -39,6 +39,7 @@ local function patch(o)
   function o:setTransform(m) self.xf = m end
   function o:getId() return self.id end
   function o:play() self.playing = true end
+  function o:stop() self.playing = false end
   function o:setVolumePitchCT(v) self.vol = v end
   return o
 end
@@ -154,13 +155,20 @@ amb.transform({ apply = function(_, x, y, z) return -y, x, z end })     -- (a qu
 T.check(math.abs(sp[1].xf.pos.x + 20) < 1e-9 and math.abs(sp[1].xf.pos.y - 10) < 1e-9
   and math.abs(sp[1].xf.yaw + 0.5 + math.pi / 2) < 1e-9, 'a rebase turns and moves them')
 amb.dropSpaces('1:3_4')
-T.check(#S.liveOf('SFXSpace') == 0, 'the tile goes: its spaces with it')
+T.check(#S.liveOf('SFXSpace') == 2 and sp[1].pos.z == amb.RETIRE_Z and amb.status().retired == 3,
+  'the tile goes: its spaces (and its kind 7 point) moved far away first')
+clock = clock + amb.RETIRE_S / 2; amb.update(3, seaV)
+T.check(#S.liveOf('SFXSpace') == 2, '... kept a while (the sound system sees the listener leave them)')
+clock = clock + amb.RETIRE_S; amb.update(3, seaV)
+T.check(#S.liveOf('SFXSpace') == 0 and amb.status().retired == 0, '... then deleted')
 amb.onSpaces('1:5_5', { 4, 3, 4, 5, 0, 0, 0, 0 })
 local pe = nil
 for _, o in ipairs(S.liveOf('SFXEmitter')) do if o.fields.track == amb.PORTAL_EVENT then pe = o end end
 T.check(pe and pe.playing and pe.pos.x == 3 and pe.pos.z == 5, 'a portal: the stock portal event playing there')
 amb.dropSpaces('1:5_5')
-T.check(not scenetree.findObjectById(pe.id), 'and gone with its tile')
+T.check(not pe.playing and pe.pos.z == amb.RETIRE_Z, 'its tile goes: stopped, moved away')
+clock = clock + 2 * amb.RETIRE_S; amb.update(3, seaV)
+T.check(not scenetree.findObjectById(pe.id), 'and then gone')
 
 -- shores: a "Waves" ribbon along a shoreline near the listener, SHORE_W wide, with the rivers
 seaV.shores = function() return { S1 = { kind = 'sea', nodes = { { 0, -30, 0 }, { 40, -30, 0 } } } }, 3 end
