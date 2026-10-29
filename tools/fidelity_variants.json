@@ -1,13 +1,9 @@
 [
- {"name": "off", "lua": "local f = require('beamngEarth/fidelity') f.setMode('off') f.update(true)",
-  "undo": "require('beamngEarth/fidelity').setMode('on')", "settle": 3},
+ {"name": "off", "lua": "local f = require('beamngEarth/fidelity') f.setMode('off') f.update(true)", "undo": "require('beamngEarth/fidelity').setMode('on')", "settle": 3},
  {"name": "on", "settle": 3},
- {"name": "ao_only", "lua": "require('beamngEarth/fidelity').setFeature('shafts', false)",
-  "undo": "require('beamngEarth/fidelity').setFeature('shafts', true)", "settle": 3},
- {"name": "shafts_strong", "lua": "local f = require('beamngEarth/fidelity') f.SHAFTS.intensity = 0.7 f.setMode('on')",
-  "undo": "local f = require('beamngEarth/fidelity') f.SHAFTS.intensity = 0.35 f.setMode('on')", "settle": 3},
- {"name": "ao_wide", "lua": "local f = require('beamngEarth/fidelity') f.AO.radius = 6 f.AO.contrast = 2.6 f.setMode('on')",
-  "undo": "local f = require('beamngEarth/fidelity') f.AO.radius = 3.5 f.AO.contrast = 2.3 f.setMode('on')", "settle": 3},
- {"name": "debug", "lua": "require('beamngEarth/fidelity').setDebug(true)",
-  "undo": "require('beamngEarth/fidelity').setDebug(false)", "settle": 3}
+ {"name": "ao_only", "lua": "require('beamngEarth/fidelity').setFeature('shafts', false)", "undo": "require('beamngEarth/fidelity').setFeature('shafts', true)", "settle": 3},
+ {"name": "shafts_strong", "lua": "local f = require('beamngEarth/fidelity') f.SHAFTS.intensity = 0.7 f.setMode('on')", "undo": "local f = require('beamngEarth/fidelity') f.SHAFTS.intensity = 0.35 f.setMode('on')", "settle": 3},
+ {"name": "ao_wide", "lua": "local f = require('beamngEarth/fidelity') f.AO.radius = 6 f.AO.contrast = 2.6 f.setMode('on')", "undo": "local f = require('beamngEarth/fidelity') f.AO.radius = 3.5 f.AO.contrast = 2.3 f.setMode('on')", "settle": 3},
+ {"name": "reflect", "lua": "require('beamngEarth/fidelity').captureReflection()", "undo": "require('beamngEarth/fidelity').restoreReflection()", "settle": 6},
+ {"name": "debug", "lua": "require('beamngEarth/fidelity').setDebug(true)", "undo": "require('beamngEarth/fidelity').setDebug(false)", "settle": 3}
 ]
