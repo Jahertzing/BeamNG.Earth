@@ -61,6 +61,8 @@ M.SCHEMA = {
   groundCoverDensity = { kind = 'enum', default = 'normal', values = { 'low', 'normal', 'high' }, label = 'Grass density' },
   -- how far out the grass reaches (groundcover.REACH; 'near' was the only distance before 2026-10-28)
   groundCoverDistance = { kind = 'enum', default = 'normal', values = { 'near', 'normal', 'far', 'max' }, label = 'Grass distance' },
+  -- how far out trees, props, road markings and every shape's finer LODs reach (lod.lua; 2026-10-29: pop-in)
+  detailDistance = { kind = 'enum', default = 'far', values = { 'normal', 'far', 'max' }, label = 'Detail distance' },
   -- the grass grain in the ground tiles past the 3D grass (satmat.lua GRASS_LAYER; the server's grass masks)
   groundGrass = { kind = 'bool', default = true, label = 'Grass in the distant ground' },
   -- the 3D grass in the ground photo's colour (groundcover.lua setTint; the server's surface.grass_tint, detail mode)
@@ -119,7 +121,7 @@ M.SCHEMA = {
 }
 M.ORDER = { 'theDriveTime', 'theDriveAutodrive', 'rebaseDistance', 'viewDistanceMode', 'viewDistanceKm', 'hazeStrength',
   'colorGrade', 'skyMode', 'clouds', 'weatherMode', 'realGravity', 'groundCover', 'groundCoverDensity', 'groundCoverDistance',
-  'groundGrass', 'grassTint', 'grassCards', 'rocks', 'roads', 'cityGlow', 'nightAmbient', 'aiTraffic', 'trafficPopulation', 'parkedCars', 'streetLife', 'staticCars', 'drcog', 'lidarHeights', 'dashboardSatellite', 'hudVisible', 'statusBar',
+  'detailDistance', 'groundGrass', 'grassTint', 'grassCards', 'rocks', 'roads', 'cityGlow', 'nightAmbient', 'aiTraffic', 'trafficPopulation', 'parkedCars', 'streetLife', 'staticCars', 'drcog', 'lidarHeights', 'dashboardSatellite', 'hudVisible', 'statusBar',
   'placeNamesOnline', 'creditsVisible', 'beammpOnLaunch',
   'creditsCorner', 'creditsSize', 'cacheCapGb', 'devOutlineKm', 'devMapKm' }
 
@@ -295,6 +297,7 @@ M.APPLY = {
   groundCover = function(v) require('beamngEarth/groundcover').setEnabled(v) end,
   groundCoverDensity = function(v) require('beamngEarth/groundcover').setDensity(v) end,
   groundCoverDistance = function(v) require('beamngEarth/groundcover').setReach(v) end,
+  detailDistance = function(v) require('beamngEarth/lod').setLevel(v) end,
   groundGrass = function(v) require('beamngEarth/satmat').GRASS_LAYER = v and true or false end,
   grassTint = function(v) require('beamngEarth/groundcover').setTintEnabled(v) end,
   grassCards = function(v) require('beamngEarth/roads').grassCards = v and true or false end,

@@ -648,6 +648,25 @@ M.tileThreshold = tileThreshold
 -- M.suppress(group, x, y) -> true hides that item (set by navgraph.lua); M.refresh() re-runs every tile's rows
 -- after it changes.
 M.suppress = nil
+-- The detail distance (lod.lua, the detailDistance setting): RINGS', TILE_CAP's and GROUP_MAX_M's distances times
+-- `scale` from the values this module loaded with (rocks keep theirs: past the fine ground they float, see GROUP_MAX_M).
+M.SCALE_KEEP = { rock = true, desert_rock = true }
+local baseDist = nil
+function M.setDistanceScale(scale)
+  scale = tonumber(scale) or 1
+  if not baseDist then
+    baseDist = { rings = {}, caps = {}, groups = {} }
+    for i, r in ipairs(M.RINGS) do baseDist.rings[i] = r[1] end
+    for i, r in ipairs(M.TILE_CAP) do baseDist.caps[i] = r[1] end
+    for g, d in pairs(M.GROUP_MAX_M) do baseDist.groups[g] = d end
+  end
+  for i, r in ipairs(M.RINGS) do r[1] = baseDist.rings[i] * scale end
+  for i, r in ipairs(M.TILE_CAP) do r[1] = baseDist.caps[i] * scale end
+  for g, d in pairs(baseDist.groups) do M.GROUP_MAX_M[g] = M.SCALE_KEEP[g] and d or d * scale end
+  M.distanceScale = scale
+  M.refresh()
+end
+
 function M.refresh()
   for _, t in pairs(tiles) do t.pending, t.scan = true, nil end      -- (every row again: an interrupted pass too)
 end
