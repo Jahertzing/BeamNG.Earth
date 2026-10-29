@@ -16,6 +16,7 @@ centre (the frames' small tilt). BNE_REGION_GRADING=off brings back the Grader p
 """
 import math
 import os
+import sys
 import threading
 from collections import OrderedDict
 
@@ -126,7 +127,10 @@ class RegionGrader:
             g = self._regions.setdefault(k, g)
             self._regions.move_to_end(k)
             while len(self._regions) > MAX_REGIONS:
-                self._regions.popitem(last=False)
+                _, old = self._regions.popitem(last=False)
+                plan_budget = getattr(sys.modules.get("grading"), "plan_budget", None)
+                if plan_budget is not None:
+                    plan_budget.drop(old)           # (its cells leave the process's plan budget)
             return g
 
     def _make_cell(self, g, k, own, key):

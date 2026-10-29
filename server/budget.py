@@ -50,6 +50,10 @@ LARGE_WALL_CELLS = 96       # cells of building walls for the street widths (roa
 # downtown Denver decoded its cells again (~0.25 s of a 0.54 s tile: the profile of 2026-10-29 00:00, 4.7 of 12 s in
 # layer_arrays). Nothing a bake keeps depends on a cache size.
 BAKE_DEM_TILES = 128        # decoded DEM tiles (dem.MEM_TILES, 512: 1 MB each)
+BAKE_PLANS_MB = 192         # a process's cell plans in all (grading.PLANS_MB, 384)
+BAKE_PLAN_SETS = 8          # merged plan sets kept per grader (grading.PLAN_SETS_MAX, 16)
+BAKE_ENU_CELLS = 128        # cells' road parts kept per grader (grading.ENU_CACHE_MAX, 512)
+BAKE_REGIONS = 6            # region graders kept per process (regiongrade.MAX_REGIONS, 9)
 BAKE_IMAGERY_TILES = 128    # decoded photo tiles (imagery.MEM_TILES, 512)
 
 
@@ -119,6 +123,12 @@ def apply(is_small=None):
         import roadwidth
         dem.MEM_TILES = min(dem.MEM_TILES, BAKE_DEM_TILES)
         imagery.MEM_TILES = min(imagery.MEM_TILES, BAKE_IMAGERY_TILES)
+        import grading
+        import regiongrade
+        grading.PLANS_MB = min(grading.PLANS_MB, BAKE_PLANS_MB)
+        grading.PLAN_SETS_MAX = min(grading.PLAN_SETS_MAX, BAKE_PLAN_SETS)
+        grading.ENU_CACHE_MAX = min(grading.ENU_CACHE_MAX, BAKE_ENU_CELLS)
+        regiongrade.MAX_REGIONS = min(regiongrade.MAX_REGIONS, BAKE_REGIONS)
         gb = total_gb()
         if gb is not None and gb >= LARGE_GB:         # (the large machine's map data and walls: the road tiles' pace)
             mapdata.MEM_MB = max(mapdata.MEM_MB, LARGE_MAPDATA_MB)

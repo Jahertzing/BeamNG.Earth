@@ -5,6 +5,10 @@ What changed in each release of BeamNG.Earth, newest first.
 ## Unreleased (fork)
 
 ### New
+- **Bake servers hold their road plans within a budget**: the cell plans every grader of a process keeps are
+  capped (`grading.PLANS_MB`, 384 MB; 192 in the bake profile, which also keeps fewer merged plan sets, road parts
+  and region graders), the least recently used cells forgotten and read back from the shared plan cache when
+  needed. Before, each process of a bake server grew by 300 to 580 MB of plans over an hour.
 - **Incremental baking**: a change rebakes only what it touches. Each kind of baked item (terrain block, base
   photo, road tile, far geometry and texture, far and sky buildings) is keyed on the source of the functions its
   build actually runs and the data files it reads, recorded during a bake (`server/bakedeps.py`; the record
