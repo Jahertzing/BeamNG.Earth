@@ -20,7 +20,8 @@ You can help support development by reporting [issues](https://github.com/TecnaG
 ## Features (working today)
 **The world**
 - The whole planet at 1:1 scale on real elevation: national lidar where it exists (Mapterhorn: much of
-  Europe, the US and more), Copernicus 30 m elsewhere with buildings and small tree stands filtered out of it.
+  Europe, the US and more; in Canada the distant terrain lined up with NRCan's HRDEM lidar ground),
+  Copernicus 30 m elsewhere with buildings and small tree stands filtered out of it.
 - Aerial and satellite imagery on the ground: open state and national orthophotos (Maryland's 15 cm photos,
   a dozen more US states, NAIP across the US, Switzerland, France, Spain, the Netherlands, Germany's states,
   Austria, Poland, Czechia, Japan, parts of Australia and Canada, and more), Sentinel-2 cloudless everywhere else; shadows and
@@ -49,14 +50,24 @@ You can help support development by reporting [issues](https://github.com/TecnaG
 - Roads painted into the ground itself (no floating road surface), with lane markings, sidewalks and curbs, curb ramps, storm drains, cobblestone streets,
   traffic islands, roundabouts, rural motorways with shoulders and toll booths; the ground graded under them, with
   retaining walls where a road is cut into a hill (dry stone in the mountains and towns, concrete along major roads)
-  and stone parapets along mountain roads' drops; street lights, utility poles with wires, traffic signals,
-  stop signs and speed-limit signs (mph or km/h by country), traffic lights and sidewalks where OpenStreetMap maps them;
+  and stone parapets along mountain roads' drops; metal guard rails, concrete and cable barriers where OpenStreetMap maps them; median
+  barriers down divided highways (concrete walls, cable barriers or steel rails by the median's width and the
+  country's practice, open at crossovers and ramps); street lights, utility poles with wires, traffic signals,
+  stop signs, traffic lights and sidewalks where OpenStreetMap maps them;
   railway lines as 3D track (ballast, sleepers and rails, rail bridges on piers, the ground cut and filled for the
   line; abandoned and disused lines overgrown and rusty; lines not built yet left out), level crossings with the rails
   flush in the road and crossbucks, flashing lights or gates (in the US as the FRA's crossing inventory lists them),
   and tram tracks (street track where trams run on the road).
 - Gas stations with pumps, canopies and forecourts in the region's style, where the stock refuel prompt fills the
   tank.
+- Highway signs on US freeways (from cody196's contribution): green exit signs at 1 mile, 1/2 mile and 1/4 mile and
+  in the gore, overhead destination signs, Interstate / US / state route shields in each state's style, yellow merge
+  warnings at entrance ramps and Interstate mile markers, from the destinations and milestones mapped in
+  OpenStreetMap (rebuilt weekly). Settings > World > Highway signs turns them off.
+- Speed-limit signs everywhere, showing the limit the traffic drives (the mapped one, else the road class's default):
+  where the limit changes, past major junctions and motorway entrances, and as reminders on long roads; the US
+  "SPEED LIMIT" panel, Canada's "MAXIMUM" panel, and elsewhere the round red-ring sign (mph in the UK). The Highway
+  signs setting switches them too.
 - Bridges drawn as their real type (beam, truss, arch, cable-stayed, suspension) with real heights and spans, piers
   that keep clear of the roads under them and 6 m (20 ft) of headroom over roads where the ground allows; a divided
   road's two decks joined across a narrow median; tunnels through hills, with portals, lights and low arches where
@@ -131,6 +142,22 @@ You can help support development by reporting [issues](https://github.com/TecnaG
 - Easy setup: one download per system (Windows .exe, Linux AppImage) that installs the mod and starts the server
   and the game; from the source, `install.py` installs everything and `start.py` keeps the mod in sync.
 - Runs on a Steam Deck (aim: 30 fps on the Handheld graphics preset).
+- Quality presets (Low / Medium / High / Ultra / Extreme) in BeamNG.Earth's own pause-menu tab (pause menu >
+  BeamNG.Earth > Graphics; every settings page is listed down the side there), each fine-tunable; the first start
+  picks Low, Medium or High for your hardware (Medium on a Steam Deck). **Extreme** puts every setting at its most,
+  out to the real horizon, for the strongest PCs (it is never picked for you). The Graphics page's settings:
+  - **Terrain detail** (Low to Extreme): how far out each finer level of the distant land reaches (Extreme builds
+    about twice as many distant ground pieces).
+  - **Ground photo** (1024 / 2048 / 4096): the sharpness of the aerial photo and the painted roads on the
+    ground around you; from the next level load.
+  - **Tree density** and **Tree draw distance** (about 0.6 to 1.7 miles; 0.8 miles at Normal).
+  - **Building draw distance**: the simple far buildings, the skyline and far bridges (Near to Max, twice Normal's 1
+    and 3 miles).
+  - **Object detail**: how far out objects keep their detailed models (Game setting = the game's Mesh Quality).
+  - **Grass and shrubs**, **Grass draw distance**, **Rocks**, **Street lamp lights**, **View distance** (the real
+    horizon or a fixed distance).
+  - What loads around you reaches the same distance in every direction (a circle; before it was a square, whose
+    corners reached about 40 % farther).
 - Uses your graphics card for some of the world server's work (colour matching of the photos, compressing the distant
   textures) when it can, so the server needs less of your CPU; without a usable one the CPU does it as before.
 - Offline play from the download cache (with a size cap and "clear cache").
@@ -284,7 +311,7 @@ BeamNG.Earth runs on [BeamMP](https://beammp.com/) servers (in testing): drive t
      SteamOS has podman; about a minute on a Steam Deck). A launcher you built yourself is used when found
      (a `BeamMP-Launcher` folder in your home folder or one folder down, e.g. `~/Games/BeamMP-Launcher`, or
      `~/.local/share`; or answer "Have it already", or set `BEAMMP_LAUNCHER`).
-   - The setting **Start BeamMP with BeamNG.Earth** (Pause menu > Mods > BeamNG.Earth, Multiplayer) turns this off or
+   - The setting **Start BeamMP with BeamNG.Earth** (Pause menu > BeamNG.Earth > Multiplayer) turns this off or
      back on; `--no-beammp` starts the game without BeamMP once.
 2. In the game: main menu > More > BeamMP, log in (an account or a guest).
 3. Pick the **BeamNG.Earth** category in BeamMP's server browser: the servers running BeamNG.Earth (search,
@@ -334,9 +361,15 @@ The repository contains only code; all map data is downloaded at runtime and cac
 - Elevation: Mapterhorn (see https://mapterhorn.com/attribution), AWS Terrain Tiles / Mapzen; the polar caps from
   85 deg on: Copernicus DEM GLO-30 (produced using Copernicus WorldDEM-30 (c) DLR e.V. 2010-2014 and (c) Airbus
   Defence and Space GmbH 2014-2018 provided under COPERNICUS by the European Union and ESA).
+- Canada: HRDEM (contains information licensed under the Open Government Licence - Canada, Natural Resources
+  Canada); British Columbia: LidarBC terrain, surface models (tree heights) and orthophotos (contains
+  information licensed under the Open Government Licence - British Columbia).
 - Roads, buildings, water and places: Overture Maps / OpenStreetMap contributors (lane counts, widths and speed limits from OpenStreetMap via OSM US Layercake); trees from a
   canopy height model; airports from OurAirports.
 - Oil wells and refineries: OpenStreetMap contributors (ODbL; the bundled `oil_wells.npz` and `refineries.npz`).
+- Highway signs: OpenStreetMap contributors (ODbL; exit and overhead destinations and mile references, rebuilt
+  weekly from the planet by the BeamNG.Earth-data repo); lettering: the Roadgeek 2014 font (MIT, Sammi De Guzman);
+  US state outlines: U.S. Census Bureau TIGERweb (public domain).
 - Railways: OpenStreetMap contributors (ODbL; railway tags, rebuilt weekly from the planet by the [BeamNG.Earth-data](https://github.com/TecnaGamer/BeamNG.Earth-data) repo's GitHub Action); US level crossings: the Federal Railroad Administration's Highway-Rail Crossing Inventory (public domain).
 - Climate zones (the forest sounds' set): Beck et al. (2023), High-resolution (1 km) Köppen-Geiger maps for
   1901–2099, Scientific Data 10, 724 (CC BY 4.0).

@@ -39,8 +39,9 @@ MAX_EDGE_M = 80.0           # long straight edges are split (the AI and the spaw
 WINDOW_M = 1100.0           # half size of the square around the player the graph covers
 CURVE_ACCEL = 2.0           # m/s^2: comfortable lateral acceleration, a driving target rather than a posted limit
 BRAKE_ACCEL = 2.5           # m/s^2: spread a tight bend's target back along its approaches
-NARROW_M = 5.5              # narrower two-way streets need slower encounters with oncoming traffic
-NARROW_MS = 30.0 / 3.6
+NARROW_M = 5.5              # narrower two-way town streets need slower encounters with oncoming traffic (parked cars,
+NARROW_MS = 30.0 / 3.6      # doors); a narrow rural road keeps its limit (the Netherlands' 60 km/h country roads, ~5 m
+                            # wide: the AI held 30 km/h on all of them, GitHub #451)
 RING_MS = 30.0 / 3.6
 ENTRY_DRIVABILITY = 0.9     # stock AI yields to the ring's 1.0, even on a tangential entry
 # An exit ramp from a motorway or trunk to a street: the stock traffic picks its way on at every fork at random, weighted
@@ -59,8 +60,8 @@ FLOW_MPH = {"motorway": 5.0, "trunk": 3.0}
 
 def road_mph(feats, i, spec, mph=True, at=0.5):
     """The speed limit (mph) of road feature i at fraction at (default: its middle), else the class default
-    (capped in town for arterials), or None for a class the AI does not drive. Shared by the graph and the road tiles'
-    speed signs (furniture.py), so a sign shows what the traffic drives."""
+    (capped in town for arterials), or None for a class the AI does not drive. Shared by the graph and the speed-limit
+    signs (speedsigns.py), so a sign shows what the traffic drives."""
     if spec is None or spec.cls not in DRIVE:
         return None
     speed = feats.rules.get("max_speed_kmh")
@@ -100,10 +101,10 @@ def _rdp(p, tol):
     return np.flatnonzero(keep)
 
 
-def _speed_profile(xy, width, oneway, limit=math.inf):
+def _speed_profile(xy, width, oneway, limit=math.inf, urban=True):
     """Advisory speeds at graph points. Both directions can brake before a bend; legal limits stay in road_mph.
     No curve is invented between separate roads, and straight wide roads keep their original target."""
-    target = min(limit, NARROW_MS) if not oneway and width < NARROW_M else limit
+    target = min(limit, NARROW_MS) if urban and not oneway and width < NARROW_M else limit
     v2 = np.full(len(xy), target * target, np.float64)
     lengths = np.hypot(*np.diff(xy, axis=0).T)
     if len(xy) > 2:
@@ -169,11 +170,15 @@ def driving_width(spec):
     strips (roads.carriageway adds them), i.e. the class's driving width capped by the drawn one; a four-lane
     urban arterial is all lanes. Where OpenStreetMap gives the lanes (osmtags.py), the driving width the road tiles
     paint them across (roads.lane_layout): the class rule put I-25's three to five lanes a way into 7.4 m (rural) or
-    11 m (urban), so the AI drove narrow lanes off the painted ones (Frederick to Denver, 2026-10-28)."""
+    11 m (urban), so the AI drove narrow lanes off the painted ones (Frederick to Denver, 2026-10-28). Else where lane
+    lines are painted (roads.LANE_CLASSES, paved) the painted lanes' (roads.lane_count, upstream 1.7.1's): the AI in
+    the lanes it sees."""
     if spec.lanes or roads.has_lane_tags(spec):
         lay = roads.lane_layout(spec)
         if lay is not None:
             return float(lay["hi"] - lay["lo"])
+    elif spec.kind == "paved" and spec.cls in roads.LANE_CLASSES:
+        return float(roads.lane_count(spec)[0])
     if spec.urban and not spec.oneway and spec.cls in roads.URBAN_ARTERIAL:
         return float(spec.width)
     w = roads.STYLE.get(spec.cls, roads.STYLE["unknown"])[0]
@@ -181,7 +186,17 @@ def driving_width(spec):
         w = roads.ONEWAY_STYLE[spec.cls]
     if roads.rural_motorway(spec):      # two lanes between the shoulders (a ramp: one, roads.motorway_shoulder)
         w = min(roads.MOTORWAY_RURAL_M, spec.width - 2 * roads.motorway_shoulder(spec))
+    if spec.lanes:                      # OpenStreetMap's lane count ahead of the class's width
+        w = spec.lanes * roads.LANE_W.get(spec.cls, roads.LANE_W_DEFAULT)
     return float(min(spec.width, w))
+
+
+def _osm_count(v):
+    try:
+        n = int(str(v).split(";")[0])
+        return n if 1 <= n <= 8 else None
+    except (TypeError, ValueError):
+        return None
 
 
 def _lanes(width, oneway, known=None):
@@ -332,7 +347,15 @@ def build(frame, feats_list, elev, centre, urban_fn=None, window=WINDOW_M, decks
                         direction = int(ow.value[r])
             if direction == 0 and spec.oneway and spec.dir:     # a divided road's carriageway (roads.dual_carriageways)
                 direction = int(spec.dir)
-            lo, li = _lanes(w, direction != 0, spec.lanes)
+            if spec.kind == "paved" and spec.cls in roads.LANE_CLASSES and not (spec.lanes or roads.has_lane_tags(spec)):
+                n = roads.lane_count(spec)[1]       # (the painted lanes: roads.lane_count, upstream 1.7.1's)
+                lo, li = (n, 0) if direction != 0 else (max(1, n // 2), max(1, n // 2))
+                tags = roads.lane_tags(feats, i) or {}
+                f_, b_ = _osm_count(tags.get("lanes:forward")), _osm_count(tags.get("lanes:backward"))
+                if direction == 0 and f_ and b_ and not tags.get("lanes:both_ways"):
+                    lo, li = f_, b_         # (an uneven split: markings.lane_plan moves the centre line the same)
+            else:
+                lo, li = _lanes(w, direction != 0, spec.lanes)
             # Its decks are drawn from the bridge's spec (roads.BridgeProfiles), which takes no measured width: where
             # that is narrower, the AI's lanes on the deck are the deck's. The ground's 19.2 m (DRCOG's, measured
             # across a split) put the AI's lane 2.2 m off a culvert's 8.5 m deck: 5th Street at Colorado Blvd,
@@ -344,7 +367,7 @@ def build(frame, feats_list, elev, centre, urban_fn=None, window=WINDOW_M, decks
                 if decks_here and dw < w - 0.01:
                     deck_lanes = _lanes(dw, direction != 0, bspecs[i].lanes) + (dw,)
             ramp = roads._rule_value(sub, i) == "link"
-            profile = _speed_profile(xy, w, direction != 0)
+            profile = _speed_profile(xy, w, direction != 0, urban=bool(getattr(spec, "urban", True)))
             # this road's approaches at its two ends (the graph node next to the junction, whether traffic comes in)
             for end in (0, -1):
                 j, nb = (0, 1) if end == 0 else (len(names) - 1, len(names) - 2)

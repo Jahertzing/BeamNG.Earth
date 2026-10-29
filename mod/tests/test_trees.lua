@@ -14,7 +14,8 @@ createObject = function(class)
     local fdata = {}
     function fdata:createNewItem(d, m, sc)
       if CREATE_HOOK then CREATE_HOOK() end      -- (the time budget's tests: a fake clock's tick)
-      local it = { d = d, m = m, sc = sc }; items[it] = true; mine[it] = true; return it
+      -- (the engine copies the transform into the item: trees.lua passes the same matrix for every item)
+      local it = { d = d, m = { p = m.p, e = m.e }, sc = sc }; items[it] = true; mine[it] = true; return it
     end
     function fdata:removeItem(it) items[it] = nil; mine[it] = nil end
     function o:getData() return fdata end
@@ -27,7 +28,11 @@ end
 worldEditorCppApi = { createObject = function(class) return createObject(class) end }
 Sim = { getDataBlockSet = function() return { addObject = function() end } end }
 loadJsonMaterialsFile = function() end
-MatrixF = function() return { setFromEuler = function(self, e) self.e = e end, setPosition = function(self, p) self.p = p end } end
+local matrices = 0
+MatrixF = function()        -- (copies what it is given, as the engine's matrix does)
+  matrices = matrices + 1
+  return { setFromEuler = function(self, e) self.e = vec3(e) end, setPosition = function(self, p) self.p = vec3(p) end }
+end
 local files = {}
 readFile = function(p) return files[p] end
 local decoded = setmetatable({}, { __mode = 'k' })    -- every decoded file's rows (weak: what the module still holds)
@@ -64,6 +69,7 @@ do -- an item where its row puts it: position from x, y, z, the heading from yaw
     if it.m.p.y == 10 and it.m.p.z == 5 and it.m.p.x >= 0 and it.m.p.x <= 99 and it.m.e.z == 0 then ok = ok + 1 end
   end
   T.check(ok == 100, 'every item at its row\'s position and heading')
+  T.check(matrices == 1, 'one matrix for every item made (PR #41: no MatrixF garbage an item)')
 end
 -- the tile keeps its items as one flat array (trees.flatten), not the decoded rows: a table per item was most of a
 -- forest's Lua heap, walked by every garbage collection (GitHub #66)
@@ -465,5 +471,44 @@ do  -- static cars come in a few shapes a frame (CAR_SHAPES_PER_FRAME), the rest
     'static cars: one spelling across tiles of every variant: ' .. (count() - shown) .. ' made, ' .. others .. ' others')
   trees.clear()
 end
+do -- GitHub #415: the static boom's copy has its lamps' material renamed (unlit), the rest of the shape as it was
+  local dae = '<material id="instanced_trafficlight-material" name="instanced_trafficlight"><x name="concrete_plain"/>'
+  local out = trees.staticSignalDae(dae)
+  T.check(out and not out:find('instanced_trafficlight', 1, true), 'no instanced lamp material left')
+  T.check(out and out:find(trees.STATIC_SIGNAL_MAT .. '-material', 1, true) and out:find('concrete_plain', 1, true),
+    'renamed, the others kept')
+  T.check(trees.staticSignalDae('<COLLADA/>') == nil and trees.staticSignalDae(nil) == nil, 'not the boom: none')
+  local m = trees.staticSignalMaterial()[trees.STATIC_SIGNAL_MAT]
+  T.check(m and m.mapTo == trees.STATIC_SIGNAL_MAT and not m.Stages[1].instanceEmissive and not m.Stages[1].emissive,
+    'its material does not glow')
+end
+do -- the median barriers' groups (server guardrails.GROUPS): shapes at scale 1, never thinned like trees
+  for _, g in ipairs({ 'jersey', 'jersey_end', 'cable' }) do
+    local shape, sc = trees.pick(g, g == 'cable' and 1.0 or 0.88, 0.3)
+    T.check(trees.CATALOG[g] and shape == trees.CATALOG[g][1][1] and math.abs(sc - 1) < 1e-9, g .. ': its model at 1:1')
+    T.check(trees.isBarrier(g), g .. ': a barrier')
+  end
+  T.check(trees.isBarrier('guardrail_back_end') and not trees.isBarrier('deciduous') and not trees.isBarrier(nil),
+    'guard rails are barriers, trees not')
+end
 trees.FRAME_MS, trees.POOL_SPARE = FRAME_MS, POOL_SPARE
+-- a pass with nothing to do is skipped (the game speed pulsing, 2026-10-28): until a tile comes or goes, the car moves
+-- RECHECK_M, or RECHECK_S goes by
+do
+  trees.reset()
+  trees.POOL_SPARE = 0
+  trees.onTile({ anchorId = 13, key = '0_0', path = '/t/v.json', n = 100 }, 13)
+  for _ = 1, 4 do trees.update(13, { x = 128, y = 128 }) end
+  local s0 = trees.skipped or 0
+  trees.update(13, { x = 128, y = 128 })
+  trees.update(13, { x = 129, y = 128 })
+  T.check((trees.skipped or 0) == s0 + 2, 'nothing changed and the car stood: the passes are skipped')
+  trees.update(13, { x = 128 + trees.RECHECK_M + 1, y = 128 })
+  T.check((trees.skipped or 0) == s0 + 2, 'the car moved RECHECK_M: a pass')
+  trees.onTile({ anchorId = 13, key = '1_0', path = '/t/v.json', n = 100 }, 13)
+  trees.update(13, { x = 128 + trees.RECHECK_M + 1, y = 128 })
+  T.check((trees.skipped or 0) == s0 + 2 and count() == 200, 'a new tile: a pass at once')
+  trees.update(13, { x = 128 + trees.RECHECK_M + 1, y = 128 })
+  T.check((trees.skipped or 0) == s0 + 3, 'then skipped again')
+end
 T.done('test_trees')

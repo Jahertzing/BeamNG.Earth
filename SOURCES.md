@@ -40,6 +40,8 @@ A few things hold for all of them:
 | Mapterhorn coverage list | `download.mapterhorn.com` | Which areas have detailed heights, so the server does not ask for tiles that do not exist. Fetched about once a week. | New places may load a little slower. | named |
 | AWS Terrain Tiles (backup) | `s3.amazonaws.com` | Coarser heights (SRTM and similar) where Mapterhorn has none or does not answer. | Only matters while Mapterhorn is down too; with both down, new places have no terrain. | named |
 | Copernicus DEM GLO-30 | `copernicus-dem-30m.s3.amazonaws.com` | Heights near the North and South Poles, where the other sources stop. | No terrain past about 85° north or south. | named |
+| NRCan HRDEM mosaic (CanElevation) | `canelevation-dem.s3.ca-central-1.amazonaws.com` | Canada's lidar ground heights: the distant terrain is lined up with them (and, opt-in, the near terrain read from them). | Canada's distant terrain may stand on the forest tops. | optional |
+| LidarBC (Province of British Columbia) | `nrs.objectstore.gov.bc.ca` | British Columbia's 10-15 cm aerial photos (around Vancouver and Victoria); opt-in, its lidar terrain and measured tree heights. | Those places get the next photo source. | optional |
 
 ## Aerial and satellite photos (what the ground looks like)
 

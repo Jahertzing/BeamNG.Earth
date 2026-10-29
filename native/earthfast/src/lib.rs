@@ -9,8 +9,16 @@ mod photofill;
 mod ambience;
 mod power;
 mod underpass;
+mod coarseease;
+mod tunnelcover;
 mod gradesep;
 mod lamps;
+mod decks;
+mod islands;
+mod ribbons;
+mod groundpaint;
+mod medians;
+mod speedsigns;
 
 use numpy::{PyArray1, PyArray2, PyReadonlyArray1, PyReadonlyArray2, PyReadonlyArray3, IntoPyArray};
 use pyo3::types::PyBytes;
@@ -1021,8 +1029,16 @@ fn bc7_encode<'py>(py: Python<'py>, img: PyReadonlyArray3<'py, u8>) -> Bound<'py
     let (h, w, ch) = (a.shape()[0], a.shape()[1], a.shape()[2]);
     let (nby, nbx) = ((h + 3) / 4, (w + 3) / 4);
     let mut out = vec![0u8; nby * nbx * 16];
+    // block rows in bands across the cores (a 4096² base photo was 0.46 s on one, 2026-10-28)
+    let threads = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(1).min(8).min(nby.max(1));
+    let rows_per = (nby + threads - 1) / threads.max(1);
+    std::thread::scope(|sc| {
+    for (bi, band) in out.chunks_mut((rows_per * nbx * 16).max(16)).enumerate() {
+    let a = &a;
+    sc.spawn(move || {
     let mut t = [[0i32; 4]; 16];
-    for by in 0..nby {
+    let by0 = bi * rows_per;
+    for by in by0..(by0 + rows_per).min(nby) {
         for bx in 0..nbx {
             for yy in 0..4 {
                 let y = (by * 4 + yy).min(h - 1);
@@ -1035,10 +1051,13 @@ fn bc7_encode<'py>(py: Python<'py>, img: PyReadonlyArray3<'py, u8>) -> Bound<'py
                 }
             }
             let blk = bc7_block(&t);
-            let o = (by * nbx + bx) * 16;
-            out[o..o + 16].copy_from_slice(&blk);
+            let o = ((by - by0) * nbx + bx) * 16;
+            band[o..o + 16].copy_from_slice(&blk);
         }
     }
+    });
+    }
+    });
     out
     });
     PyBytes::new(py, &out)
@@ -1287,7 +1306,7 @@ fn measure_row32(line: PyReadonlyArray2<f64>, keys: PyReadonlyArray1<i64>, first
 /// cutting's wall (an up cut side, wall_flat deep: under the retaining wall's top) no other road at another level counts
 /// at all: the terrain's 2 m lattice drew the step as teeth in front of the wall where a street above came near it.
 /// grading.bank: a road's cross slope at each vertex of its centreline xy (n, 2) (m per m toward its left; a curve
-/// leaning into its turn), by the curve's radius R (the circle through the points about `stencil` m either side):
+/// leaning into its turn), by the curve's radius R (its mean curvature, the turning over `stencil` m either side):
 /// e = e_max x min(1, r_min / R), left out under 0.01 (a gentle bend keeps its crown), then a running mean over
 /// `runoff` m (the bank comes in gradually) and faded to 0 over `fade_a` / `fade_b` m at the first / last vertex
 /// (0: none; a bridge's deck or a tunnel's floor is level there). After BeamNG's Hero Road editor (its bank runoff and
@@ -1306,21 +1325,26 @@ fn bank_profile<'py>(py: Python<'py>, xy: PyReadonlyArray2<'py, f64>, e_max: f64
     for i in 1..n {
         arc[i] = arc[i - 1] + (xy[[i, 0]] - xy[[i - 1, 0]]).hypot(xy[[i, 1]] - xy[[i - 1, 1]]);
     }
+    // the road's turning (radians) summed along it to each vertex: a map line draws a curve as straight pieces turning
+    // at their vertices, ~100 m apart on a rural interstate, and a circle through points 12 m apart saw 8 % at each
+    // vertex and none between, a row of bumps (I-80 in Wyoming, Discord 2026-10-28); the mean curvature over
+    // `stencil` m either side spreads each vertex's turn over its pieces
+    let mut turn = vec![0.0f64; n];
+    for i in 1..n - 1 {
+        let (ax, ay) = (xy[[i, 0]] - xy[[i - 1, 0]], xy[[i, 1]] - xy[[i - 1, 1]]);
+        let (bx, by) = (xy[[i + 1, 0]] - xy[[i, 0]], xy[[i + 1, 1]] - xy[[i, 1]]);
+        let d = if ax.hypot(ay) < 1e-9 || bx.hypot(by) < 1e-9 { 0.0 } else { (ax * by - ay * bx).atan2(ax * bx + ay * by) };
+        turn[i] = turn[i - 1] + d;      // (> 0 turning left)
+    }
+    turn[n - 1] = turn[n - 2];
     let (mut j, mut k) = (0usize, 0usize);
     for i in 0..n {
-        while j + 1 < i && arc[i] - arc[j + 1] >= stencil { j += 1; }
+        while j + 1 <= i && arc[i] - arc[j + 1] >= stencil { j += 1; }
         if k < i { k = i; }
         while k + 1 < n && arc[k] - arc[i] < stencil { k += 1; }
-        if j >= i || k <= i { continue; }
-        let (ax, ay) = (xy[[j, 0]] - xy[[i, 0]], xy[[j, 1]] - xy[[i, 1]]);
-        let (bx, by) = (xy[[k, 0]] - xy[[i, 0]], xy[[k, 1]] - xy[[i, 1]]);
-        let la = ax.hypot(ay);
-        let lb = bx.hypot(by);
-        let lc = (bx - ax).hypot(by - ay);
-        if la < 1e-6 || lb < 1e-6 || lc < 1e-6 { continue; }
-        // the signed curvature of the circle through j, i, k: > 0 turning left (from j through i to k)
-        let cross = (xy[[i, 0]] - xy[[j, 0]]) * (xy[[k, 1]] - xy[[i, 1]]) - (xy[[i, 1]] - xy[[j, 1]]) * (xy[[k, 0]] - xy[[i, 0]]);
-        let kappa = 2.0 * cross / (la * lb * lc);
+        let span = arc[k] - arc[j];
+        if span < stencil { continue; }     // (a piece shorter than the window: its ends lean on nothing)
+        let kappa = (turn[(k - 1).max(j)] - turn[j]) / span;     // (the vertices strictly inside)
         let rad = 1.0 / kappa.abs().max(1e-12);
         let ee = e_max * (r_min / rad).min(1.0);
         if ee >= 0.01 {
@@ -3742,16 +3766,20 @@ fn points_near_segments<'py>(py: Python<'py>, p: PyReadonlyArray2<'py, f64>, a: 
     numpy::ndarray::Array1::from(out).into_pyarray(py)
 }
 
+/// m a square just past a tube's end rises over its floor to be cut (tunnel_holes): a wedge into the opening
+const TUNNEL_WEDGE_M: f64 = 1.5;
+
 /// roads.tunnel_hole_mask for one tunnel part, into mask (n, n) in place: the samples (ix, iy) of the block (heights u,
 /// sample at (x0 + ix * square, y0 + iy * square)) over the tube's footprint (half width hw) beside a segment of xy
 /// (k, 2) whose ground lies between its floor z (k,) and the vault th (+- margin); for a low arch (low) instead its
-/// mouths (arc within end_m of a portal end flagged m0 / m1) out to hw + side_extra, whatever the height. The same
-/// float64 sums as the numpy version, sample for sample.
+/// mouths (arc within end_m of a portal end flagged m0 / m1) out to hw + side_extra, whatever the height. A tube's
+/// test (and with squares a mouth's) is per engine square (the hole flag of a sample cuts the square it is the
+/// south-west corner of): any of it within hw, its four corners' ground reaching between the floor and the vault.
 #[pyfunction]
 #[allow(clippy::too_many_arguments)]
 fn tunnel_holes(py: Python<'_>, mut mask: numpy::PyReadwriteArray2<'_, bool>, u: PyReadonlyArray2<'_, f64>, x0: f64, y0: f64,
                 square: f64, xy: PyReadonlyArray2<'_, f64>, z: PyReadonlyArray1<'_, f64>, hw: f64, th: f64, low: bool,
-                m0: bool, m1: bool, margin: f64, end_m: f64, side_extra: f64) {
+                m0: bool, m1: bool, margin: f64, end_m: f64, side_extra: f64, squares: bool) {
     let (uv, xv, zv) = (u.as_array(), xy.as_array(), z.as_array());
     let mut mv = mask.as_array_mut();
     py.allow_threads(|| {
@@ -3762,31 +3790,102 @@ fn tunnel_holes(py: Python<'_>, mut mask: numpy::PyReadwriteArray2<'_, bool>, u:
         for j in 1..k { sj[j] = sj[j - 1] + (xv[[j, 0]] - xv[[j - 1, 0]]).hypot(xv[[j, 1]] - xv[[j - 1, 1]]); }
         let total = sj[k - 1];
         let reach = if low { hw + side_extra } else { hw };
+        if low && !squares {
+            // a low arch's mouths (end_m: arch_raise's flat band at the floor; the samples further in raised over the
+            // vault): the squares with corners in both, the slope from the floor up to the soil across the opening.
+            // (Cut by their origin sample, every square within end_m, the squares of a portal facing +x / +y reached
+            // a grid step out past its face: a hole in the road in front, cars fell through; GitHub #450, Malaga.)
+            let (mut lox, mut loy, mut hix, mut hiy) = (f64::INFINITY, f64::INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY);
+            for j in 0..k {
+                lox = lox.min(xv[[j, 0]]); loy = loy.min(xv[[j, 1]]); hix = hix.max(xv[[j, 0]]); hiy = hiy.max(xv[[j, 1]]);
+            }
+            let g = reach + square;
+            let ix0 = (((lox - g - x0) / square).floor() as i64).max(0);
+            let iy0 = (((loy - g - y0) / square).floor() as i64).max(0);
+            let ix1 = (((hix + g - x0) / square).ceil() as i64).min(n - 2);
+            let iy1 = (((hiy + g - y0) / square).ceil() as i64).min(n - 2);
+            // a point: 0 off the arch (beside it, or past a portal), 1 in a mouth band, 2 over the vault
+            let class = |x: f64, y: f64| -> u8 {
+                let (mut bd, mut bs, mut bt) = (f64::INFINITY, 0.0, 0.5);
+                for j in 0..k - 1 {
+                    let (ax, ay) = (xv[[j, 0]], xv[[j, 1]]);
+                    let (abx, aby) = (xv[[j + 1, 0]] - ax, xv[[j + 1, 1]] - ay);
+                    let l2 = (abx * abx + aby * aby).max(1e-12);
+                    let t0 = ((x - ax) * abx + (y - ay) * aby) / l2;
+                    let t = t0.clamp(0.0, 1.0);
+                    let d = (x - (ax + t * abx)).hypot(y - (ay + t * aby));
+                    if d < bd {
+                        bd = d;
+                        bs = sj[j] + t * (sj[j + 1] - sj[j]);
+                        bt = if (j == 0 && t0 < 0.0) || (j == k - 2 && t0 > 1.0) { -1.0 } else { t };
+                    }
+                }
+                // (within the tube's own width: a square past it had no floor under it, a void beside the road)
+                if bd > hw || bt < 0.0 { return 0; }
+                if (bs <= end_m && m0) || (bs >= total - end_m && m1) { 1 } else { 2 }
+            };
+            if ix0 > ix1 || iy0 > iy1 { return; }
+            let cols = (ix1 - ix0 + 2) as usize;
+            let mut cls = vec![0u8; cols * (iy1 - iy0 + 2) as usize];
+            for iy in iy0..=iy1 + 1 {
+                for ix in ix0..=ix1 + 1 {
+                    cls[(iy - iy0) as usize * cols + (ix - ix0) as usize] =
+                        class(x0 + ix as f64 * square, y0 + iy as f64 * square);
+                }
+            }
+            for iy in iy0..=iy1 {
+                for ix in ix0..=ix1 {
+                    let at = |dx: i64, dy: i64| cls[(iy - iy0 + dy) as usize * cols + (ix - ix0 + dx) as usize];
+                    let c = [at(0, 0), at(1, 0), at(0, 1), at(1, 1)];
+                    if c.contains(&1) && c.contains(&2) { mv[[iy as usize, ix as usize]] = true; }
+                }
+            }
+            return;
+        }
         for j in 0..k - 1 {
             let (ax, ay, bx, by) = (xv[[j, 0]], xv[[j, 1]], xv[[j + 1, 0]], xv[[j + 1, 1]]);
             let (lox, loy, hix, hiy) = (ax.min(bx) - hw, ay.min(by) - hw, ax.max(bx) + hw, ay.max(by) + hw);
-            let ix0 = (((lox - x0) / square).floor() as i64).max(0);
-            let iy0 = (((loy - y0) / square).floor() as i64).max(0);
+            let ix0 = (((lox - x0) / square).floor() as i64 - 2).max(0);     // (squares reaching in from beyond)
+            let iy0 = (((loy - y0) / square).floor() as i64 - 2).max(0);
             let ix1 = (((hix - x0) / square).ceil() as i64).min(n - 1);
             let iy1 = (((hiy - y0) / square).ceil() as i64).min(n - 1);
             if ix0 > ix1 || iy0 > iy1 { continue; }
             let (abx, aby) = (bx - ax, by - ay);
             let l2 = (abx * abx + aby * aby).max(1e-12);
             for iy in iy0..=iy1 {
-                let yy = y0 + iy as f64 * square;
                 for ix in ix0..=ix1 {
-                    let xx = x0 + ix as f64 * square;
+                    // squares (a tube, a twin tube's mouths): the engine's square (ix, iy) (the hole flag of its
+                    // origin sample) at its centre; a low arch's mouth at the sample (arch_raise flattens samples)
+                    let c = if squares { 0.5 * square } else { 0.0 };
+                    let (xx, yy) = (x0 + ix as f64 * square + c, y0 + iy as f64 * square + c);
                     let t0 = ((xx - ax) * abx + (yy - ay) * aby) / l2;
-                    if !(0.0..=1.0).contains(&t0) { continue; }
-                    let t = t0;
+                    // a tube's squares reach half a diagonal past its ends too, there only those rising into the
+                    // opening (a wedge from the road up the cliff beside the mouth; the road in front stays)
+                    let ext = if low { 0.0 } else { std::f64::consts::FRAC_1_SQRT_2 * square / l2.sqrt() };
+                    let (lo_t, hi_t) = (if j == 0 { -ext } else { 0.0 }, if j == k - 2 { 1.0 + ext } else { 1.0 });
+                    if t0 < lo_t || t0 > hi_t { continue; }
+                    let beyond = !(0.0..=1.0).contains(&t0);
+                    let t = t0.clamp(0.0, 1.0);
                     let d = (xx - (ax + t * abx)).hypot(yy - (ay + t * aby));
                     let hit = if low {
                         let s = sj[j] + t * (sj[j + 1] - sj[j]);
-                        d <= reach && ((s <= end_m && m0) || (s >= total - end_m && m1))
+                        let over = if squares { std::f64::consts::FRAC_1_SQRT_2 * square } else { 0.0 };
+                        d <= reach + over && ((s <= end_m && m0) || (s >= total - end_m && m1))
                     } else {
+                        // the square's ground (its four corners) reaching between the floor and the vault: a cut
+                        // into a cliff (the road at its foot, the next sample over the vault: Malibu Canyon Road's
+                        // south portal, GitHub #403) drew one square from the road up the cliff across the opening
                         let floor = zv[j] + t * (zv[j + 1] - zv[j]);
-                        let g = uv[[iy as usize, ix as usize]];
-                        d <= hw && g > floor - margin && g < floor + th + margin
+                        let (x1, y1) = ((ix + 1).min(n - 1) as usize, (iy + 1).min(n - 1) as usize);
+                        let (xa, ya) = (ix as usize, iy as usize);
+                        let g = [uv[[ya, xa]], uv[[ya, x1]], uv[[y1, xa]], uv[[y1, x1]]];
+                        let (glo, ghi) = (g.iter().cloned().fold(f64::INFINITY, f64::min),
+                                          g.iter().cloned().fold(f64::NEG_INFINITY, f64::max));
+                        // (any of the square within hw: its centre within hw + half its diagonal; a square astride
+                        // the tube's wall stood a wedge in the opening's side)
+                        let rise = if beyond { TUNNEL_WEDGE_M } else { 0.0 };
+                        d <= hw + std::f64::consts::FRAC_1_SQRT_2 * square && ghi > floor - margin + rise
+                            && glo < floor + th + margin
                     };
                     if hit { mv[[iy as usize, ix as usize]] = true; }
                 }
@@ -5083,6 +5182,9 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(roadgeom::dedupe_polyline, m)?)?;
     m.add_function(wrap_pyfunction!(roadgeom::curve_deck, m)?)?;
     m.add_function(wrap_pyfunction!(underpass::underpass_offsets, m)?)?;
+    m.add_function(wrap_pyfunction!(coarseease::ease_coarse, m)?)?;
+    m.add_function(wrap_pyfunction!(tunnelcover::tunnel_cover_roads, m)?)?;
+    m.add_function(wrap_pyfunction!(tunnelcover::tunnel_reach, m)?)?;
     m.add_function(wrap_pyfunction!(gradesep::gradesep_candidates, m)?)?;
     m.add_function(wrap_pyfunction!(gradesep::gradesep_spans, m)?)?;
     m.add_function(wrap_pyfunction!(shore::shore_steps, m)?)?;
@@ -5094,6 +5196,12 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(ambience::shore_lines, m)?)?;
     m.add_function(wrap_pyfunction!(power::power_line_layout, m)?)?;
     m.add_function(wrap_pyfunction!(lamps::lamp_stations, m)?)?;
+    m.add_function(wrap_pyfunction!(decks::deck_beside, m)?)?;
+    m.add_function(wrap_pyfunction!(islands::road_cycles, m)?)?;
+    m.add_function(wrap_pyfunction!(ribbons::ribbon_edges, m)?)?;
+    m.add_function(wrap_pyfunction!(groundpaint::mask_segments, m)?)?;
+    m.add_function(wrap_pyfunction!(groundpaint::photo_ghosts, m)?)?;
+    m.add_function(wrap_pyfunction!(groundpaint::dash_pieces, m)?)?;
     m.add_function(wrap_pyfunction!(power::substation_yard, m)?)?;
     m.add_function(wrap_pyfunction!(vegmask::road_segments, m)?)?;
     m.add_function(wrap_pyfunction!(vegmask::disc_max, m)?)?;
@@ -5182,6 +5290,10 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(paint_lines, m)?)?;
     m.add_function(wrap_pyfunction!(photofill::fill_photo, m)?)?;
     m.add_function(wrap_pyfunction!(rtin_mesh, m)?)?;
-    m.add("VERSION", 87)?;
+    m.add_function(wrap_pyfunction!(medians::median_modules, m)?)?;
+    m.add_function(wrap_pyfunction!(medians::median_rows, m)?)?;
+    m.add_function(wrap_pyfunction!(speedsigns::speed_sign_place, m)?)?;
+    m.add_function(wrap_pyfunction!(speedsigns::speed_sign_mesh, m)?)?;
+    m.add("VERSION", 100)?;
     Ok(())
 }

@@ -35,7 +35,9 @@ import staging
 
 log = logging.getLogger("earthd.vegetation")
 
-VERSION = 14          # (the cached cells hold their groups: 14 for the regional rules of GitHub #110)
+VERSION = 18          # (the cached cells hold their groups: 14 for the regional rules of GitHub #110; 16: the roads'
+                      # drawn widths and sidewalks kept clear; 17: BC's lidar canopy heights, mapdata's canopy layer 2;
+                      # 18: the rounded junction corners kept clear, roadcorners.py)
 TREE_MIN_M = 3.0
 CROWN_SPACING = 0.5          # tops kept this many crown radii apart (0.8 looked sparse: the user, 2026-10-13)
 BUSH_MIN_M = 1.0
@@ -174,6 +176,7 @@ class Vegetation:
     def __init__(self, md, cache_dir=None):
         self.md = md
         self.dem = None                 # (set by the server: rocks on bare ground by slope, ROCK_SLOPE)
+        self.surface = self.widths = None   # (set by the server: the roads' drawn widths, roads.road_specs)
         self.dir = os.path.join(cache_dir, "vegetation", f"v{VERSION}") if cache_dir else None
         self._mem = OrderedDict()
         self._lock = threading.Lock()
@@ -266,6 +269,15 @@ class Vegetation:
         return items
 
     # --- the build ------------------------------------------------------------------------------
+    def _specs(self, f):
+        """roads.road_specs of features f as the roads are drawn (the server's land cover and measured widths)."""
+        import roads as roadsmod
+        try:
+            return roadsmod.road_specs(f, getattr(self.surface, "urban", None), self.widths)
+        except Exception as e:          # (the class widths alone)
+            log.debug("vegetation: road specs: %s: %s", type(e).__name__, e)
+            return [None] * len(f.kind)
+
     def _build(self, x, y):
         key = (mapcells.ZOOM, x, y)
         cd = self.md.cell(key, layers=("canopy", "landcover", "buildings", "roads", "water"))
@@ -291,6 +303,7 @@ class Vegetation:
         curb = np.zeros(h.shape, bool)      # the roads themselves (+ TREE_PIT_M): where a street tree may not land
         push = np.zeros((3,) + h.shape, np.float32)
         push[2] = np.inf
+        road_cells = []
         for dy in (-1, 0, 1):
             for dx in (-1, 0, 1):
                 kk = (mapcells.ZOOM, x + dx, y + dy)
@@ -301,8 +314,11 @@ class Vegetation:
                     continue
                 _mask_polys(c2.layers.get("buildings"), blocked, chm, 1.0)
                 _mask_polys(c2.layers.get("water"), blocked, chm, 0.0, kind=3)
-                _mask_roads(c2.layers.get("roads"), road, chm)
-                _mask_roads(c2.layers.get("roads"), curb, chm, push, clear=TREE_PIT_M)
+                _mask_roads(c2.layers.get("roads"), road, chm, specs=self._specs, walks=True)
+                _mask_roads(c2.layers.get("roads"), curb, chm, push, clear=TREE_PIT_M, specs=self._specs)
+                road_cells.append(c2.layers.get("roads"))
+        # the rounded corners of curbless junctions (roadcorners.py): no tree, bush or rock on their asphalt
+        _mask_corners(road_cells, (road, curb), chm, cd.bounds, getattr(self.surface, "urban", None), self.widths)
         # smoothed heights (3 x 3 mean), then the local maxima by height band
         p = np.pad(h, 1, mode="edge")
         hs = sum(p[a:a + n_r, b:b + n_c] for a in range(3) for b in range(3)) / 9.0
@@ -557,10 +573,35 @@ def _mask_polys(f, mask, chm, grow_m, kind=3, select=None):
                         float(chm.dx), float(chm.dy), grow_m / chm.dx)
 
 
-def _mask_roads(f, mask, chm, push=None, clear=ROAD_CLEAR_M):
-    """Mark road corridors (half width by class + clear) on the CHM-grid mask (footpaths left out). push (optional, (3, rows,
+def _mask_corners(road_cells, masks, chm, bounds, urban=None, widths=None, grow=ROAD_CLEAR_M):
+    """Mark the rounded corners of the junctions among road_cells (road Features; roadcorners.pads, their arcs grown by
+    grow m) that may reach the cell's bounds (lon0, lat0, lon1, lat1) on each CHM-grid mask of masks: a tree whose top
+    lands on one is not moved off it (no road corridor pushes it: _build drops it), nor is a bush or rock scattered."""
+    import mapgeom
+    import roadcorners
+    cells = [f for f in road_cells if isinstance(f, mapgeom.Features) and len(f)]
+    if not cells:
+        return
+    try:
+        pads = roadcorners.pads(cells, urban, widths, lonlat_bounds=tuple(bounds), grow=grow)
+    except Exception as e:      # (the roads' masks alone)
+        log.debug("vegetation: road corners: %s: %s", type(e).__name__, e)
+        return
+    if not pads:
+        return
+    feats = mapgeom.build("roadcorners", np.array([str(i) for i in range(len(pads))]),
+                          [(mapgeom.POLYGON, [[np.c_[lo, la]]]) for la, lo in pads])
+    for m in masks:
+        _mask_polys(feats, m, chm, 0.0)
+
+
+def _mask_roads(f, mask, chm, push=None, clear=ROAD_CLEAR_M, specs=None, walks=False):
+    """Mark road corridors (half width + clear) on the CHM-grid mask (footpaths left out): the half width the road is
+    drawn with (specs(f): roads.road_specs; walks: with its sidewalks) or its class's, the wider. push (optional, (3, rows,
     cols) float32: dx, dy in px and the distance to the nearest road, inf where none) gets, per corridor
-    pixel, the move that takes it just out of its nearest road's corridor (street trees: vegetation._build)."""
+    pixel, the move that takes it just out of its nearest road's corridor (street trees: vegetation._build). With the
+    class widths alone a city street's trees stood in its parking lanes: 136 of 536 trunks in Baltimore, 215 of 1358 in
+    Seattle on a drawn carriageway (the user, 2026-10-28: "make sure no trees spawn on the road")."""
     if f is None:
         return
     n_r, n_c = mask.shape
@@ -569,7 +610,15 @@ def _mask_roads(f, mask, chm, push=None, clear=ROAD_CLEAR_M):
     sel = [i for i in np.flatnonzero(f.kind == 2) if str(cls[i]) not in PATH_CLASSES]
     if not sel:
         return
-    hw_m = np.array([ROAD_HALF_WIDTH_M.get(str(cls[i]), ROAD_HALF_DEFAULT_M) + clear for i in sel], np.float64)
+    sp = specs(f) if specs is not None else [None] * len(f.kind)
+    import roads as roadsmod
+
+    def drawn(s):       # the drawn half width, its sidewalks too (walks: the canopy's trees and the bushes keep off
+        if s is None:   # them; the street trees, pushed to the curb, stand in pits at its edge: GitHub #424 / #425)
+            return 0.0
+        return s.width / 2 + (s.walk if walks and getattr(s, "walk", 0) and roadsmod.has_sidewalks(s) else 0.0)
+    hw_m = np.array([max(ROAD_HALF_WIDTH_M.get(str(cls[i]), ROAD_HALF_DEFAULT_M), drawn(sp[i])) + clear
+                     for i in sel], np.float64)
     # every ring's segments on the CHM grid, its half width in grid pixels (a 3857 metre is 1 / cos(lat) of a ground
     # metre), rings off the grid left out (earthfast road_segments, 2026-10-23: the per-ring Python loop it
     # replaced gave the same segments); then the distances and the nearest road's push, without the GIL
@@ -587,7 +636,7 @@ TILE = 256.0                # m, as the road tiles (roads.tile_bbox)
 TILE_ROWS_MAX = 6000        # items a tile sends at most, the lowest ranks: the most the mod shows of one (trees.lua
                             # TILE_CAP). Dense forest has 10-20k a tile: Bodø's 145 tiles held 1.66 M rows in the game's
                             # Lua (394 MB of heap, 1.25 s garbage collection pauses on a Steam Deck; GitHub #66)
-SEND_M = 1280.0             # tiles this close to the player (Chebyshev) are sent ...
+SEND_M = 1280.0             # tiles this close to the player (Euclidean, to the square's nearest point) are sent
 DROP_M = 1536.0             # ... and dropped beyond this
 BUILD_PER_POSE = 8
 
@@ -755,6 +804,19 @@ def _read_json(out_dir, vfs_path):
             return json.load(f)
     except (OSError, ValueError, AttributeError):
         return {}
+def _squares_near(x, y, m, size):
+    """(i, j) of the size x size squares of the grid whose nearest point is within m of (x, y): a disc (Euclidean, as
+    roads.tiles_near; 2026-10-28, it was the square)."""
+    i0, i1 = math.floor((x - m) / size), math.floor((x + m) / size)
+    j0, j1 = math.floor((y - m) / size), math.floor((y + m) / size)
+    out = []
+    for i in range(i0, i1 + 1):
+        dx = max(i * size - x, x - (i + 1) * size, 0.0)
+        for j in range(j0, j1 + 1):
+            dy = max(j * size - y, y - (j + 1) * size, 0.0)
+            if dx * dx + dy * dy <= m * m:
+                out.append((i, j))
+    return out
 
 
 class Tracker:
@@ -772,7 +834,7 @@ class Tracker:
         self.sent = set()
         self.building = set()
         self.send_m, self.drop_m, self.per_pose, self.kind = send_m, drop_m, per_pose, kind
-        # skip_m: tiles within this (Chebyshev, as roads.tiles_near) are not built: the far buildings under the road
+        # skip_m: tiles within this (as roads.tiles_near: a disc) are not built: the far buildings under the road
         # tiles, which carry the full buildings (the mod would hide them at once; ~36 of a teleport's ~196 tiles)
         self.skip_m = skip_m
         # its own threads (per_pose): in the loop's shared executor the tiles queued behind other trackers' builds
@@ -843,25 +905,21 @@ class Tracker:
         group = self.group if group is None else group
         if group:                           # (whole groups of `group` tiles; keys in `unit` squares)
             gs = roadsmod.TILE * group
-            g0x, g1x = math.floor((x - m) / gs), math.floor((x + m) / gs)
-            g0y, g1y = math.floor((y - m) / gs), math.floor((y + m) / gs)
             per = group // unit
-            return [(gx * per + i, gy * per + j) for gx in range(g0x, g1x + 1) for gy in range(g0y, g1y + 1)
+            return [(gx * per + i, gy * per + j) for gx, gy in _squares_near(x, y, m, gs)
                     for i in range(per) for j in range(per)]
         if unit == 1:
             return roadsmod.tiles_near(x, y, m)
-        us = roadsmod.TILE * unit
-        u0x, u1x = math.floor((x - m) / us), math.floor((x + m) / us)
-        u0y, u1y = math.floor((y - m) / us), math.floor((y + m) / us)
-        return [(ux, uy) for ux in range(u0x, u1x + 1) for uy in range(u0y, u1y + 1)]
+        return _squares_near(x, y, m, roadsmod.TILE * unit)
 
     def _dist(self, k, x, y):
-        """m (Chebyshev) from (x, y) to key k's square, or to its group's (the far buildings under the skyline)."""
+        """m (Euclidean, as _near) from (x, y) to key k's square, or to its group's (the far buildings under the
+        skyline)."""
         import roads as roadsmod
         size = roadsmod.TILE * (self.group or self.unit)
         per = (self.group // self.unit) if self.group else 1
         x0, y0 = (k[0] // per) * size, (k[1] // per) * size
-        return max(x0 - x, x - (x0 + size), y0 - y, y - (y0 + size), 0.0)
+        return roadsmod.box_gap(x0, y0, x0 + size, y0 + size, x, y)
 
     def _built(self, conn, aid, key, fut):
         if aid != self.aid:                 # (an old anchor's: the same key may be in flight for the new one)

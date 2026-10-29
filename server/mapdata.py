@@ -83,6 +83,8 @@ OSM_THREADS = 8                 # cells whose OpenStreetMap tags are read at onc
 # (all 36 of a fresh place: 122 s -> 145-181 s over 8 places, 2026-10-25); on a 16-thread PC they came 2-10 s sooner.
 _CPUS = os.cpu_count() or 4
 WARM_THREADS = min(8, _CPUS // 2) if _CPUS > 8 else 0
+BUILDING_MAX_M2 = 2.0e6     # m2: a building footprint larger than this is a mapping error (the largest real ones are
+                            # ~1 km2; an OpenStreetMap one of 15.8 km2 roofed a city in Egypt, GitHub #413)
 VERSION = 2                     # pipeline version: bump when what a cell's layers contain changes
 # per layer, on top of VERSION (a layer's own change without re-fetching the others): roads 2 adds
 # the "oneway" rule (Overture access_restrictions by heading)
@@ -97,7 +99,11 @@ VERSION = 2                     # pipeline version: bump when what a cell's laye
 # CO-52 had no regional tags, 2026-10-28)
 # roads 8: osm_parts, a merged segment's ways' shares and lane counts (osmtags.join_parts: its pocket over its own way's
 # share, its lanes by part, roads.pocket_profiles)
-LAYER_VERSIONS = {"roads": 8}
+# roads 9: this fork's 7 and 8 and upstream 1.7.1's 7 (a way without lanes takes the same-named way's, osmtags.join;
+# one-way ends at their own lane, oneway_joins) in one layer
+LAYER_VERSIONS = {"roads": 9}
+# (LidarBC's measured canopy heights, maprasters.bc_canopy, are opt-in: BNE_BC_CANOPY=1 fills cells built after it;
+# no canopy version bump, which would fetch every player's canopy cells again)
                                 # (2: clipped polygon pieces `own`ed by their cell, exact cell edges,
                                 # the exact no-area test of clipped rings)
 VECTOR_LAYERS = ("roads", "connectors", "buildings", "water", "land_use", "infrastructure", "building_parts", "places",
@@ -126,12 +132,20 @@ CANOPY = {
     "licence": "CC BY 4.0 (https://creativecommons.org/licenses/by/4.0/)",
     "url": "https://registry.opendata.aws/dataforgood-fb-forests/",
 }
+LIDAR_CANOPY = {
+    "id": "lidarbc-chm", "name": "LidarBC surface and terrain models (canopy height = DSM - DEM), Meta / WRI elsewhere",
+    "release": "lidarbc",
+    "attribution": "Canopy height: contains information licensed under the Open Government Licence - British Columbia "
+                   "(LidarBC); Meta and World Resources Institute (WRI)",
+    "licence": "Open Government Licence - British Columbia; CC BY 4.0", "url": "https://lidar.gov.bc.ca",
+}
 # Short overlay wordings per provenance id (credits.py can take them when the map data is shown)
 CREDIT_LINES = {
     "overture": overture.ATTRIBUTION,
     "esa-worldcover": "© ESA WorldCover project 2021 / Contains modified Copernicus Sentinel data (2021) "
                       "processed by ESA WorldCover consortium",
     "meta-wri-chm": "Canopy height: Meta & WRI",
+    "lidarbc-chm": "Canopy height: LidarBC (OGL-BC), Meta & WRI",
 }
 THEME_OF = {name: spec["theme"] for name, spec in overture.LAYERS.items()}
 
@@ -246,9 +260,12 @@ class MapData:
         self.release = release
         self.raw_dir = os.path.join(cache_dir, "mapdata", "raw")
         self.overture = overture.Reader(self.raw_dir, self.fetcher, release, threads)
-        self.rasters = maprasters.Rasters(self.raw_dir, self.fetcher)
+        self.rasters = maprasters.Rasters(self.raw_dir, self.fetcher, os.path.join(cache_dir, "dem", "lidarbc"))
         import railtags                 # (OSM's railway tags joined to the roads layer's rail segments)
         self.rail_tags = railtags.RailTags(cache_dir, self.fetcher) if railtags.ON else None
+        self.lane_tags = railtags.LaneTags(cache_dir, self.fetcher) if railtags.LANES_ON else None   # (markings.py)
+        import highwaysigns             # (exit, overhead and mile-marker signs: railtags.SignTags, signstream.py)
+        self.highway_signs = highwaysigns.Source(self) if railtags.SIGNS_ON else None
         self.dem = None                 # (gradesep's ground: the server's dem.Dem, set by its owner, else its own)
         self._locks = {}
         self._lock = threading.Lock()
@@ -282,11 +299,27 @@ class MapData:
         except Exception as e:      # (Overture's classes alone)
             log.debug("railtags join %s: %s: %s", key, type(e).__name__, e)
 
+    def _lanes(self, key, layer, feats):
+        """The roads layer's road segments with OSM's lane tags (railtags.LaneTags), once per build of them."""
+        lt = getattr(self, "lane_tags", None)
+        if lt is None or layer != "roads" or feats is None or not len(feats):
+            return
+        built = lt.version()
+        if built is None or feats.__dict__.get("_lanes_built") == built:
+            return
+        try:
+            lt.join(feats, key)
+            feats.__dict__["_lanes_built"] = built
+        except Exception as e:      # (no lane data: the markings' guesses)
+            log.debug("lanetags join %s: %s: %s", key, type(e).__name__, e)
+
     def versions(self):
         rails = getattr(self, "rail_tags", None)
+        lanes = getattr(self, "lane_tags", None)
         return {"pipeline": VERSION, "overture": self.release, "worldcover": maprasters.WORLDCOVER_RELEASE,
                 "canopy": maprasters.CHM_RELEASE, "rails": rails.known() if rails is not None else None,
-                "gradesep": gradesep.VERSION if gradesep.ON else None}
+                "lanes": lanes.known() if lanes is not None else None,
+                "gradesep": (gradesep.VERSION, gradesep.MODE) if gradesep.TUNNELS else None}
 
     def drcog(self):
         """drcog.Drcog when the DRCOG source is on (BNE_DRCOG=1: earthd --drcog on), else None."""
@@ -489,8 +522,11 @@ class MapData:
             prov = dict(WORLDCOVER, files=r.files) if r.files else None
         else:
             r = self.rasters.canopy(key, kind)
+            r, bc_files = self.rasters.bc_canopy(key, r)
             arrays = _layer_arrays(r)
             prov = dict(CANOPY, files=r.files) if r is not None else None
+            if bc_files:
+                prov = dict(LIDAR_CANOPY, files=r.files, also=CANOPY["id"])
         arrays["provenance"] = np.array(json.dumps(prov, sort_keys=True))
         if transient:
             arrays["transient"] = np.array(True)
@@ -536,6 +572,8 @@ class MapData:
             feats = mapgeom.concat(feats, osmtags.raceway_features(ways))
         osmtags.join(feats, tags)
         osmtags.join_parts(feats, tags)
+        import oneway_joins
+        oneway_joins.apply(feats)
         return feats
 
     def layer_arrays(self, key, layer, kind="demand"):
@@ -722,6 +760,7 @@ class MapData:
                 cd.layers[layer], prov, _ = mem[layer]
                 dt, hit = 0.0, True
                 self._rails(key, layer, cd.layers[layer])
+                self._lanes(key, layer, cd.layers[layer])
             else:
                 arrays, hit, dt = results[layer]
                 arrays = dict(arrays)
@@ -736,6 +775,9 @@ class MapData:
                         cd.layers[layer] = f.localize(frame)
                     # (which cell's layer: the per-cell facts the server's processes share, roads.cell_facts)
                     self._rails(key, layer, cd.layers[layer])
+                    self._lanes(key, layer, cd.layers[layer])
+                    if layer == "buildings":    # (a "building" of a whole city's size: left out, GitHub #413)
+                        cd.layers[layer] = mapgeom.drop_huge(cd.layers[layer], BUILDING_MAX_M2)
                     if layer == "roads":        # (the bridges the map lacks, found when its ranges are first asked)
                         cd.layers[layer].__dict__["_bnge_gradesep"] = gradesep.hook(self, key)
                         cd.layers[layer].__dict__["_bnge_neighbours"] = gradesep.neighbours_hook(self, key)

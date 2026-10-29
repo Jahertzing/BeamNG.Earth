@@ -73,6 +73,168 @@ What changed in each release of BeamNG.Earth, newest first.
   those frames fits every drive, so an area can be baked, not only a path. `plan --area lat0,lon0,lat1,lon1` lays a
   lattice of anchors over a box and scan lines across it (`headless_bake.py --routes 'scan_*' --jobs N` bakes it with
   no game and no driving).
+## 1.7.1 beta (2026-10-29)
+
+> **Join the TGForever Discord, [discord.gg/tgf](https://discord.gg/tgf), to chat, get help, report bugs or help
+> develop the mod.** For help, that includes multiplayer:
+> BeamNG.Earth isn't like a normal BeamNG mod (it runs its own app next to the game), so if something isn't working
+> with BeamMP, it's almost certainly a BeamNG.Earth problem, not a BeamMP one. Please don't contact the BeamMP team or
+> open BeamMP support tickets about it. BeamNG.Earth servers are hidden from players who don't run BeamNG.Earth
+> (BeamMP can't install it for them: it needs its own app), so they only show in the BeamNG.Earth tab of BeamMP's
+> server browser.
+
+Works with BeamNG.drive 0.40.3.
+
+### New
+- **Settings in a tab of their own in the pause menu** (next to BeamMP's), in the game's own style, every page listed
+  down the side: Graphics, World, Interface, Multiplayer, Storage, Feedback, About, Developer.
+- **Quality presets and many more graphics settings**: Low / Medium / High / Ultra presets, plus an **Extreme**
+  preset that puts everything at its highest out to the real horizon (for strong PCs; never picked for you). New
+  settings: terrain detail (how far out the distant ground stays finely detailed), ground photo (1024 /
+  2048 / 4096, from the next level load), tree density and tree draw distance, building draw distance, object detail
+  (how far out models keep their finest detail, in BeamNG.Earth only; your game's own setting comes back when you
+  leave), grass draw distance, and the view distance. The first start picks a preset for your hardware (Medium on a
+  Steam Deck); settings you changed before are kept.
+- **What loads around you reaches the same distance in every direction**: roads, trees and buildings used to load in
+  a square around the car, so they reached farther towards its corners; they now load in a circle.
+- **Guard rails** (MAKAKAIglitch's pull request #205): guard rails mapped in OpenStreetMap are placed as the game's own
+  metal rail sections, following the road's slope, with flared end pieces. Bridges whose edges have mapped rails get
+  a low concrete curb with a rail on top instead of the full concrete wall, and rails leading onto a bridge join its rail.
+- **Canada** (spacedroogz-max's pull request #206): British Columbia's 10-15 cm aerial photos on the ground around
+  Vancouver and Victoria, and the distant terrain across southern Canada lined up with Natural Resources Canada's
+  lidar ground, so it no longer stands on the forest tops. The full lidar terrain and tree heights are there too, off
+  by default for now (they made first visits about a minute slower).
+- **Parking lots** (AnthonyGraceffa's pull request #442): mapped parking lots are paved in the ground photo and get
+  painted stall lines where the parked cars stand.
+- **Building colours** (hudsontadams's pull request #167): buildings with a mapped wall or roof colour or material
+  (brick, glass, a red roof ...) now show it, part by part.
+- **Highway signs on US freeways** (from cody196's contribution): exit signs at 1 mile, 1/2 mile and 1/4 mile and in
+  the gore, overhead destination signs with route shields, merge warnings and Interstate mile markers, from the signs
+  mapped in OpenStreetMap. Settings > World > Highway signs.
+- **Speed-limit signs everywhere**: the posted limit the AI drives, after junctions where it changes, past motorway
+  entrances and as reminders; US, Canadian ("MAXIMUM", GitHub #454) and European styles (mph in the UK).
+- **Median barriers on divided highways**: concrete walls, cable barriers or steel rails by the median's width and
+  the country's practice, open at crossovers and ramps; mapped concrete and cable barriers too.
+- **Rounded corners where country roads meet** (from cody196's contribution): the asphalt curves round the corner and
+  the gravel edge and edge lines follow it.
+
+### Improved
+- **Sharper road edges and ground** (top-down shots of Woodland Park, Colorado): the ground photo under the
+  car has twice the pixels per side, with the roads painted into it at about 20 inches a pixel and lined up exactly
+  with the road's lines (they sat about 3 ft to the south-west), and roads without
+  curbs get a gravel shoulder edge, so their edges are crisp instead of a blurred, stepped band.
+- **The road's colour, grip and lines line up**: the asphalt in the ground sat up to about 5 ft to one side of the
+  painted lines on some roads, and near one edge the tyres could be on dirt (and dirt's texture showed on the
+  asphalt) while still inside the lines. The asphalt's colour and its grip now lie exactly under the road's lines.
+- **Road markings by country** (from the national road marking manuals): line colours, widths and dash lengths now
+  follow the country (for example the US's 10 ft dashes every 40 ft, Germany's 6 m dashes on country roads, Britain's
+  shorter town patterns); US-style yellow left edge lines on divided roads and ramps; rural two-lane roads in the US
+  get a broken centre line, town streets a double yellow; dashes are real dashes now, without the grey smear between
+  them.
+- **Painted gores at freeway exits and entrances**: the wedge where a ramp splits from or joins a freeway is now
+  paved, with the wide white lines and the white chevrons pointing at oncoming traffic, as on the real roads.
+- **Bridges look and drive like the real ones** (jonathonbarton's PR #409): decks climb smoothly to what they cross
+  instead of humping, river bridges hold their real clearance over the water, lift and bascule bridges get their towers
+  and control houses, lens trusses span the river, and the parapets are solid concrete barriers.
+- **Motorway curves without banking bumps** (wyo-backroads' PR #410, with our fix): banking follows the whole curve.
+- **No street lamps along empty rural interstates** (wyo-backroads' PR #404); OpenStreetMap's lit tags are used.
+- **Lane counts from the map** (jonathonbarton's PR #405): a street keeps its lanes where one piece of it was mapped
+  without a count, and one-way streets join a two-way street on their own side of it.
+- **Smoother roads and junctions** (mpsteppe's PRs #289, #290): side roads meet the road they join at its height, and
+  mid-size and dirt roads follow fewer small bumps in the elevation data.
+- **Gas stations in Japan, and painted lots after a teleport** (FluffyProgramming's PR #401); big stations no longer
+  cause a hitch when they appear.
+- **Railways still under construction are no longer drawn** (OmdevShastri's PR #392).
+- **Country roads the right width**: small rural roads were drawn about 6 ft too wide (measured on official aerial
+  photos in Pennsylvania and Colorado); they now match, and in the US they get a centre line without edge lines, as
+  most of them have.
+- **Turn arrows and ladder crosswalks**: lanes mapped as turn lanes get their arrows before the junction, and US
+  crosswalks get the ladder style (the bars with a line along each side).
+- **Lane lines follow the map's lanes** where OpenStreetMap maps them: uneven lanes each way move the centre line,
+  centre turn lanes get their yellow lines, no-passing stretches get solid lines, and the traffic drives in the
+  lanes that are painted.
+- **Reduced the chance of a pale strip beside one edge of a road**: where the aerial photo's pavement is wider than
+  the mapped road or a little off it, that strip of the photo is now replaced with the ground beside it.
+- **Fewer trees on roads and sidewalks** (GitHub #424, #425): trees and bushes keep clear of the road's full drawn
+  width (parking lanes included) and of its sidewalks; street trees stand by the curb.
+- **Traffic lights no longer light every colour at once** where they don't switch (GitHub #415): those now show dark
+  lenses.
+- **Office towers at night look like a city at night**: Manhattan's glass towers lit up white from street to roof
+  (TGForever Discord). Their windows are now dimmer and about half of them are dark.
+
+### Fixed
+- Reduced the chance of concrete retaining walls standing beside country roads in front of natural banks (a low rocky
+  bank along US-163 in Utah had a long concrete wall): walls now stand only where the road was actually cut into the
+  ground.
+- Reduced the chance of the road's painted lines lying a few feet to one side of its asphalt and grip far from where
+  you started, on high ground (on US-163 in Utah, 8 miles out at 5,400 ft, they were about 7 ft apart): the lines,
+  shorelines, and the positions of cars across a rebase now follow the ground's own positions.
+- Reduced the chance of side streets humping up where they meet a road that dips under a bridge (Haven Street,
+  Baltimore).
+- Reduced the chance of a fixed view distance (the Low preset's 25 miles) being replaced by the horizon's distance
+  while driving or flying; switching back to the real horizon now brings the far view back at once.
+- Reduced the chance of the game speed seeming to pulse (speeding up and slowing down every fraction of a second) in
+  wooded places: the trees' updates no longer run when nothing changed.
+- Reduced the collision rebuild cost along railway tracks (the rails and sleepers no longer collide; cars ride on the
+  ballast) (from Madderose's contribution).
+- Road surfaces no longer cast hidden sun shadows (a little faster rendering) (from Madderose's contribution).
+- Reduced the chance of world server processes staying behind after closing on Windows (from Madderose's
+  contribution).
+- Reduced the chance of autodrive and traffic crawling at 30 km/h on narrow country roads with a higher limit
+  (GitHub #451, the Netherlands' 60 km/h roads).
+- **Underpasses are open roads under a bridge** (GitHub #450, the A-7 near Málaga; #228, #231, #243, the A7 in
+  Germany): the map often marks the road under a highway as a short tunnel, and it was built as a tube in an
+  embankment, its vault and openings in the highway's lanes. A short road tunnel (under about 260 ft, counting all of
+  its pieces) with little ground over it is now a road under a bridge, as are streets over a railway the map marks
+  as a short tunnel (Chicago's streets over the Union Station tracks).
+- Reduced the chance of a highway dipping where a longer tunnel runs under it (about 9 ft at a culvert under the A-7
+  near Málaga), and of a tunnel's portal ending inside the lanes of a road crossing over it.
+- Reduced the chance of a hole in the road just outside a low tunnel's entrance (cars could fall through it),
+  depending on which way the entrance faced.
+- Reduced the chance of long mountain tunnels being left out because of a lake or stream far above them: the
+  Gotthard road tunnel (10.5 miles) has its entrances at Göschenen and Airolo again (TGForever Discord report).
+- Reduced the chance of roads still under construction being built as finished ones when the map's road details
+  missed them (the Gotthard road tunnel's second bore, due in 2029).
+- Reduced the chance of a tunnel entrance standing in the lanes of a road running alongside it (a service gallery's
+  arch and mound in the A2's lanes at Göschenen).
+- Motorway and main-road tunnels under shallow ground start where the map puts their entrance, as a covered
+  concrete section tall enough for trucks, instead of an open cut further in.
+- Motorway and main-road tunnels under shallow ground get concrete entrances instead of the stone arches of park
+  underpasses.
+- Reduced the chance of a street being dug into a walled trench under a railway where only coarse elevation data
+  exists (Perm, Russia, GitHub #414): the railway now rises on its embankment and the street stays at grade.
+- Reduced the chance of roads and buildings never loading after a road worker stopped answering ("roads & buildings
+  0/26"): the worker is restarted and its tiles built again (KyzoFox's pull request #444).
+- Reduced the chance of a dirt edge strip across a parking lot's asphalt along its aisles.
+- Reduced the chance of a suspension or cable-stayed bridge's tower leg standing in the lanes of the other direction
+  (jonathonbarton's pull request #441).
+- **Reduced the chance of tunnel entrances blocked by the hillside** (GitHub #403, Malibu Canyon Road's tunnel in
+  California): where a road was cut into a cliff right at a tunnel's mouth, wedges of ground stood across the
+  opening from the road up to the roof. The ground is now cut away wherever it reaches into the opening. Pittsburgh's
+  Fort Pitt Tunnel's upper portal was nearly closed the same way and is open now.
+- **Fewer street lamps at interchanges in the countryside** (TGForever Discord): every ramp was lit end to end, even
+  out in Wyoming. A ramp out of town now has lamps only where it leaves the highway and where it meets the road at its
+  end, as most rural interchanges are lit; ramps in towns and cities stay lit along their length.
+- **Smoother banked curves** (TGForever Discord: "a series of bumps where the bank would be"): the map draws a curve
+  as straight pieces that turn every few hundred feet, and the bank came and went at each turn. Curves now lean
+  evenly from start to end, easing in and out over about 200 ft.
+- **Faster first visits on slower connections** (GitHub #241): the ground under the car read the elevation along
+  each river and stream one after another, a trip to the elevation server each; it now asks for all of them at once.
+  On a Windows PC on Wi-Fi a new town's rivers came in about twice as fast.
+- **A slow internet connection is named as such** (GitHub #241): when the map data comes in very slowly, the status
+  line says so ("slow internet connection: new places take a few minutes to load") instead of looking stuck.
+- **Roads build faster**: the roads, bridges and props around you take about a quarter less computer time to build
+  (more of the server's work now runs in its fast native code).
+- **Reduced the chance of roads taking minutes on PCs with few cores** (GitHub #412): after a teleport the app lends
+  the game's spare cores to the world builder while you wait; driving off ended that at once, even with no roads
+  built yet. It now lasts until the roads around you are there (two minutes at most).
+- **Fewer city-sized roofs** (GitHub #413): a mapping error drew one "building" over a whole city in Egypt, its
+  concrete roof over every street. Footprints larger than any real building (about 0.8 square miles) are now left out.
+- **Fewer power-line towers on the road** (TGForever Discord): where a mapped tower sat on a highway's shoulder, the
+  tower now stands just off the road.
+- **A quieter console** (GitHub #391): "bridge clearance below 6.0 m target" no longer fills the app's window.
+
+Questions, bugs or just want to chat? Join the TGForever Discord: https://discord.gg/tgf
 
 ## 1.7.0 beta (2026-10-27)
 

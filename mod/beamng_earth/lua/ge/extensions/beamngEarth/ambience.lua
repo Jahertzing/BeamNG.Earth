@@ -99,7 +99,7 @@ end
 function M.vote(list, x, y, keep)
   local by = {}
   for _, t in ipairs(list) do
-    if math.max(math.abs(t.cx - x), math.abs(t.cy - y)) <= M.VOTE_M then
+    if (t.cx - x) ^ 2 + (t.cy - y) ^ 2 <= M.VOTE_M ^ 2 then      -- (a disc of tile centres, 2026-10-28)
       local k = tostring(t.biome[1]) .. ':' .. tostring(t.biome[2] or 0)
       local e = by[k] or { biome = t.biome, w = 0 }
       e.w = e.w + t.weight + 0.001

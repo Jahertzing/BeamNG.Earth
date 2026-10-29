@@ -153,6 +153,11 @@ local blockBox = nil      -- the block's { x0, y0, x1, y1 } (noteBlock)
 local maxRadius = 0       -- the largest radius of the objects made (ensure)
 local remake = false      -- the objects are to be made again at the next block change (stale cells)
 local nStale = 0          -- block changes that remade them (status)
+-- draw distance factor (the settings page's grassDistance, 2026-10-28): every definition's radius and dissolveRadius
+-- times it, its element count times its square (the same density on the larger disc: the rebuild frame grows with it)
+M.DISTANCE = { near = 0.7, normal = 1.0, far = 1.5 }
+M.distance = 1.0
+M.RADIUS_FIELDS = { radius = true, dissolveRadius = true }
 
 local created = {}        -- object names we made
 local layered = false     -- a block with surface layers was loaded this level (objects can exist)
@@ -191,12 +196,14 @@ local function readDefs(source)
 end
 
 -- Pure: the setField calls (name, index, value) that recreate a stock definition on `layer`, its
--- element count scaled by `share`.
-function M.fieldsFor(def, layer, share)
+-- element count scaled by `share`, its radii by `dist` (default 1).
+function M.fieldsFor(def, layer, share, dist)
   local calls = {}
+  dist = dist or 1
   for k, v in pairs(def) do
     if not SKIP[k] and v ~= jsonNull then
       if k == 'maxElements' then v = math.max(1, math.floor((tonumber(v) or 0) * share + 0.5)) end
+      if M.RADIUS_FIELDS[k] and dist ~= 1 and tonumber(v) then v = tonumber(v) * dist end
       calls[#calls + 1] = { k, 0, fieldValue(v) }
     end
   end
@@ -502,6 +509,15 @@ function M.setReach(v)
   return true
 end
 
+-- Upstream 1.7.1's draw distance factor (its grassDistance setting): kept for its callers, but this fork's grass
+-- distance is M.reach (setReach, the grass distance setting); the factor is stored and not applied.
+function M.setDistance(v)
+  local f = M.DISTANCE[v] or tonumber(v)
+  if not f or f <= 0 then return false end
+  M.distance = f
+  return true
+end
+
 -- The level ended (its objects are gone with it, the stock materials loaded for it too: a level started again in
 -- the same game session found no m_grass_* / wca_groundcover and drew no grass, 2026-10-19).
 function M.reset()
@@ -530,8 +546,9 @@ function M.status()
   local mats = {}
   for _, u in pairs(tintUsed) do mats[#mats + 1] = u.name end
   table.sort(mats)
-  return { enabled = M.enabled, density = M.density, reach = M.reach, objects = #created, materialsLoaded = next(loadedMaterials) ~= nil,
-    error = lastError, tint = M.TINT and tintRgb or nil, tintMaterials = mats, radius = maxRadius, staleRemakes = nStale }
+  return { enabled = M.enabled, density = M.density, reach = M.reach, distance = M.distance, objects = #created,
+    materialsLoaded = next(loadedMaterials) ~= nil, error = lastError, tint = M.TINT and tintRgb or nil,
+    tintMaterials = mats, radius = maxRadius, staleRemakes = nStale }
 end
 
 return M

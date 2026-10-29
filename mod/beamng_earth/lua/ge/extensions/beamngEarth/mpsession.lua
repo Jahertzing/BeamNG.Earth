@@ -255,7 +255,7 @@ local function testStep(dt)
     end
     if #awayLog == 0 and testClock - testCarAt > M.TEST_AWAY_S and veh then
       local q = veh:getPosition()
-      local lat, lon = anchorRef:enuToGeodetic(q.x, q.y, q.z)
+      local lat, lon = anchorRef:worldToGeodetic(q.x, q.y, q.z)
       note('away', lat, lon)
       c.teleport(lat, (lon + 130 + 180) % 360 - 180, nil, { record = false })
     elseif #awayLog == 1 and testClock - awayLog[1].t > M.TEST_AWAY_HOLD_S then
@@ -860,7 +860,7 @@ function M.update(dt, anchor, player)
           sent = sentDamage[gid] }
         if anchor then
           local q = v:getPosition()
-          own.lat, own.lon = anchor:enuToGeodetic(q.x, q.y, q.z)
+          own.lat, own.lon = anchor:worldToGeodetic(q.x, q.y, q.z)
         end
       end
       remote = {}
@@ -870,7 +870,7 @@ function M.update(dt, anchor, player)
         local r = { broken = brokenOf[gid], deformed = deformedOf[gid], hidden = deactivated[gid] == true }
         if o and anchor then        -- (where it stands here, as latitude / longitude: the conversion's check)
           local q = o:getPosition()
-          r.lat, r.lon = anchor:enuToGeodetic(q.x, q.y, q.z)
+          r.lat, r.lon = anchor:worldToGeodetic(q.x, q.y, q.z)
           -- (its height over our ground: a car that looks to float; floating: off our block on purpose)
           r.z = q.z
           r.gz = be and be.getSurfaceHeightBelow and be:getSurfaceHeightBelow(vec3(q.x, q.y, q.z + 2)) or nil
@@ -931,7 +931,7 @@ function M.update(dt, anchor, player)
   anchorRef = anchor
   testStep(dt)
   if not player then return end
-  local lat, lon = anchor:enuToGeodetic(player.x, player.y, player.z or 0)
+  local lat, lon = anchor:worldToGeodetic(player.x, player.y, player.z or 0)
   poseIn = poseIn - (dt or 0)
   if (poseIn <= 0 or mpanchor.ownChanged) and rawget(_G, 'TriggerServerEvent') then
     poseIn = M.POSE_S

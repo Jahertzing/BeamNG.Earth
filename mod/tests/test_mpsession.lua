@@ -51,6 +51,7 @@ beamngEarth_core = { rebaseTo = function(lat, lon) asked.rebase = { lat, lon } e
   teleport = function(lat, lon) asked.go = { lat, lon } end }
 local anchor = { lat = 36.5, lon = -118.1 }
 function anchor:enuToGeodetic(x, y) return self.lat + y / 1e5, self.lon + x / 1e5, 0 end
+function anchor:worldToGeodetic(x, y, z) return self:enuToGeodetic(x, y, z) end
 
 local mine = car(20, 1, true)
 local other = car(21, 2, false)

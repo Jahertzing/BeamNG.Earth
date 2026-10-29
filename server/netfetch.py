@@ -39,6 +39,7 @@ chains has its breaker open, and earthd then says "Offline - using cached data" 
 One User-Agent for the whole project (USER_AGENT): the app, its version and the project URL; no
 user name, e-mail, machine name, location or session id is ever sent.
 """
+import collections
 import email.utils
 import http.client
 import json
@@ -218,6 +219,13 @@ POLICIES = {
                  "esa-worldcover.s3.eu-central-1.amazonaws.com",
                  "dataforgood-fb-data.s3.amazonaws.com",
                  "copernicus-dem-30m.s3.amazonaws.com")},      # the polar caps' DEM (polardem.py)
+    # British Columbia's lidar DEMs (lidarbc.py): range reads of the Province's open bucket; optional
+    "nrs.objectstore.gov.bc.ca": HostPolicy(rate=20.0, burst=40.0, max_conc=6, daily_budget=None, allow_prefetch=True,
+                                            offline_ok=True, miss_ttl=None, binary=True, timeout=30.0, optional=True),
+    # Canada's lidar terrain model (hrdem.py): range reads of NRCan's COG mosaic; optional (Mapterhorn stands in)
+    "canelevation-dem.s3.ca-central-1.amazonaws.com": HostPolicy(rate=20.0, burst=40.0, max_conc=6, daily_budget=None,
+                                                                 allow_prefetch=True, offline_ok=True, miss_ttl=None,
+                                                                 binary=True, timeout=30.0, optional=True),
     # OurAirports' nightly CSV dump on GitHub Pages (airports.py): two files (~3 MB gzipped) once a week,
     # one request at a time, a hard cap well above a week's need; the copy on disk serves offline
     "davidmegginson.github.io": HostPolicy(rate=0.2, burst=2.0, max_conc=1, daily_budget=20, daily_hard=40,
@@ -293,6 +301,8 @@ ROLES = {
     "download.mapterhorn.com": "the list of where detailed terrain heights exist; new places may load slower",
     "s3.amazonaws.com": "terrain heights (backup source); only matters while the main one is down too",
     "copernicus-dem-30m.s3.amazonaws.com": "terrain heights near the poles",
+    "canelevation-dem.s3.ca-central-1.amazonaws.com": "Canada's lidar ground under the distant terrain; as before meanwhile",
+    "nrs.objectstore.gov.bc.ca": "British Columbia's detailed aerial photos (and its lidar, if on); coarser photos meanwhile",
     "stac.overturemaps.org": "the map data's file list; the copy that comes with the app is used meanwhile",
     "overturemaps-us-west-2.s3.us-west-2.amazonaws.com":
         "roads, buildings, water and land use; places not visited before may come without them",
@@ -308,7 +318,7 @@ ROLES = {
     "planetarycomputer.microsoft.com": ("US building heights from lidar and Colorado's 2023 aerial photos (NAIP); the map's "
                                         "own heights and coarser photos meanwhile"),
     "dtdapps.codot.gov": "Colorado highways' lane counts (CDOT); OpenStreetMap's meanwhile",
-    "tecnagamer.github.io": "railway details and US railroad crossing equipment; estimated meanwhile",
+    "tecnagamer.github.io": "railway details, US railroad crossing equipment and lane markings; estimated meanwhile",
     "api.open-meteo.com": "live weather; the weather stays as it is meanwhile",
     "downloads.sourceforge.net": "the gravity model; standard gravity meanwhile",
     "photon.komoot.io": "the map's address search",
@@ -654,6 +664,15 @@ class HttpsTransport:
                 # else: the server may have closed the idle keep-alive connection; reconnect once
 
 
+# --- download speed ---------------------------------------------------------------------------
+RATE_MIN_BYTES = 512 * 1024     # a response this large or larger is a speed sample (smaller ones are mostly latency)
+RATE_WINDOW_S = 120.0           # the samples of the last this many seconds count ...
+RATE_MIN_SAMPLES = 3            # ... at least this many of them
+SLOW_MBPS = 0.4                 # MB/s a large response comes in at or slower (the median): a slow connection. A Windows
+                                # PC on Wi-Fi got 0.02-0.15 MB/s a request; a first visit's ~75 MB of map data took
+                                # minutes and the roads looked stuck (GitHub #241); a wired PC gets 5-15 MB/s
+
+
 # --- per-host state ----------------------------------------------------------------------------
 COUNTERS = ("requests", "bytes", "s2xx", "s3xx", "s4xx", "s404", "s429", "s5xx", "errors", "retries",
             "trips", "deferred", "unavailable")
@@ -693,6 +712,19 @@ class Fetcher:
         self._date = self._today()
         self._flushed = clock()
         self._load_stats()
+        self._rates = collections.deque(maxlen=64)     # (clock, MB/s) of the large responses (throughput)
+
+    def throughput(self):
+        """The median speed (MB/s) the large responses of the last RATE_WINDOW_S came in at, or None (too few)."""
+        now = self.clock()
+        with self._lock:
+            r = sorted(v for t, v in self._rates if now - t <= RATE_WINDOW_S)
+        return r[len(r) // 2] if len(r) >= RATE_MIN_SAMPLES else None
+
+    def slow(self):
+        """The throughput when it is SLOW_MBPS or less (a slow connection), else None."""
+        r = self.throughput()
+        return r if r is not None and r <= SLOW_MBPS else None
 
     # --- hosts and policies ------------------------------------------------------------------
     def policy(self, host):
@@ -889,6 +921,9 @@ class Fetcher:
                         err = FetchFailed(f"{url}: {type(e).__name__}: {e}", url, h.name)
                         continue
                     elapsed = self.clock() - t0
+                    if body and len(body) >= RATE_MIN_BYTES and elapsed > 0:
+                        with self._lock:
+                            self._rates.append((t0 + elapsed, len(body) / elapsed / 1e6))
                     if NETLOG:
                         _netlog(url, hd, status, body)
                 finally:
