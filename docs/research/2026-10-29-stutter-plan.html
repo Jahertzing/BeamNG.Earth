@@ -1,0 +1,251 @@
+<title>Stutter-Free Drive Plan</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Semi+Condensed:wght@500;600;700&family=IBM+Plex+Sans:ital,wght@0,400;0,500;0,600;1,400&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+  /* Layout: one reading column; the ranking as a bar list; each fix as a numbered card (the order is the build order). */
+  :root {
+    --bg: #f6f6f3;          /* warm paper */
+    --panel: #ffffff;
+    --fg: #1f2328;
+    --muted: #5c6670;
+    --rule: #d8dbd6;
+    --accent: #b8541f;      /* sign-paint orange: hitches */
+    --accent-soft: #f3e3d8;
+    --bad: #a3271f;         /* freezes */
+    --ok: #1f7a63;          /* fixed / target */
+    --ok-soft: #dcefe8;
+    --bar: #e9e8e2;
+    --display: "Barlow Semi Condensed", "Arial Narrow", sans-serif;
+    --body: "IBM Plex Sans", "Segoe UI", system-ui, sans-serif;
+    --mono: "IBM Plex Mono", Consolas, monospace;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #15181c; --panel: #1d2126; --fg: #e8e6e0; --muted: #a0a7ad; --rule: #333a42;
+      --accent: #e08a4a; --accent-soft: #3a2a1e; --bad: #e0675d; --ok: #58c2a1; --ok-soft: #1e3a31; --bar: #2a3037;
+      color-scheme: dark;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #15181c; --panel: #1d2126; --fg: #e8e6e0; --muted: #a0a7ad; --rule: #333a42;
+    --accent: #e08a4a; --accent-soft: #3a2a1e; --bad: #e0675d; --ok: #58c2a1; --ok-soft: #1e3a31; --bar: #2a3037;
+    color-scheme: dark;
+  }
+  body { background: var(--bg); color: var(--fg); font-family: var(--body); line-height: 1.5; margin: 0; }
+  .wrap { max-width: 880px; margin: 0 auto; padding-block: 32px 64px;
+    padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); }
+  h1, h2, h3 { font-family: var(--display); text-wrap: balance; line-height: 1.15; margin: 0; }
+  h1 { font-size: 2.4rem; font-weight: 700; letter-spacing: -0.01em; }
+  h2 { font-size: 1.5rem; font-weight: 600; margin-top: 48px; padding-top: 16px; border-top: 2px solid var(--fg); }
+  h3 { font-size: 1.15rem; font-weight: 600; }
+  p { max-width: 68ch; margin: 12px 0; }
+  .lede { font-size: 1.1rem; color: var(--muted); max-width: 64ch; }
+  .eyebrow { font-family: var(--mono); font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); }
+  .target { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; margin: 24px 0; }
+  .target div { border-top: 3px solid var(--rule); padding-top: 8px; }
+  .target div.goal { border-top-color: var(--ok); }
+  .target b { display: block; font-family: var(--display); font-size: 1.6rem; font-weight: 600; font-variant-numeric: tabular-nums; }
+  .target span { color: var(--muted); font-size: 0.9rem; }
+  table { border-collapse: collapse; width: 100%; font-size: 0.93rem; }
+  .scroll { overflow-x: auto; }
+  th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--rule); vertical-align: top; }
+  th { font-family: var(--mono); font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); font-weight: 500; }
+  td.n, th.n { text-align: right; font-family: var(--mono); font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .bars { display: grid; grid-template-columns: minmax(140px, 1.2fr) minmax(120px, 3fr) auto; gap: 6px 12px; align-items: center; font-size: 0.93rem; margin: 16px 0; }
+  .bars .lab { min-width: 0; }
+  .bars .lab small { display: block; color: var(--muted); font-size: 0.8rem; }
+  .bars .track { height: 14px; background: var(--bar); border-radius: 2px; position: relative; min-width: 0; }
+  .bars .fill { position: absolute; inset: 0 auto 0 0; background: var(--accent); border-radius: 2px; }
+  .bars .fill.bad { background: var(--bad); }
+  .bars .fill.gone { background: var(--muted); opacity: 0.55; }
+  .bars .val { font-family: var(--mono); font-variant-numeric: tabular-nums; white-space: nowrap; font-size: 0.85rem; }
+  .fix { border: 1px solid var(--rule); background: var(--panel); border-radius: 6px; padding: 16px 18px; margin: 18px 0; }
+  .fix header { display: flex; gap: 12px; align-items: baseline; flex-wrap: wrap; }
+  .fix .num { font-family: var(--display); font-size: 1.6rem; font-weight: 700; color: var(--accent); min-width: 1.6em; }
+  .fix .meta { font-family: var(--mono); font-size: 0.78rem; color: var(--muted); }
+  .fix ul { margin: 8px 0 0; padding-left: 20px; }
+  .fix li { margin: 4px 0; }
+  .fix li + li { margin-top: 6px; }
+  .pill { display: inline-block; font-family: var(--mono); font-size: 0.72rem; padding: 1px 8px; border-radius: 999px; background: var(--accent-soft); color: var(--accent); margin-left: 6px; }
+  .pill.ok { background: var(--ok-soft); color: var(--ok); }
+  .pill.done { background: var(--ok-soft); color: var(--ok); }
+  .evidence { border-left: 3px solid var(--accent); padding: 4px 14px; margin: 14px 0; color: var(--fg); background: var(--accent-soft); border-radius: 0 4px 4px 0; }
+  .evidence p { margin: 6px 0; }
+  code { font-family: var(--mono); font-size: 0.86em; background: var(--bar); padding: 1px 5px; border-radius: 3px; }
+  pre { font-family: var(--mono); font-size: 0.82rem; background: var(--bar); padding: 10px 12px; border-radius: 4px; overflow-x: auto; }
+  .order { display: grid; grid-template-columns: auto 1fr; gap: 6px 14px; margin: 14px 0; }
+  .order .when { font-family: var(--display); font-weight: 600; color: var(--muted); white-space: nowrap; }
+  .foot { margin-top: 48px; color: var(--muted); font-size: 0.85rem; border-top: 1px solid var(--rule); padding-top: 12px; }
+  @media (max-width: 560px) { .bars { grid-template-columns: 1fr; gap: 2px; } .bars .track { margin: 2px 0 8px; } h1 { font-size: 2rem; } }
+</style>
+
+<div class="wrap">
+  <div class="eyebrow">BeamNG.Earth · Frederick to Castle Rock · 2026-10-29</div>
+  <h1>Stutter-Free Drive Plan</h1>
+  <p class="lede">Every frame on the drive has 11.8 ms at 85 Hz. This page ranks what breaks that budget, names the cause of each class, and lays out the fixes in the order they get built.</p>
+
+  <div class="target">
+    <div class="goal"><b>85 fps</b><span>steady, vsync on, no frame over 50 ms</span></div>
+    <div><b>134</b><span>frames over 100 ms in the 36-minute afternoon drive</span></div>
+    <div><b>240</b><span>frames of 50-100 ms, 7 a minute, 15-21 at the south end</span></div>
+    <div><b>12-14 ms</b><span>what the GPU already needs per frame (the graphics thread's settings sweep)</span></div>
+  </div>
+
+  <h2>1. Where the time went</h2>
+  <p>From Jeff's 14:59-15:35 MDT drive on main 7c130a76 (the afternoon log, the 30-second profile at Erie, and the 20 block commits the profile recorded). Bars are the total frame time each class cost over the drive.</p>
+
+  <div class="bars">
+    <div class="lab">Ground block swaps<small>96 frames of 100-250 ms, every 256-640 m at speed</small></div>
+    <div class="track"><div class="fill" style="width:50%"></div></div>
+    <div class="val">13.4 s</div>
+
+    <div class="lab">Whole-process freezes<small>4 frames of 4.6-8.8 s, I-25 at 40.03-40.05 only</small></div>
+    <div class="track"><div class="fill gone" style="width:100%"></div></div>
+    <div class="val">27 s · gone</div>
+
+    <div class="lab">Stutters 50-100 ms<small>240 frames; FramePresent 45 %, Lua 30 %, untimed 15 %, Render 10 %</small></div>
+    <div class="track"><div class="fill" style="width:55%"></div></div>
+    <div class="val">~15 s</div>
+
+    <div class="lab">Shape loads<small>6 frames of 112-1356 ms: building colliders, far buildings, rail</small></div>
+    <div class="track"><div class="fill" style="width:10%"></div></div>
+    <div class="val">2.6 s</div>
+
+    <div class="lab">Navgraph applies<small>5 frames of 104-599 ms</small></div>
+    <div class="track"><div class="fill" style="width:4%"></div></div>
+    <div class="val">1.1 s</div>
+
+    <div class="lab">Origin rebases<small>3 frames of 150-250 ms, one per 15 km</small></div>
+    <div class="track"><div class="fill" style="width:3%"></div></div>
+    <div class="val">0.8 s</div>
+
+    <div class="lab">Engine tick after loads<small>4 frames of 110-170 ms (Ticking 65-140)</small></div>
+    <div class="track"><div class="fill" style="width:2%"></div></div>
+    <div class="val">0.5 s</div>
+
+    <div class="lab">Lua GC atomic steps<small>3 frames of 103-193 ms</small></div>
+    <div class="track"><div class="fill" style="width:1.5%"></div></div>
+    <div class="val">0.4 s</div>
+  </div>
+
+  <p>The freezes were the cold D3D12 shader cache after today's 0.40.4 Steam update: the builder re-drove the stretch and saw nothing over 135 ms. They come back after every game or driver update unless the cache is warmed first (fix 5).</p>
+
+  <h2>2. What the block swap really costs</h2>
+  <p>The builder's A/B this afternoon ruled out the two obvious suspects: the swap's render spike is 117 ms as is, 111 ms with the terrain block not drawn at all, 118 ms with the block's baked base texture at 256². So it is not the block's own draw and not its photo.</p>
+
+  <div class="evidence">
+    <p><b>The commits themselves say what it is.</b> The 20 swaps in Jeff's profile fall into three classes, and only one of them hitches:</p>
+  </div>
+  <div class="scroll">
+  <table>
+    <tr><th>Class</th><th class="n">Swaps</th><th class="n">Render in the swap frame</th><th class="n">Lua in loadBlock</th><th class="n">of which the .ter apply</th></tr>
+    <tr><td>Quiet swap</td><td class="n">8</td><td class="n">13-16 ms</td><td class="n">6.5-7.2 ms</td><td class="n">6.4-7.1 ms</td></tr>
+    <tr><td>Half rebuild</td><td class="n">4</td><td class="n">40-47 ms</td><td class="n">11-13 ms</td><td class="n">6.6-6.8 ms</td></tr>
+    <tr><td>Full rebuild</td><td class="n">8</td><td class="n">100-147 ms</td><td class="n">11-14 ms</td><td class="n">6.3-7.4 ms</td></tr>
+  </table>
+  </div>
+  <p>The .ter swap costs the same 7 ms every time. The slow classes carry 4-6 ms of extra Lua before the frame is drawn, and that extra Lua is the grass: at a block change <code>groundcover</code> deletes and recreates its seven GroundCover objects, then calls <code>flushGroundCoverGrids()</code>, which makes the engine regenerate every grass cell within 250 m in the same frame's render. The quiet swaps are the ones where it only flushed and the engine (kept patched so block moves free no cells) had nothing to regenerate.</p>
+  <p>The rebuild fires for two reasons, both frequent at highway speed with Jeff's settings (grass distance "far", tint on):</p>
+  <ul>
+    <li><b>The tint moved.</b> With "grass takes the ground's colour" on, a block whose mean photo colour differs by more than 8 % per channel from the last gets new tinted materials, and the objects are made again on them.</li>
+    <li><b>Stale cells.</b> When the grass square (250 m at "far") reached past the old block's edge, cells there were generated empty, so the objects are made again. The next block arrives late at speed (0.7-1.7 s at 110-180 mph), so the car is often within 250 m of the edge.</li>
+  </ul>
+  <p>The builder is running the confirming A/B now: D = grass off, E = grass on with the tint off. If D makes every swap a quiet one (Render ~15 ms), fix 1 is exactly this.</p>
+
+  <h2>3. The fixes, in build order</h2>
+
+  <div class="fix">
+    <header><span class="num">1</span><h3>No grass rebuild at a block change</h3><span class="meta">block swaps · 96 hitches → 0</span></header>
+    <ul>
+      <li><b>Tint changes wait.</b> A moved tint is noted, not applied, while the car moves faster than a crawl; it goes on at the next stop, teleport or origin rebase (which rebuilds the grass anyway). The change threshold rises from 8 % to 15 %, so neighbouring fields stop toggling it.</li>
+      <li><b>No stale cells.</b> The next block is asked for as soon as the car passes the current block's centre, and its centre sits 384 m ahead at speed instead of 256 m, so the block always reaches past the grass radius ahead of the car. Where a block is still late, the stale remake runs without the flush, one object per frame, instead of all cells in one render.</li>
+      <li><b>What is left</b> is the .ter apply (7 ms) plus about 10 ms of render: a 25-30 ms swap frame every 7 s, under the stutter line. The governor already isolates it.</li>
+      <li>Verify: the builder's lap with swap_render_ms median ≤ 20 and no "ground block swap" hitch lines.</li>
+    </ul>
+  </div>
+
+  <div class="fix">
+    <header><span class="num">2</span><h3>Name every stutter, then take them one by one</h3><span class="meta">50-100 ms frames · 240 on the drive</span></header>
+    <ul>
+      <li>Today the minute line only names the engine subsystem of each 50-100 ms frame. It gets the mod's part too (roads, trees, navgraph, parking…) with the worst ms, and the first three stutters a minute get their own line with what the mod was doing, as hitches have.</li>
+      <li><b>FramePresent</b> (45 %) is the GPU: a frame that took 4-8 refreshes on the card. Suspects are the cached sun shadow map redrawn when static things change (trees, the block), first draws of new far-tile textures, and reflection updates. The engine exposes GPU pass timings (<code>Engine.Debug.getGpuTimings</code>); they get logged on every FramePresent stutter so the next drive says which pass. The steady 12-14 ms GPU cost stays with the graphics thread's settings sweep.</li>
+      <li><b>Lua</b> (30 %) and <b>Render</b> (10 %) get fixed from the named parts: likely the trees' pending tiles (1000-2000 queued at speed), the roads' unit loads and the navgraph's guard walk.</li>
+      <li>The engine-tick spikes after loads (Ticking 65-140 ms with 27-33 ms of "ui" in the same frames): the ui mark is split into its pieces (GPS, The Drive, status bar) to find which one spends 30 ms while tiles load.</li>
+    </ul>
+  </div>
+
+  <div class="fix">
+    <header><span class="num">3</span><h3>Shape loads under 20 ms each</h3><span class="meta">building colliders, decks, far buildings · 0.1-1.4 s each</span></header>
+    <ul>
+      <li>A collision-only building mesh of 190 KB took 1.3 s to create; the engine does not say whether that was the file, the shape or the physics mesh. The mod now times the three steps of each unit (create, register, add to the scene) and logs any unit over 30 ms with its size and how long ago the server wrote the file.</li>
+      <li>The server then caps colliders by triangles: building, sidewalk and deck collision meshes are cut into pieces that load in ≤ 20 ms, and the governor spreads the pieces over frames as it does today's units.</li>
+      <li>Windows Defender scans every freshly written file on first read; the server writes 50,000 shape files a session into the game's temp folder. Excluding that folder is Jeff's call (admin PowerShell): <code>Add-MpPreference -ExclusionPath "$env:LOCALAPPDATA\BeamNG\BeamNG.drive\current\temp"</code>.</li>
+    </ul>
+  </div>
+
+  <div class="fix">
+    <header><span class="num">4</span><h3>Lua GC: short cycles, small atomic steps</h3><span class="meta">3 frames of 103-193 ms</span></header>
+    <ul>
+      <li>LuaJIT's collector is incremental except for one atomic step per cycle, which re-walks every table written during the cycle. The game allocates 200-270 MB a minute on a 210-250 MB heap, so a cycle spans 10-30 s and nearly every live table gets written in it: the atomic step costs 100-200 ms.</li>
+      <li><b>Measured offline first</b> (<code>tools/gc_experiment.py</code>, the same LuaJIT the tests run under): a 200 MB heap of 415k tables with 20k of them written every frame and 50 KB of garbage a frame gives an atomic step of 4 ms at most, whatever the cycle length. So the 100-190 ms LuaGC frames are not the incremental collector's atomic step. The likelier cause is a full collection the engine runs itself (the minute lines show the heap climbing to ~285 MB, then one drop to ~184). The branch's LuaGC hitch lines now say what the frame did to the heap ("heap 243 → 171 MB"); the next lap settles it, and the fix is then to keep the heap under whatever threshold triggers it (a pacer, or less garbage) rather than to pace the atomic step.</li>
+      <li>The mod's own garbage gets a diet where it is cheap: net 27, navgraph 30 and parking 29 MB a minute are its biggest makers.</li>
+    </ul>
+  </div>
+
+  <div class="fix">
+    <header><span class="num">5</span><h3>A warm lap after every update</h3><span class="meta">freezes of 4.6-8.8 s · gone until the next update</span></header>
+    <ul>
+      <li>After a BeamNG or NVIDIA driver update the D3D12 pipeline cache is cold, and each new shader permutation compiles on first use: several seconds, outside every timer the mod and the engine have.</li>
+      <li>The builder's post-update step becomes: drive the whole route once at speed, in the day preset and in The Drive's 21:30 night preset (headlights, lamps and night windows use their own shaders), before Jeff's first drive. A small tool wraps the existing drive harness for it.</li>
+    </ul>
+  </div>
+
+  <div class="fix">
+    <header><span class="num">6</span><h3>Navgraph without the one-frame fallback</h3><span class="meta">5 frames of 104-599 ms</span></header>
+    <ul>
+      <li>The over-frames build (7c130a76) still falls back to the game's one-frame <code>map.reset</code> when a new area has a wider road than any before, because the game keeps its largest road radius in a local the sandbox will not let us set. The first graph of a session now carries a sentinel node of the maximum radius (15 m), so every later graph fits and the fallback never runs.</li>
+      <li>The apply itself (73-102 ms) is the whole graph encoded for the vehicles' copy plus the reload hooks; the encode moves into the build coroutine, leaving the commit at roughly 30 ms.</li>
+    </ul>
+  </div>
+
+  <div class="fix">
+    <header><span class="num">7</span><h3>Seeing what the engine does</h3><span class="meta">tools · for anything still "outside the timers"</span></header>
+    <ul>
+      <li>The game binary carries an Optick profiler (<code>Engine.Profiler.startCapture</code>); a 10-second capture around two swaps, opened in the free Optick viewer, names the engine's own zones. The builder checks whether the shipping build answers to it.</li>
+      <li>A sampler of the game's main thread from outside (<code>tools/stallwatch.py</code>): 250 samples a second of where the thread is, by module (the game, D3D12, the NVIDIA driver, the kernel), with a stack when it stalls. It is the tool for stalls that no in-game timer sees.</li>
+    </ul>
+  </div>
+
+  <div class="fix">
+    <header><span class="num">8</span><h3>Frame-time consistency, not just hitches</h3><span class="meta">Jeff: "60, 80, 50, 80, 90, 70, over and over"</span></header>
+    <ul>
+      <li><b>What it is.</b> The GPU takes 12-14 ms a frame and a refresh at 85 Hz is 11.8 ms. With vsync on, a frame that misses its refresh waits for the next one, so frames alternate between 11.8 and 23.5 ms: the profiles show p50 12 ms with p95 at 15-20 and a 1 % low of 37-42 fps, which an fps counter averages into 45-85. The fps cap on top of vsync (FPSLimiter 3-5 ms a frame) made the pacing worse; it comes off at the next game close.</li>
+      <li><b>The fix is adaptive sync, which needs DisplayPort.</b> The game runs on the LG 34" WQHD curved (EDID "LG HDR WQHD") over HDMI, where it tops out at 85 Hz and NVIDIA has no variable refresh (the port is HDMI 2.0; FreeSync-over-HDMI is AMD-only). On DisplayPort the same monitor runs FreeSync Premium to 160 Hz, which NVIDIA drives as G-Sync Compatible (NVIDIA app → Set up G-SYNC, for full screen and windowed, since the game is borderless). A 13 ms frame then shows after 13 ms, not 23.5. A cable, not a monitor change. Staying on HDMI means the only cure is GPU frames under 11.8 ms every frame.</li>
+      <li><b>Measured, not felt.</b> The perf minute line and the profile report get pacing numbers: the share of frames inside the 11.8 ms budget, the share that took two refreshes or more, and the mean frame-to-frame change (jitter). The profile after the cap change gives the before/after, and the graphics thread's settings sweep then has a target: p95 under 11.8 ms.</li>
+    </ul>
+  </div>
+
+  <h2>4. The engine track</h2>
+  <p>Jeff is open to going as deep as the engine allows. This runs in parallel with the Lua fixes from now on, not after them; the grass handler byte patch (gcpatch) was the first of its kind and is still in force on 0.40.4.</p>
+  <div class="scroll">
+  <table>
+    <tr><th>What</th><th>How</th><th>When</th></tr>
+    <tr><td>Where a stall sits, by module</td><td><code>tools/stallwatch.py</code>: samples the game's main thread from outside 250 times a second (SuspendThread, GetThreadContext), attributes the time to the exe, D3D12, the NVIDIA driver or the kernel, and keeps a stack for every stall over 50 ms. No install, no admin, under 2 % overhead on that thread.</td><td class="n">tonight; the builder runs it on the next lap</td></tr>
+    <tr><td>The engine's own zone names</td><td>The binary carries Optick (<code>Engine.Profiler.startCapture</code> / <code>saveCapture</code>); the game's MCP tools already wrap it. One console line in the next session says whether the shipping build answers; if yes, a 10 s capture around two swaps and a FramePresent stall, read with the free Optick viewer or a small parser.</td><td class="n">next game session</td></tr>
+    <tr><td>GPU-side stalls</td><td>Nsight Systems (free): the CLI captures the D3D12 queues and the CPU threads over a window unattended, and <code>nsys stats</code> lists the long GPU workloads. PIX timing captures are the alternative; both need an install, which is Jeff's call. Windows' own <code>wpr -start GPU</code> works without one but needs an admin shell.</td><td class="n">when Jeff says which</td></tr>
+    <tr><td>Binary patches</td><td>Like gcpatchwin: a byte or a short sequence in the running game, matched by signature so a game update turns it off rather than breaking. Candidates come from the captures: the terrain's remaining swap work once the grass rebuild is gone, and anything else that redoes work the mod knows is unchanged (world-locked heights, static tiles).</td><td class="n">as each capture names one</td></tr>
+    <tr><td>Stock Lua rewrites</td><td>Already reached for map.lua. Next: the vehicle reloads at a teleport (0.6 s PhysicsOther frames), the POI and marker regeneration our gas stations trigger 39 times a drive, the whole-graph copy to every vehicle at each navgraph change.</td><td class="n">this week</td></tr>
+    <tr><td>Shader cache pre-warm</td><td>Fix 5: the warm lap after updates. Beyond that, the D3D12 pipeline cache is the driver's; no engine hook exists to fill it ahead of time.</td><td class="n">tool this week</td></tr>
+  </table>
+  </div>
+
+  <h2>5. Order of work</h2>
+  <div class="order">
+    <div class="when">Now</div><div>The builder's A/B D and E. Meanwhile: the stutter and unit instrumentation (fixes 2 and 3, first bullets), the pacing numbers (fix 8), the navgraph sentinel, fix 1, and the stall sampler, all on branch <code>feature/stutter-free</code>. Jeff: G-Sync on before the next drive.</div>
+    <div class="when">Next</div><div>The GC measurement and pacer, the collider splitting on the server, the warm-lap tool, the GPU timings on FramePresent stutters, the ui-part split, the Optick check.</div>
+    <div class="when">Then</div><div>Whatever the named stutters point at, with the Optick capture or the stall sampler where the timers go blind. Origin rebases (150-250 ms, one per 15 km) stay as they are until the rest is quiet.</div>
+  </div>
+  <p>Every branch goes through the gate and to the builder for game time; the builder's lap on the same 8 km gives the before/after for each fix: swap frames, hitch lines by cause, stutters a minute.</p>
+
+  <div class="foot">Data: C:\beamng-earth\drive-20261029-afternoon (beamng.log, perf-lines.txt, profiles), C:\beamng-earth\perf-graphics\blockswap-ab\results.json, the builder's freeze re-check. Game 0.40.4.0, main 7c130a76, DX12, 3440×1440 at 85 Hz.</div>
+</div>

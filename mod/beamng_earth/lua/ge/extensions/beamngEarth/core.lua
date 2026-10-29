@@ -1807,6 +1807,10 @@ end
 local function noteHitch(frameMs)
   local h = { ms = math.floor(frameMs + 0.5), at = math.floor(st.clock * 10 + 0.5) / 10, mod = {} }
   h.gpu = M.gpuTimings()
+  do                                -- the heap across the frame that just ended (gcwatch: a full collection shows)
+    local okG, a, b = pcall(require('beamngEarth/gcwatch').lastFrame)
+    if okG and a and b then h.heap = { a, b } end
+  end
   -- marks: the mod's parts in the frame that just ended (onUpdate swaps them to prevMarks after this call; reading
   -- prevMarks named the frame before it, and most Lua-led hitches showed no part at all, 2026-10-18)
   for k, v in pairs(marks) do if v >= 1 then h.mod[k] = math.floor(v * 10 + 0.5) / 10 end end
@@ -1979,9 +1983,11 @@ local function onUpdate(dtReal, dtSim)
     local okG, errG = pcall(look.grade.update, st.inOurLevel)
     if not okG then look.grade.setMode('off'); log('W', 'beamngEarth', 'grade: ' .. tostring(errG) .. '; off this session') end
   end
+  t = mark('ui.look', t)       -- (post effects, haze, grade: 'ui' was 27-33 ms in frames while tiles loaded, 2026-10-29)
   local stg = rawget(_G, 'beamngEarth_settings')
   if stg and stg.redirectBigMap then stg.redirectBigMap(st.inOurLevel) end
   if st.inOurLevel then gps.update(st.anchor, st.player) end
+  t = mark('ui.gps', t)
   do -- The Drive: Frederick to Castle Rock, timed (thedrive.lua; required here: the main chunk is at Lua's 200 locals)
     local thedrive = require('beamngEarth/thedrive')
     local okD, errD = pcall(thedrive.update, dtReal, dtSim, st.inOurLevel and st.player or nil,
@@ -1989,6 +1995,7 @@ local function onUpdate(dtReal, dtSim)
     if not okD then log('W', 'beamngEarth', 'the drive: ' .. tostring(errD)) end
     statusbar.setLead(thedrive.hudLine(thedrive.status()))
   end
+  t = mark('ui.drive', t)
   seasonlook.update(st.inOurLevel, st.anchor and st.anchor.lat)
   t = mark('ui', t)
   local frameMs = frameMs0

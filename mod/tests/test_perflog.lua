@@ -99,6 +99,9 @@ now = now + 0.2
 lines[#lines + 1] = P.frame(200, now, ctx, { mod = {}, engine = { Render = 150 }, gpu = { Shadows = 41.2, Main = 9 } }, nil, nil)[1]
 local hl = find('perf hitch')
 T.check(#hl == 1 and hl[1]:find('gpu: Shadows 41.2, Main 9', 1, true), 'a hitch line carries the GPU pass timings')
+now = now + 3
+local gl = P.frame(150, now, ctx, { mod = {}, engine = { LuaGC = 140 }, heap = { 243.4, 171.2 } }, nil, nil)
+T.check(#gl == 1 and gl[1]:find('heap 243 -> 171 MB', 1, true), 'a LuaGC hitch line says what the frame did to the heap')
 run(61, 1000 / 85)
 m = find('perf minute')
 T.check(#m >= 1 and m[#m]:find('stutter parts: roads 5 (43 ms)', 1, true), "the minute line: the mod's largest part of each stutter, its worst: " .. tostring(m[#m]))

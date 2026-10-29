@@ -175,6 +175,10 @@ function M.frame(ms, now, ctx, hitch, mod, engine)
       if hitch and next(hitch.mod or {}) then line = line .. ' | mod: ' .. top(hitch.mod, 5, 1) end
       if hitch and next(hitch.engine or {}) then line = line .. ' | engine: ' .. top(hitch.engine, 5, 1) end
       if hitch and next(hitch.gpu or {}) then line = line .. ' | gpu: ' .. top(hitch.gpu, 4, 1) end
+      -- a LuaGC-led frame: what it did to the heap (a drop of tens of MB in one frame is a full collection)
+      if hitch and hitch.heap and (tonumber(hitch.engine and hitch.engine.LuaGC) or 0) >= 20 then
+        line = line .. string.format(' | heap %.0f -> %.0f MB', hitch.heap[1], hitch.heap[2])
+      end
       if M.cause(ms, hitch) == M.UNMEASURED then line = line .. ' | ' .. M.UNMEASURED end
       if c.doing and c.doing ~= '' then line = line .. ' | doing: ' .. c.doing end
       if skipped > 0 then line = line .. string.format(' | (%d more hitches since the last line)', skipped) end
