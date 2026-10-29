@@ -109,6 +109,7 @@ M.MERGE_S = 0.5           -- (it runs with the guard, every GUARD_S at most)
 local merge = require('beamngEarth/mergeassist')
 local navbuild = require('beamngEarth/navbuild')
 local pop = require('beamngEarth/population')   -- (above its first use: the respawn guard reads it too)
+local far = require('beamngEarth/farghosts')
 local lastNodes = nil   -- the node table of the graph applied last (toNodes': positions, links, edges with ramp flags)
 local capped = {}       -- traffic car id -> the merge assist's speed cap on it
 local lastMerge = -math.huge
@@ -1273,7 +1274,15 @@ function M.update(aid, b, gov)
   end
   if pop.enabled() and applied then
     pop.setGraph(graph)
-    local okP, errP = pcall(pop.update, b)
+    local okP, errP = pcall(pop.update, b, gov)
+    -- the far ghosts' models move every frame (the ghosts every population.TICK_S)
+    local me = playerId()
+    local pv = me >= 0 and getObjectByID(me) or nil
+    if pv then
+      local pp = pv:getPosition()
+      local okF, errF = pcall(far.update, pop, os.clock(), pp.x, pp.y)
+      if not okF then log('W', 'beamngEarth', 'navgraph far ghosts: ' .. tostring(errF)) end
+    end
     if not okP then log('W', 'beamngEarth', 'navgraph population: ' .. tostring(errP)) end
   end
   if graph.anchor ~= aid then
@@ -1394,6 +1403,7 @@ end
 
 function M.reset()
   pop.setEnabled(false)
+  far.reset()
   pop.reset()
   heads = {}            -- (the level took them with it)
   graph, applied, dirty, lastApply, persistent, ours, foreign = nil, nil, false, -math.huge, nil, false, false

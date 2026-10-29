@@ -27,8 +27,14 @@ With the population on:
 - New server graphs keep the ghosts whose edges they still have (node names are stable); a rebase moves the graph and
   so the ghosts with it; a teleport seeds them again.
 
-Not yet: ghosts do not stop for signals or collide, and a car still turns real in view at the edge of the real zone
-(typically 300-600 m). Showing far ghosts as simple moving models would hide that (the design doc's option E).
+- **Far ghosts** (`farghosts.lua`, population.FAR, on with the population): every ghost that is not a real car within
+  1.3 km (the 64 nearest) is drawn as a pooled static car model (tools/build_static_cars.py's shapes, one per model),
+  moved every frame at its speed. A car made real is put exactly where its model stood and takes its place (no fade);
+  one made a ghost again gets a model where it was. No models built on the PC (no cars.json): none drawn.
+- A car's move (respawnVehicle) waits for a frame with PLACE_MS of room (the frame governor), PLACE_WAIT_FRAMES at most.
+
+Not yet: ghosts do not stop for signals or collide; the far models have no lights at night and may not be the same
+model and paint as the real car that takes their place.
 
 Measure: `tools/traffic_bench.py ... --population` (report: `pop` promoted / demoted / recycled / spares; ahead and cut
 respawns should be zero), and `tools/traffic_probe.py --watch`. In the game: `navgraph.status().population`.
