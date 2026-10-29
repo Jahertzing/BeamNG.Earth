@@ -4122,7 +4122,10 @@ class Connection:
             self.grsub.on_pose(self, aid, *self.focus, asyncio.get_running_loop(),
                                lambda a, tx, ty: self.s.grass_sub_tile(a, tx, ty, self.grfar.sent), view=self.view_at)
         if self.s.traffic and aid == self.active and self.nav_may_start(aid):
-            self.nav.on_pose(self, aid, *self.focus, asyncio.get_running_loop(), self.s.build_navgraph)
+            # (round a point ahead at speed: navgraph.lead)
+            vel = getattr(self, "vel", (0.0, 0.0))
+            self.nav.on_pose(self, aid, *navgraphmod.lead(*self.focus, *vel), asyncio.get_running_loop(),
+                             self.s.build_navgraph)
         if aid == self.active:
             self.send_progress(aid)
         self.refresh_status()
