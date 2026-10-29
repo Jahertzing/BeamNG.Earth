@@ -48,6 +48,12 @@ M.MATERIALS = {
   -- the raised pavement markers on the highways' lines (server roads.rpm_rows, tools/build_rpm.py): their reflectors
   bne_rpm_white = { '1 1 1', 300 },
   bne_rpm_amber = { '1 0.68 0.18', 300 },
+  -- level crossings (tools/build_rail_crossing_props.py): the crossbucks' sheeting (their own picture as the glow map:
+  -- the letters stay dark) and the gate arms' red and white stripes
+  bne_rr_crossbuck = { '1 1 1', 45 },
+  bne_rr_cross_eu = { '1 1 1', 45 },
+  bne_rr_white = { '1 1 1', 30 },
+  bne_rr_red = { '1 0.08 0.05', 30 },
 }
 M.STADIUM_OFF_H = 23.0      -- local hour the stadiums' lights go out (a game is over by then)
 M.STAR_LAST = { 1, 25 }     -- the star goes off after the National Western Stock Show (month, day; mid to late January)

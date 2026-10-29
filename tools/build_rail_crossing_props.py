@@ -29,11 +29,11 @@ TEX_DIR = "/levels/beamng_earth/art/shapes/beamngEarth"
 FONTS = ["/usr/share/fonts/TTF/DejaVuSans-Bold.ttf", "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
          "/usr/share/fonts/liberation/LiberationSans-Bold.ttf", "C:/Windows/Fonts/arialbd.ttf"]
 
-# the materials: (base colour, metallic, roughness, emissive)
+# the materials: (base colour, metallic, roughness, night glow: retroreflective sheeting nightlights.lua lights by night)
 COLOURS = {
-    "bne_rr_white": ((0.86, 0.86, 0.84), 0.0, 0.5, None),
+    "bne_rr_white": ((0.86, 0.86, 0.84), 0.0, 0.5, True),
     "bne_rr_black": ((0.04, 0.04, 0.04), 0.0, 0.6, None),
-    "bne_rr_red": ((0.62, 0.05, 0.04), 0.0, 0.45, None),
+    "bne_rr_red": ((0.62, 0.05, 0.04), 0.0, 0.45, True),
     "bne_rr_metal": ((0.62, 0.63, 0.64), 0.8, 0.45, None),     # galvanised steel
     "bne_rr_lens": ((0.55, 0.04, 0.03), 0.0, 0.15, None),
     "bne_rr_concrete": ((0.55, 0.54, 0.51), 0.0, 0.85, None),
@@ -274,13 +274,17 @@ def textures():
 def materials():
     out = {}
     pid = lambda n: str(uuid.uuid5(uuid.NAMESPACE_URL, "beamng-earth/" + n))
-    for k, (col, met, rough, _em) in COLOURS.items():
+    for k, (col, met, rough, glow) in COLOURS.items():
+        st = {"baseColorFactor": [*col, 1.0], "metallicFactor": met, "roughnessFactor": rough}
+        if glow:
+            st["emissiveFactor"] = [0, 0, 0]        # (dark by day)
         out[k] = {"name": k, "mapTo": k, "class": "Material", "version": 1.5, "persistentId": pid(k),
-                  "Stages": [{"baseColorFactor": [*col, 1.0], "metallicFactor": met, "roughnessFactor": rough},
-                             {}, {}, {}]}
+                  "Stages": [st, {}, {}, {}]}
     for k in ("bne_rr_crossbuck", "bne_rr_cross_eu"):
+        # (the board's own picture as its glow: the white and red sheeting light up, the black letters stay dark)
         out[k] = {"name": k, "mapTo": k, "class": "Material", "version": 1.5, "persistentId": pid(k),
-                  "Stages": [{"baseColorMap": f"{TEX_DIR}/{k}.png", "metallicFactor": 0, "roughnessFactor": 0.4},
+                  "Stages": [{"baseColorMap": f"{TEX_DIR}/{k}.png", "emissiveMap": f"{TEX_DIR}/{k}.png",
+                              "emissiveFactor": [0, 0, 0], "metallicFactor": 0, "roughnessFactor": 0.4},
                              {}, {}, {}]}
     with open(os.path.join(OUT, "rail_crossing.materials.json"), "w", encoding="utf-8") as fh:
         json.dump(out, fh, indent=2)
