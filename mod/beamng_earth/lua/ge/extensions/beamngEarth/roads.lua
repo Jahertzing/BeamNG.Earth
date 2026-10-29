@@ -41,7 +41,13 @@ M.enabled = true
 -- 2026-10-14: a rebuild had grown to ~56 ms (1.1 M collision vertices with the buildings) and ran every 3 s
 -- while driving, most of the hitches of a 34 mph drive: new colliders now wait up to 6 s (still 11 s of margin
 -- at 130 mph), and colliders deleted far behind the car (their stale collision harms nobody) up to 30 s.
-M.RELOAD_EVERY_S = 6
+-- 2026-10-29: 15 s (from 6). The rebuild is still the drive's commonest stutter (~21 ms of Lua and a ~15 ms physics
+-- frame, 8-10 a minute on the Union Station replay); a collider waiting on this timer turns urgent (urgentColliders,
+-- re-checked every frame) as soon as the car comes within URGENT_S of it, so the timer only paces the ones it never
+-- nears. Standing or crawling (under RELOAD_MOVING_MS: a teleport's wait, core.floorCheck's tunnel floor) it stays 6 s.
+M.RELOAD_EVERY_S = 15
+M.RELOAD_STAND_S = 6
+M.RELOAD_MOVING_MS = 5
 -- Collision only near the car (2026-10-15: the rebuild cost scales with every colliding triangle loaded, ~40 ms in
 -- Fells Point with all 36 tiles' buildings and sidewalks): a tile's colliders (sidewalks, decks, the buildings'
 -- lean collision mesh "bldcol") are made once its centre is within COLLIDE_LEAD_S of driving (COLLIDE_M min / max)
@@ -241,7 +247,10 @@ local function now() return os.clock() * 1000 end
 local unitStats = {}
 local unitLog = {}       -- the last UNIT_LOG units: { kind, ms, shape } (status().unitLog)
 M.UNIT_LOG = 400
+local frameUnits = {}    -- this frame's units of FRAME_UNIT_MS or more (M.frameUnits: the perf log's hitch lines)
+M.FRAME_UNIT_MS = 5
 local function noteUnit(kind, ms, shape)
+  if ms >= M.FRAME_UNIT_MS then frameUnits[#frameUnits + 1] = { kind, ms, shape } end
   unitLog[#unitLog + 1] = { kind, ms, shape }
   if #unitLog > M.UNIT_LOG then table.remove(unitLog, 1) end
   local u = unitStats[kind]
@@ -1013,7 +1022,23 @@ local viewAt = nil  -- core.viewAway(): the camera's { x, y } when it is away fr
 local prewarmId, prewarmPath, prewarmWant = nil, nil, nil     -- (the materials' prewarm shape, below)
 local prewarmNow
 
+-- The last update's slow units, "bldcol 62 ms (bldcol_5_3_-2.cdae), reloadCollision 21 ms", slowest first ('' if none).
+-- (core's perf log reads it before this frame's update: the units of the frame a hitch line is about.)
+function M.frameUnits()
+  local arr = {}
+  for i, u in ipairs(frameUnits) do arr[i] = u end
+  table.sort(arr, function(a, b) return a[2] > b[2] end)
+  local out = {}
+  for i = 1, math.min(4, #arr) do
+    local u = arr[i]
+    local shape = type(u[3]) == 'string' and u[3]:match('([^/]+)$')
+    out[i] = string.format('%s %d ms%s', tostring(u[1]), math.floor(u[2] + 0.5), shape and (' (' .. shape .. ')') or '')
+  end
+  return table.concat(out, ', ')
+end
+
 function M.update(gov, currentAnchor, player, view)
+  for i = #frameUnits, 1, -1 do frameUnits[i] = nil end
   viewAt = view
   if prewarmWant then prewarmNow()
   elseif prewarmId and not scenetree.findObjectById(prewarmId) then   -- (the level loaded again: gone with it)
@@ -1098,7 +1123,8 @@ function M.update(gov, currentAnchor, player, view)
     if swapQuiet.frames <= 0 and swapQuiet.since() >= M.SWAP_QUIET_MS then swapQuiet = nil end
   end
   local urgent = collisionDirty and (holdActive or M.urgentColliders()) and sinceReload() > M.URGENT_GAP_S * 1000
-  local due = not swapQuiet and ((collisionDirty and sinceReload() > M.RELOAD_EVERY_S * 1000) or urgent
+  local due = not swapQuiet and ((collisionDirty and sinceReload() > (lastSpeed >= M.RELOAD_MOVING_MS and M.RELOAD_EVERY_S
+      or M.RELOAD_STAND_S) * 1000) or urgent
       or (deletesDirty and sinceReload() > M.RELOAD_DELETES_S * 1000))
   if due and not holdActive and reloadWaits < M.RELOAD_WAIT_FRAMES and gov.roomFor and not gov:roomFor(M.RELOAD_ROOM_MS) then
     reloadWaits = reloadWaits + 1

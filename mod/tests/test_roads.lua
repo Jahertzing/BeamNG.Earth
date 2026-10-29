@@ -98,7 +98,7 @@ local function statics()
   return r
 end
 S.calls.reloadCollision = 0
-roads.RELOAD_EVERY_S = 0
+roads.RELOAD_EVERY_S, roads.RELOAD_STAND_S = 0, 0
 roads.onTile({ anchorId = 2, key = '5_5', path = '/t/w.json', n = 1 }, 2)
 roads.update(gov, 2)
 local w = statics()[1]
@@ -223,7 +223,7 @@ T.check(#statics() == 1, 'made with the car beside it (only the car over a sidew
 -- made, then the car drives into it before collision is rebuilt: removed, made again once clear
 roads.onDrop({ anchorId = 2, key = '0_0' })
 roads.update(gov, 2)
-roads.RELOAD_EVERY_S = 1e9
+roads.RELOAD_EVERY_S, roads.RELOAD_STAND_S = 1e9, 1e9
 roads.onTile({ anchorId = 2, key = '0_0', path = '/t/h.json', n = 0 }, 2)
 roads.update(gov, 2)
 T.check(#statics() == 1, 'made (car clear)')
@@ -233,7 +233,7 @@ T.check(#statics() == 0 and roads.solidAround == 1, 'removed before it turns sol
 car.pos = vec3(200, 105, 0.5)
 roads.update(gov, 2)
 T.check(#statics() == 1, 'made again once clear')
-roads.RELOAD_EVERY_S = 0
+roads.RELOAD_EVERY_S, roads.RELOAD_STAND_S = 0, 0
 roads.onDrop({ anchorId = 2, key = '0_0' })
 roads.update(gov, 2)
 -- a deck is held only with the car under its surface: a car on the approach at the deck's height (in its box) gets
@@ -273,7 +273,7 @@ roads.onDrop({ anchorId = 2, key = '0_0' })
 roads.update(gov, 2)
 -- colliders only near the car: a far tile's sidewalk waits, made as the car comes near, dropped far behind
 roads.COLLIDE_CHECK_S = 0
-roads.RELOAD_EVERY_S = 0
+roads.RELOAD_EVERY_S, roads.RELOAD_STAND_S = 0, 0
 car.pos = vec3(0, 0, 0.5)
 files['/t/far.json'] = '{ chunks = { }, walk = { shape = "/t/walks_2_9_0.cdae", pos = { 2304, 0, 0 } } }'
 roads.onTile({ anchorId = 2, key = '9_0', path = '/t/far.json', n = 0 }, 2)
@@ -490,8 +490,8 @@ end
 -- where a rebase's ghost of the same kind still collides
 do
   roads.reset()
-  local keep = { roads.RELOAD_EVERY_S, roads.URGENT_GAP_S, roads.COLLIDE_CHECK_S }
-  roads.RELOAD_EVERY_S, roads.URGENT_GAP_S, roads.COLLIDE_CHECK_S = 1e6, 1e6, 0
+  local keep = { roads.RELOAD_EVERY_S, roads.URGENT_GAP_S, roads.COLLIDE_CHECK_S, roads.RELOAD_STAND_S }
+  roads.RELOAD_EVERY_S, roads.URGENT_GAP_S, roads.COLLIDE_CHECK_S, roads.RELOAD_STAND_S = 1e6, 1e6, 0, 1e6
   local g = { tries = 0 }
   function g:try() return true end
   function g:charge() end
@@ -532,7 +532,44 @@ do
   T.check(not roads.urgentColliders(), 'after a rebase: the ghost still collides, not urgent')
   walkTile(3, '1_0', 'deck', 256)
   T.check(roads.urgentColliders(), 'a deck where the ghost had none: urgent')
-  roads.RELOAD_EVERY_S, roads.URGENT_GAP_S, roads.COLLIDE_CHECK_S = keep[1], keep[2], keep[3]
+  roads.RELOAD_EVERY_S, roads.URGENT_GAP_S, roads.COLLIDE_CHECK_S, roads.RELOAD_STAND_S = keep[1], keep[2], keep[3], keep[4]
+  getPlayerVehicle = nil
+  roads.reset()
+end
+-- the perf log's view of a frame: its slow units, slowest first, with the shape's file name
+do
+  roads.reset()
+  local g = {}
+  function g:try() return true end
+  function g:charge() end
+  function g:chargeMotion() end
+  roads.update(g, 2)
+  T.check(roads.frameUnits() == '', 'frameUnits: nothing slow')
+end
+-- the throttle: RELOAD_EVERY_S while moving, RELOAD_STAND_S standing (a teleport's wait keeps the 6 s)
+do
+  roads.reset()
+  local keep = { roads.RELOAD_EVERY_S, roads.RELOAD_STAND_S, roads.COLLIDE_CHECK_S }
+  roads.RELOAD_EVERY_S, roads.RELOAD_STAND_S, roads.COLLIDE_CHECK_S = 1e6, 0, 0
+  local g = {}
+  function g:try() return true end
+  function g:charge() end
+  function g:chargeMotion() end
+  local car3 = { pos = vec3(1000, 1000, 0.5), vel = vec3(0, 0, 0) }
+  function car3:getPosition() return self.pos end
+  function car3:getVelocity() return self.vel end
+  getPlayerVehicle = function() return car3 end
+  roads.update(g, 2)
+  local n0 = S.calls.reloadCollision
+  roads.requestCollision()
+  roads.update(g, 2)
+  T.check(S.calls.reloadCollision == n0 + 1, 'standing: rebuilt on the standing interval')
+  car3.vel = vec3(20, 0, 0)
+  roads.update(g, 2)
+  roads.requestCollision()
+  roads.update(g, 2)
+  T.check(S.calls.reloadCollision == n0 + 1, 'moving: waits for RELOAD_EVERY_S')
+  roads.RELOAD_EVERY_S, roads.RELOAD_STAND_S, roads.COLLIDE_CHECK_S = keep[1], keep[2], keep[3]
   getPlayerVehicle = nil
   roads.reset()
 end
