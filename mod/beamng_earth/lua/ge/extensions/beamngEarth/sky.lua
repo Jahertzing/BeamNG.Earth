@@ -43,6 +43,10 @@ local clock, graceUntil, bigMapUntil = 0, M.GRACE_S, 0
 local inOurLevel, mission = false, false
 local pending = nil    -- { at, keys }: someone else changed the time; manual after MISSION_SETUP_S
 local switched = nil   -- the last switch to manual: { at, keys }
+-- A live time (setLocalHour: The Drive's golden hour or night, the sky keys): manual for now, not saved. { by = who,
+-- from = the mode before }; nil when the mode is the one chosen. The saved mode had been 'manual' for days on Jeff's PC
+-- (2026-10-29): setLocalHour saved it, so every level load came up at a stopped clock (2026-06-20 08:24).
+local live = nil
 
 -- Day of week, 0 = Sunday (Sakamoto), and the Sunday helpers mirror celestial.lua:261-283 so the
 -- clock we display agrees with what core_celestial would derive on its own.
@@ -195,17 +199,16 @@ function M.sunTimes(y, mo, d, lat, lon, utcOffset)
 end
 
 -- The clock set to `hours` local time today at the player's place (The Drive's golden hour or night, thedrive.lua),
--- running on at real speed from there. Switches the sky to Manual, saved as the setting as a change in the pause menu
--- is (choose Real time in the settings to go back). Returns the hours set, or nil without a TimeOfDay.
-function M.setLocalHour(hours)
+-- running on at real speed from there. Switches the sky to Manual live, not saved: the saved mode comes back with the
+-- next level load, a choice in the settings or restoreLive(by). by: who set it (default 'a time key'). Returns the
+-- hours set, or nil without a TimeOfDay.
+function M.setLocalHour(hours, by)
   local tod = getTod()
   hours = tonumber(hours)
   if not tod or not hours then return nil end
-  if mode ~= 'manual' then
-    M.setMode('manual')
-    local st = rawget(_G, 'beamngEarth_settings')
-    if st and st.set then pcall(st.set, 'skyMode', 'manual') end
-  end
+  local from = live and live.from or mode
+  if mode ~= 'manual' then M.setMode('manual') end
+  if from ~= 'manual' or live then live = { by = by or 'a time key', from = from } end
   local f = M.todFields(os.time(), tonumber(tod.latitude) or 0, tonumber(tod.longitude) or 0, realTz)
   tod.year, tod.month, tod.day = f.year, f.month, f.day
   tod.utcOffset = f.utcOffset
@@ -238,6 +241,7 @@ function M.serverClock() return serverClock end
 
 function M.setMode(m)
   if m ~= 'real' and m ~= 'manual' then return 'mode must be "real" or "manual"' end
+  live = nil                -- (a mode chosen ends a live time)
   if m == 'manual' and mode ~= 'manual' then M.manualBy = debug.traceback('', 2) end   -- (who: the MP status)
   mode = m
   pending = nil
@@ -245,6 +249,25 @@ function M.setMode(m)
   return 'sky mode: ' .. mode
 end
 function M.getMode() return mode end
+
+local function savedMode()
+  local st = rawget(_G, 'beamngEarth_settings')
+  local ok, v = pcall(function() return st and st.get and st.get('skyMode') end)
+  return ok and v or nil
+end
+
+-- A live time ends (The Drive over): the saved mode again (the mode before it without settings), when `by` (nil: anyone)
+-- set it and nothing chose a mode since. Returns the mode now, or nil when there was nothing to end.
+function M.restoreLive(by)
+  if not live or (by and live.by ~= by) then return nil end
+  local back = savedMode() or live.from
+  live = nil
+  if back and back ~= mode then M.setMode(back) end
+  return mode
+end
+
+-- The live time: { by, from } or nil.
+function M.live() return live and { by = live.by, from = live.from } or nil end
 
 -- The real UTC offset (hours) at (lat, lon), from the weather service; re-syncs on the next update.
 function M.setRealUtcOffset(hours, lat, lon)
@@ -259,7 +282,8 @@ function M.status()
   if not tod then return { mode = mode, pending = pending, switched = switched } end
   local h = ((tonumber(tod.time) or 0) + 0.5) % 1.0 * 24
   return {
-    mode = mode, pending = pending, switched = switched, inOurLevel = inOurLevel,
+    mode = mode, pending = pending, switched = switched, inOurLevel = inOurLevel, saved = savedMode(),
+    liveBy = live and live.by or nil,
     grace = math.max(0, graceUntil - clock), mission = mission, lat = tod.latitude, lon = tod.longitude,
     date = string.format('%04d-%02d-%02d', tod.year or 0, tod.month or 0, tod.day or 0),
     localTime = string.format('%02d:%02d', math.floor(h), math.floor((h % 1) * 60)),
@@ -444,9 +468,12 @@ function M.onDeactivateBigMapCallback()
 end
 
 local celestialAt = -1e9     -- (ensureCelestial's last look; declared before onLevel, which resets it)
+local warnedPair, warnedSavedManual = nil, false     -- (checkModes' warnings; onLevel resets them)
 
 local function onLevel()
   clock, graceUntil, bigMapUntil, mission, pending = 0, M.GRACE_S, 0, false, nil
+  live = nil                -- (settings apply the saved mode again at the level start)
+  warnedPair, warnedSavedManual = nil, false
   celestialAt = -1e9
   inOurLevel = getCurrentLevelIdentifier and getCurrentLevelIdentifier() == M.LEVEL_ID or false
 end
@@ -459,6 +486,30 @@ function M.onExtensionLoaded()
   local saved = st and st.get and st.get('skyMode')
   if saved then M.setMode(saved) end
   if scenetree.MissionGroup and getCurrentLevelIdentifier and getCurrentLevelIdentifier() then onLevel() end
+end
+
+-- The live mode against the saved one, looked at every CELESTIAL_CHECK_S: a difference nobody set live (a bench, another
+-- mod setting the mode) is a warning in the log, once per pair; Manual saved, a stopped clock at every level load,
+-- is a warning toast once a level start (it went days unnoticed, 2026-10-29). Returns the warning, or nil.
+function M.checkModes()
+  local saved = savedMode()
+  if not saved then return nil end
+  local text
+  if saved ~= mode and not live then
+    local pair = mode .. '/' .. saved
+    if pair ~= warnedPair then
+      warnedPair = pair
+      text = string.format('the sky is %s but the saved setting is %s (nothing set it live)', mode, saved)
+      log('W', 'beamngEarth', 'sky: ' .. text)
+    end
+  elseif saved == 'manual' and mode == 'manual' and not warnedSavedManual then
+    warnedSavedManual = true
+    text = 'the sky is saved as Manual: the clock does not follow the real one. Choose Real time in the BeamNG.Earth'
+      .. ' settings to go back.'
+    notify(text)
+  end
+  if saved == mode then warnedPair = nil end
+  return text
 end
 
 -- core_celestial is what moves the drawn sun: every frame it reads the TimeOfDay and writes ScatterSky's azimuth and
@@ -483,6 +534,7 @@ function M.onUpdate(dtReal)
   if clock - celestialAt >= M.CELESTIAL_CHECK_S then
     celestialAt = clock
     ensureCelestial()
+    M.checkModes()
   end
   local ok, err = pcall(updateClouds, dtReal)
   if not ok then log('W', 'beamngEarth', 'clouds: ' .. tostring(err)) end

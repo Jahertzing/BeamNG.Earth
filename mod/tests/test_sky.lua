@@ -217,6 +217,7 @@ local t0 = tod.time
 now = now + 600
 run(31)
 check(tod.time == t0, 'reload: manual, not re-synced')
+check(#toasts == 3 and toasts[3].msg:find('saved as Manual', 1, true), 'Manual saved: a warning toast')
 beamngEarth_settings.get = nil
 sky.setMode('real')
 sky.onExtensionLoaded()
@@ -230,7 +231,7 @@ sky.onClientStartMission()
 run(sky.GRACE_S + 1)
 core_environment.setTimeOfDay({ time = (realTime() + 0.3) % 1 })
 run(sky.MISSION_SETUP_S + 1)
-check(sky.getMode() == 'real' and #toasts == 2, 'other levels: no switch')
+check(sky.getMode() == 'real' and #toasts == 3, 'other levels: no switch')
 -- ... and their time left alone: a time set there (and a paused clock) stays past the resync interval (issue #1)
 tod.time, tod.play = 0.5, false
 run(sky.RESYNC_S and sky.RESYNC_S + 5 or 40)
@@ -256,6 +257,52 @@ check(sky.setLocalHour(21.5) == 21.5, 'set to 21:30')
 check(sky.getMode() == 'manual' and near(tod.time, (21.5 / 24 - 0.5) % 1, 1e-9) and tod.play == true
   and tod.dayLength == sky.REAL_DAY_S, 'manual, 21:30, the clock running')
 sky.setMode('real')
+
+-- ... live, for now only (2026-10-29: it saved Manual, so every level load came up at a stopped clock)
+local savedMode = 'real'
+beamngEarth_settings.get = function(k) return k == 'skyMode' and savedMode or nil end
+local nSaved = #saved
+sky.setLocalHour(21.5, 'The Drive')
+check(sky.getMode() == 'manual' and #saved == nSaved and sky.live().by == 'The Drive' and sky.live().from == 'real',
+  'a live time: manual, not saved')
+check(sky.status().saved == 'real' and sky.status().liveBy == 'The Drive', 'status: the saved mode and who set it live')
+sky.setLocalHour(12.5, 'The Drive')
+check(sky.live().from == 'real', 'again: still the mode before the first')
+check(sky.restoreLive('a sky key') == nil and sky.getMode() == 'manual', 'only its own setter ends it')
+check(sky.restoreLive('The Drive') == 'real' and sky.getMode() == 'real' and sky.live() == nil, 'over: real again')
+check(sky.restoreLive('The Drive') == nil, 'nothing live: nothing to end')
+-- a mode chosen meanwhile wins
+sky.setLocalHour(21.5, 'The Drive')
+savedMode = 'manual'
+beamngEarth_settings.set('skyMode', 'manual')
+check(sky.restoreLive('The Drive') == 'manual' and sky.getMode() == 'manual', 'Manual chosen during it: kept')
+savedMode = 'real'
+sky.setMode('real')
+sky.setLocalHour(21.5, 'The Drive')
+sky.setMode('real')
+check(sky.live() == nil, 'Real chosen during it: no live time left')
+-- the level start ends it (the settings apply the saved mode)
+sky.setLocalHour(21.5, 'The Drive')
+sky.onClientStartMission()
+check(sky.live() == nil, 'a level start: no live time')
+sky.setMode('real')
+-- the live mode against the saved one
+check(sky.checkModes() == nil, 'the same: no warning')
+sky.setLocalHour(21.5, 'a sky key')
+check(sky.checkModes() == nil, 'manual live: no warning')
+sky.setMode('real')
+sky.setMode('manual')            -- (a bench, another mod)
+local w = sky.checkModes()
+check(w and w:find('saved setting is real', 1, true), 'manual, saved real, nothing live: a warning: ' .. tostring(w))
+check(sky.checkModes() == nil, 'once')
+savedMode = 'manual'
+local nToasts = #toasts
+w = sky.checkModes()
+check(w and w:find('saved as Manual', 1, true) and #toasts == nToasts + 1, 'Manual saved: a toast')
+check(sky.checkModes() == nil and #toasts == nToasts + 1, 'once a level')
+savedMode = 'real'
+sky.setMode('real')
+beamngEarth_settings.get = nil
 
 print(string.format('test_sky: %d passed, %d failed', pass, fail))
 os.exit(fail == 0 and 0 or 1)

@@ -125,8 +125,11 @@ function M.skyNow(which)
   local lat, lon = here[1] or M.START.lat, here[2] or M.START.lon
   local h = M.hoursFor(which, os.time(), lat, lon)
   if not h then return false end
-  local set = sky.setLocalHour(h)
-  if set then msg(string.format('Time set to %d:%02d', math.floor(set), math.floor(set % 1 * 60)), 3) end
+  local set = sky.setLocalHour(h, 'a sky key')
+  if set then
+    msg(string.format('Time set to %d:%02d (Real time again at the next level load, or in the settings)',
+      math.floor(set), math.floor(set % 1 * 60)), 4)
+  end
   return set ~= nil
 end
 
@@ -141,6 +144,12 @@ function M.cannotStart()
   return places.cannotGo()
 end
 
+-- The run over: the sky's mode before its time of day comes back (sky.setLocalHour is live, for this drive only).
+local function stop()
+  run = nil
+  sky.restoreLive('The Drive')
+end
+
 -- route: 'downtown' | 'i25' (default downtown); opts: { auto = true|false, time = one of TIMES } (default: the
 -- settings theDriveAutodrive, theDriveTime). Returns true, or false and why.
 function M.start(route, opts)
@@ -149,6 +158,7 @@ function M.start(route, opts)
   local why = M.cannotStart()
   if why then msg('The Drive: ' .. why, 5); return false, why end
   gps.clear()                                     -- (an autodrive on stops before the car is moved)
+  stop()                                          -- (a run under way: its time of day goes)
   local core = rawget(_G, 'beamngEarth_core')
   if not core.teleport(M.START.lat, M.START.lon, 'The Drive: ' .. M.START.name) then
     msg('The Drive: the teleport was refused (see the status line)', 5)
@@ -174,7 +184,7 @@ end
 
 function M.cancel()
   if run and run.phase ~= 'done' then msg('The Drive called off', 4) end
-  run = nil
+  stop()
 end
 
 -- The run for the settings page, the bar and the tests: { route, phase, t, auto, splits, result, nextName } or nil.
@@ -207,7 +217,7 @@ local function begin()
   local r = M.ROUTES[run.route]
   gps.setDestination(M.DEST.lat, M.DEST.lon, M.DEST.name, r.vias, r.avoid)
   local h = M.hoursFor(run.time, os.time(), M.START.lat, M.START.lon)
-  if h then sky.setLocalHour(h) end
+  if h then sky.setLocalHour(h, 'The Drive') end
   if run.auto then gps.setAutodrive(true) end
   local s = gps.status()
   run.phase, run.viasSeen, run.arrivals = 'ready', 0, gps.arrivals or 0
@@ -253,7 +263,7 @@ function M.update(dtReal, dtSim, player, loading)
       run.nearSince = nil
       if clockReal - run.since > M.TELEPORT_GIVEUP_S then
         msg('The Drive: Frederick did not load, called off', 6)
-        run = nil
+        stop()
       end
       return
     end
@@ -267,7 +277,7 @@ function M.update(dtReal, dtSim, player, loading)
   end
 
   if run.phase == 'done' then
-    if clockReal - run.since > M.DONE_S then run = nil end
+    if clockReal - run.since > M.DONE_S then stop() end
     return
   end
 
@@ -275,12 +285,12 @@ function M.update(dtReal, dtSim, player, loading)
   local s = gps.status()
   if (gps.arrivals or 0) > run.arrivals then
     local a = gps.lastArrival
-    if a and a.name == M.DEST.name and run.phase == 'driving' then finish(run.t) else run = nil end
+    if a and a.name == M.DEST.name and run.phase == 'driving' then finish(run.t) else stop() end
     return
   end
   if not s or s.name ~= M.DEST.name then
     msg('The Drive ended: the GPS was cleared or set elsewhere', 5)
-    run = nil
+    stop()
     return
   end
   if run.phase == 'ready' then
