@@ -95,6 +95,7 @@ function M.onTeleport()
   if restore and gp then                 -- (another teleport mid-way: the amount from before the first)
     heldActive, restore = restore.final, nil
     pcall(gp.setActiveAmount, 0)
+    M.clearNearBan()
   elseif gp and gp.getState() and not heldActive then
     local vars = gp.getParkingVars and gp.getParkingVars() or {}
     heldActive = vars.activeAmount or math.huge
@@ -401,7 +402,7 @@ function M.update(aid, player, blk, gov)
   if player then lastPlayer = player end
   if restore and gameplay_parking and not scatterPending then
     local sw = stopwatch.new()
-    M.stepRestore(gameplay_parking)
+    M.stepRestore(gameplay_parking, player)
     M.parts.scatter = M.parts.scatter + sw()
   end
   hookSetup()
@@ -458,7 +459,7 @@ function M.start(gp, player)
     if heldActive and gp.getState() then
       restore = { n = 0, target = math.min(heldActive, #list), final = heldActive }
       lastRestore = -math.huge
-      M.stepRestore(gp)
+      M.stepRestore(gp, player)
     elseif heldActive then
       pcall(gp.setActiveAmount, heldActive)
     end
@@ -468,13 +469,43 @@ function M.start(gp, player)
 end
 
 -- One more parked car active (restore), at most every RESTORE_S.
-function M.stepRestore(gp)
+-- Each car comes onto a spot out of view (holdView first: the guard's last pass may be another frame's or another
+-- heading's) and, while enough free ones lie past it, ACTIVATE_MIN_M or more from the player: the stock activation's own
+-- 100 m put 8 of 16 at 77-93 m from the player (bench8, 2026-10-29; its distance is from elsewhere). The spots nearer
+-- are banned for the restore only, and never when that would leave the cars none (the stock fallback is any road).
+local nearBanned = {}   -- spot object -> true: banned by the restore (nearer than ACTIVATE_MIN_M)
+function M.clearNearBan()
+  for ps in pairs(nearBanned) do
+    local tags = ps.customFields and ps.customFields.tags
+    if tags and not banned[ps] then tags.banned = nil end
+  end
+  nearBanned = {}
+end
+local clearNearBan = M.clearNearBan
+local function banNear(player, need)
+  if not player or M.freeNear(player, M.START_M, M.ACTIVATE_MIN_M) < need then return clearNearBan() end
+  local m2 = M.ACTIVATE_MIN_M * M.ACTIVATE_MIN_M
+  for _, ps in pairs(objs) do
+    local p = ps.pos
+    local tags = ps.customFields and ps.customFields.tags
+    if p and tags and not tags.banned and (p.x - player.x) ^ 2 + (p.y - player.y) ^ 2 < m2 then
+      tags.banned = true
+      nearBanned[ps] = true
+    end
+  end
+end
+
+function M.stepRestore(gp, player)
   if not restore or os.clock() - lastRestore < M.RESTORE_S then return end
   lastRestore = os.clock()
+  pcall(holdView, nil, {})
+  banNear(player, restore.target - restore.n)
   restore.n = restore.n + 1
   if restore.n >= restore.target then
     pcall(gp.setActiveAmount, restore.final)
     restore = nil
+    clearNearBan()
+    pcall(holdView, nil, {})
   else
     pcall(gp.setActiveAmount, restore.n)
   end
@@ -494,6 +525,7 @@ function M.reset()
   banned, held, spotAt = {}, {}, {}
   backlog = 0
   restore, lastRestore = nil, -math.huge
+  nearBanned = {}
   box, lastGuard, heldActive = nil, -math.huge, nil
   started, scatterPending = false, false
   lastPlayer = nil

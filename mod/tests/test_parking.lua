@@ -110,12 +110,21 @@ clock = clock + 3
 P.update(2, player)
 T.check(#given.parkingSpots.sorted == 40, 'a new anchor: only its spots')
 T.check(#amounts == 2 and amounts[2] == 1, 'restore: one car active first')
+local function nearBans()
+  local n = 0
+  for _, ps in pairs(given.parkingSpots.objects) do
+    if ps.pos.x < P.ACTIVATE_MIN_M and ps.customFields.tags.banned then n = n + 1 end
+  end
+  return n
+end
+T.check(nearBans() == 15, 'restore: the 15 spots within ACTIVATE_MIN_M banned meanwhile: ' .. nearBans())
 P.update(2, player)
 T.check(#amounts == 2, 'restore: the next one waits RESTORE_S')
 for _ = 1, 4 do clock = clock + P.RESTORE_S + 0.01; P.update(2, player) end
 T.check(#amounts == 4 and amounts[3] == 2 and amounts[4] == 3, 'restore: then one at a time up to the amount before: '
   .. table.concat(amounts, ','))
 T.check(scatterCalls == 0, 'restore: no stock scatter of them all at once')
+T.check(nearBans() == 0, 'restore: done, the near spots free again')
 -- teleported again mid-way: the amount from before the first comes back
 P.onTeleport()
 P.onRows(3, '3:0_0', rows(40, 0, -10))
