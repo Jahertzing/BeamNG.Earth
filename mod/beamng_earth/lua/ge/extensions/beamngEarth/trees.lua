@@ -10,7 +10,9 @@ local vienna = require('beamngEarth/vienna_convention_speed_signs')
 local popin = require('beamngEarth/popin')
 
 M.PER_FRAME = 250       -- items made or removed per frame at most
-M.SLOW_TYPE_MS = 100     -- an item type's first making (its shape loaded) this slow: logged with its name
+M.SLOW_TYPE_MS = 30      -- an item type's first making (its shape loaded) this slow: logged with its name
+M.SLOW_ITEM_MS = 30      -- an item's making this slow (a shape variant's first item loads it): logged, once a shape
+                         -- (2026-10-29: a 70 ms tree frame at 35 mph with no type slow enough to name)
 M.ROWS_PER_FRAME = 12000 -- rows of changing tiles looked at per frame at most (Lua time: 30000 averaged 2.5 ms)
 -- 2026-10-14: was { 300, 1 }, { 550, 0.5 }, { 900, 0.25 }, { 1e9, 0.12 }; the engine already draws far trees as
 -- billboards (their LODs), so our extra thinning made far forest sparse. Columbia: 48k -> 78k items, no frame cost seen.
@@ -520,6 +522,7 @@ end
 -- group: a sign's group (vienna_convention_speed_signs.lua) also makes a second item at the same spot and scale, its
 -- body, and takes the collision. Only the first shape is counted in pop (allow's budget): the body is shared by every
 -- sign, spelled in the tile's variant like the rest, so its population is split.
+local slowNamed = {}      -- (shapes named slow already: SLOW_ITEM_MS)
 local function makeItem(fd, t, i, shape, sc, solid, group, variant)
   local d = itemType(shape, vienna.faceSolid(group, solid))
   if not d then M.errors = M.errors + 1; return nil end
@@ -530,8 +533,14 @@ local function makeItem(fd, t, i, shape, sc, solid, group, variant)
   local f, b = t.f, (i - 1) * t.s
   m:setFromEuler(vec3(0, 0, -math.rad(f[b + F_YAW])))
   m:setPosition(vec3(f[b + F_X], f[b + F_Y], f[b + F_Z]))
+  local t0 = M.clock()
   local ok, it = pcall(function() return fd:createNewItem(d, m, sc) end)
   if not ok then M.errors = M.errors + 1; return nil end
+  local ms = t0()
+  if ms >= M.SLOW_ITEM_MS and not slowNamed[shape] then
+    slowNamed[shape] = true
+    log('W', 'beamngEarth.trees', string.format('slow first item %s: %.0f ms', shape, ms))
+  end
   local body = vienna.body(group)
   if body then
     local pair = vienna.addBody(fd, it, spelled(body, variant), m, sc, solid, itemType)

@@ -1860,6 +1860,10 @@ local function perfMachine()
 end
 local function perfFrame(ms, hrec)
   local lines = perflog.frame(ms, st.clock, perfContext, hrec, marks, perfEngine)
+  if hrec then                             -- (the first long LuaGC: where the heap goes, census.lua)
+    local cl = require('beamngEarth/census').afterHitch(hrec.engine)
+    if cl then lines[#lines + 1] = cl end
+  end
   if not net.isConnected() then
     machineSent = false
   elseif not machineSent and st.clock >= (machineTryAt or 0) then
