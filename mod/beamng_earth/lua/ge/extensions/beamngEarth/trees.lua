@@ -431,24 +431,32 @@ end
 
 -- The variant of a group for an item of height h: those within 0.8 .. 1.25 of it (else 0.6 .. 1.6), picked by the
 -- item's rank; else the nearest. Returns shape, scale.
+local PICK_RANGES = { { 0.8, 1.25 }, { 0.6, 1.6 } }      -- near its size first, then wider
 function M.pick(group, h, rank)
   local list = M.CATALOG[group] or M.CATALOG.deciduous
-  local cands = {}
-  for _, range in ipairs({ { 0.8, 1.25 }, { 0.6, 1.6 } }) do      -- near its size first, then wider
-    for _, v in ipairs(list) do
-      if v[2] >= h * range[1] and v[2] <= h * range[2] then cands[#cands + 1] = v end
+  local v = nil
+  -- (counted, then the k-th taken: no candidates' list made for every row, 2026-10-29)
+  for _, range in ipairs(PICK_RANGES) do
+    local lo, hi, n = h * range[1], h * range[2], 0
+    for _, c in ipairs(list) do if c[2] >= lo and c[2] <= hi then n = n + 1 end end
+    if n > 0 then
+      local k = math.floor(rank * 7919) % n + 1
+      for _, c in ipairs(list) do
+        if c[2] >= lo and c[2] <= hi then
+          k = k - 1
+          if k == 0 then v = c; break end
+        end
+      end
+      break
     end
-    if #cands > 0 then break end
   end
-  if #cands == 0 then
-    local best, bd
-    for _, v in ipairs(list) do
-      local d = math.abs(math.log(v[2] / math.max(h, 0.1)))
-      if not bd or d < bd then best, bd = v, d end
+  if not v then
+    local bd
+    for _, c in ipairs(list) do
+      local d = math.abs(math.log(c[2] / math.max(h, 0.1)))
+      if not bd or d < bd then v, bd = c, d end
     end
-    cands = { best }
   end
-  local v = cands[math.floor(rank * 7919) % #cands + 1]
   if M.FIXED_SCALE[group] then return v[1], 1 end
   return v[1], math.max(0.3, math.min(2.5, h / v[2]))
 end
@@ -526,10 +534,12 @@ end
 -- body, and takes the collision. Only the first shape is counted in pop (allow's budget): the body is shared by every
 -- sign, spelled in the tile's variant like the rest, so its population is split.
 local slowNamed = {}      -- (shapes named slow already: SLOW_ITEM_MS)
+local itemMatrix = nil
 local function makeItem(fd, t, i, shape, sc, solid, group, variant)
   local d = itemType(shape, vienna.faceSolid(group, solid))
   if not d then M.errors = M.errors + 1; return nil end
-  local m = MatrixF(true)
+  itemMatrix = itemMatrix or MatrixF(true)       -- (one for every item: createNewItem copies it)
+  local m = itemMatrix
   -- setFromEuler turns clockwise (the engine's headings): a row's yaw (counter-clockwise from +x, the server's) is
   -- given negated. Positive, every prop was mirrored about the x axis: doors on north-south walls backwards, on
   -- diagonal walls askew, benches and lamps turned (read back in-game 2026-10-17: rows at 141.6 rendered at -141.6)
@@ -537,7 +547,7 @@ local function makeItem(fd, t, i, shape, sc, solid, group, variant)
   m:setFromEuler(vec3(0, 0, -math.rad(f[b + F_YAW])))
   m:setPosition(vec3(f[b + F_X], f[b + F_Y], f[b + F_Z]))
   local t0 = M.clock()
-  local ok, it = pcall(function() return fd:createNewItem(d, m, sc) end)
+  local ok, it = pcall(fd.createNewItem, fd, d, m, sc)
   if not ok then M.errors = M.errors + 1; return nil end
   local ms = t0()
   if ms >= M.SLOW_ITEM_MS and not slowNamed[shape] then
@@ -762,6 +772,47 @@ releaseGhosts = function(anchorId, player)
   if not left then ghostSince = nil end
 end
 
+-- The tree frame's helpers and lists live out here, made once: made in each tree frame (the nearest-first list's
+-- entry for every tile, five closures and one more for every tile) the trees were most of the garbage Lua made, 240-256
+-- MB of a 390-470 MB minute (bench8 2026-10-29), and the collector's cycles that it set going ended in 100-157 ms
+-- LuaGC hitches. Now a tile keeps its own distances (od: the order's, oCar: the car's) and one list is sorted again.
+local order = {}                    -- this tree frame's tiles of the anchor, nearest first
+local rowsScanned, nearMade = 0, false
+local function boxDist(p, t)
+  local dx = math.max(math.abs(p.x - t.cx) - 128, 0)
+  local dy = math.max(math.abs(p.y - t.cy) - 128, 0)
+  return math.sqrt(dx * dx + dy * dy)
+end
+local function byDist(a, b) return a.od < b.od end
+-- solid round other players' cars too (collisionfoci.lua: the foci with trees; traffic has none)
+local function nearFocus(t)
+  for _, f in ipairs(foci) do
+    if f.trees and boxDist(f, t) <= M.SOLID_M + (t.near and M.SOLID_HYST_M or 0) then return true end
+  end
+  return false
+end
+local function finish()
+  M.lastRows = rowsScanned                -- (diagnostics)
+  if nearMade then
+    local ok, roads = pcall(require, 'beamngEarth/roads')
+    if ok and roads.requestCollision then roads.requestCollision() end
+  end
+end
+-- a pass over a tile's rows stopped (its frame's time or items, or no Forest yet): the next pass for the same targets
+-- goes on from row i, or from the first row it left for another frame (skipped: its shapes were full), not from
+-- the tile's first row (a dense tile's 6000 rows looked at again in every frame of its pass)
+local function stop(t, i, skipped, want, band, near)
+  t.pending = true
+  t.scan = { from = math.min(i, skipped or i), want = want, band = band, near = near }
+  finish()
+end
+-- The tile's Forest data, made when it first needs an item (fd: what the pass has already, or nil).
+local function tileData(t, fd)
+  if fd then return fd end
+  local fo = forest(t)
+  return fo and fo:getData()
+end
+
 -- Every frame: tiles of other anchors and dropped ones emptied, the others filled / thinned to their
 -- distance's rank, M.PER_FRAME items at most.
 -- Tree work every EVERY_N-th frame, N times the items: a frame with any Forest change costs the engine's tick a few
@@ -782,7 +833,8 @@ function M.update(anchorId, player, view, frameMs)
   local limit, elapsed = frameMs or M.FRAME_MS, M.clock()
   newForests = 0
   M.lastShapeItems = touchedItems        -- the previous frame's (diagnostics)
-  touched, touchedItems, touchedCars = {}, 0, 0
+  for k in pairs(touched) do touched[k] = nil end
+  touchedItems, touchedCars = 0, 0
   releaseGhosts(anchorId, player)
   for key, t in pairs(tiles) do
     if (t.anchor ~= anchorId and not t.ghost) or t.drop then
@@ -805,57 +857,26 @@ function M.update(anchorId, player, view, frameMs)
     end
   end
   if not player then return end
-  -- nearest tiles first (to the camera when it is away: view); [3] the distance to the car (the colliding items)
-  local order = {}
-  local function boxDist(p, t)
-    local dx = math.max(math.abs(p.x - t.cx) - 128, 0)
-    local dy = math.max(math.abs(p.y - t.cy) - 128, 0)
-    return math.sqrt(dx * dx + dy * dy)
-  end
-  for key, t in pairs(tiles) do
-    if t.anchor ~= anchorId or t.drop then goto continue end     -- still being emptied
-    local dCar = boxDist(player, t)
-    order[#order + 1] = { key, view and math.min(boxDist(view, t), dCar) or dCar, dCar }
-    ::continue::
-  end
-  table.sort(order, function(a, b) return a[2] < b[2] end)
-  local nearMade = false
-  local rowsScanned = 0
-  -- solid round other players' cars too (collisionfoci.lua: the foci with trees; traffic has none)
-  local function nearFocus(t)
-    for _, f in ipairs(foci) do
-      if f.trees and boxDist(f, t) <= M.SOLID_M + (t.near and M.SOLID_HYST_M or 0) then return true end
-    end
-    return false
-  end
-  local function finish()
-    M.lastRows = rowsScanned                -- (diagnostics)
-    if nearMade then
-      local ok, roads = pcall(require, 'beamngEarth/roads')
-      if ok and roads.requestCollision then roads.requestCollision() end
+  -- nearest tiles first (to the camera when it is away: view); oCar: the distance to the car (the colliding items)
+  local no = 0
+  for _, t in pairs(tiles) do
+    if t.anchor == anchorId and not t.drop then                -- (the others are still being emptied)
+      local dCar = boxDist(player, t)
+      t.od, t.oCar = view and math.min(boxDist(view, t), dCar) or dCar, dCar
+      no = no + 1
+      order[no] = t
     end
   end
-  -- a pass over a tile's rows stopped (its frame's time or items, or no Forest yet): the next pass for the same targets
-  -- goes on from row i, or from the first row it left for another frame (skipped: its shapes were full), not from
-  -- the tile's first row (a dense tile's 6000 rows looked at again in every frame of its pass)
-  local function stop(t, i, skipped, want, band, near)
-    t.pending = true
-    t.scan = { from = math.min(i, skipped or i), want = want, band = band, near = near }
-    finish()
-  end
-  for _, o in ipairs(order) do
-    local t = tiles[o[1]]
-    local fd = nil                          -- the tile's Forest data, made when it first needs an item
-    local function data()
-      if not fd then
-        local fo = forest(t)
-        fd = fo and fo:getData()
-      end
-      return fd
-    end
-    local want = tileThreshold(o[2], t)
-    local band = groupBand(t, o[2])
-    local near = o[3] <= M.SOLID_M or (t.near and o[3] <= M.SOLID_M + M.SOLID_HYST_M) or nearFocus(t) or false
+  for i = #order, no + 1, -1 do order[i] = nil end
+  table.sort(order, byDist)
+  nearMade, rowsScanned = false, 0
+  for oi = 1, no do
+    local t = order[oi]
+    local od, oCar = t.od, t.oCar
+    local fd = nil                          -- the tile's Forest data, made when it first needs an item (tileData)
+    local want = tileThreshold(od, t)
+    local band = groupBand(t, od)
+    local near = oCar <= M.SOLID_M or (t.near and oCar <= M.SOLID_M + M.SOLID_HYST_M) or nearFocus(t) or false
     if want ~= t.shown or band ~= t.band or near ~= t.near or t.pending then
       if rowsScanned > M.ROWS_PER_FRAME then finish(); return end      -- (its pass in a later frame: pending kept)
       t.pending = false
@@ -873,7 +894,7 @@ function M.update(anchorId, player, view, frameMs)
         local r = f[b + F_RANK]
         local g = names[f[b + F_GROUP] + 1]
         local cap = g and M.GROUP_MAX_M[g]
-        if cap and o[2] > cap then r = 2 end     -- this group is not shown this far out
+        if cap and od > cap then r = 2 end     -- this group is not shown this far out
         if g and M.groupOff[g] then r = 2 end    -- a group the player turned off (setGroupEnabled)
         -- a group this mod has no shapes for (a newer server's): left out, not drawn as a tree
         if g and not M.CATALOG[g] then
@@ -887,7 +908,8 @@ function M.update(anchorId, player, view, frameMs)
           local sh, sc = shapeOf(t, i)
           if budget <= 0 then stop(t, i, skipped, want, band, near); return end
           if allow(sh) then
-            local d = data()
+            fd = tileData(t, fd)
+            local d = fd
             if not d then stop(t, i, skipped, want, band, near); return end      -- (a new Forest: next frame)
             if t.made[i] then removeItem(d, t.made[i], t.madeShape[i]); budget = budget - 1  -- solid <-> not
             else popin.notePoint(g, f[b + F_X], f[b + F_Y]) end                                -- (new: popin.lua)
@@ -901,7 +923,8 @@ function M.update(anchorId, player, view, frameMs)
         elseif r >= want and t.made[i] then
           if budget <= 0 then stop(t, i, skipped, want, band, near); return end
           if allow(t.madeShape[i] or '') then
-            local d = data()
+            fd = tileData(t, fd)
+            local d = fd
             if not d then stop(t, i, skipped, want, band, near); return end
             removeItem(d, t.made[i], t.madeShape[i])
             t.made[i], t.solid[i], t.madeShape[i] = nil, nil, nil
@@ -932,11 +955,13 @@ function M.clear()
     releaseForest(t)
   end
   tiles, frameN = {}, 0
+  for i = #order, 1, -1 do order[i] = nil end
 end
 
 -- Level end: the level deletes its objects itself.
 function M.reset()
   tiles, types, ready, pool, forestCount, pop = {}, {}, false, {}, 0, {}
+  for i = #order, 1, -1 do order[i] = nil end
 end
 
 function M.status()

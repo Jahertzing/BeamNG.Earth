@@ -150,6 +150,24 @@ do
   gameplay_traffic = nil
 end
 
+-- a real car's ghost on an edge a new graph lacks: kept (its car places it again), and nothing dies on it
+P.reset()
+P.setGraph(g)
+P.state.ghosts = { { id = 1, from = 'j', link = P.edge(P.state.adj, 'j', 'n'), s = 50, v = 10, lane = 1, real = 77 },
+                   at(2, 500) }
+P.state.ghosts[2].pace = 1
+local g3 = { nodes = { w = g.nodes.w, m1 = g.nodes.m1, j = g.nodes.j, m2 = g.nodes.m2, e = g.nodes.e },
+             edges = { g.edges[1], g.edges[2], g.edges[3], g.edges[4] } }
+P.setGraph(g3)
+T.check(#P.state.ghosts == 2, 'setGraph: the ghost of a real car kept although its edge is gone')
+T.check(P.pose(g3.nodes, 'j', P.state.ghosts[1].link, 50, 1, false) == nil, 'pose: a node not in the graph: nil')
+local okC, wantC = pcall(P.chooseReal, P.state.ghosts, g3.nodes, 2, -1500, 0, nil, false)
+T.check(okC and not wantC[P.state.ghosts[1]], 'chooseReal: the stale ghost skipped, no error')
+local okS, errS = pcall(P.step, 0.25, -1500, 0)
+T.check(okS, 'step: no error on the stale ghost: ' .. tostring(errS))
+P.rebalance(-1500, 0)
+T.check(true, 'rebalance: no error')
+
 -- the game side with a stubbed game: a player driving east at 30 m/s, 4 traffic cars; they end up on the nearest
 -- ghosts, are placed and pushed, and the stock recycling stays off
 do

@@ -209,6 +209,8 @@ function M.frame(ms, now, ctx, hitch, mod, engine)
     if c.reloads and reloadsAt then line = line .. string.format(', %d collision rebuilds', c.reloads - reloadsAt) end
     local okP, pop = pcall(c.popin or function() return '' end)
     if okP and type(pop) == 'string' and pop ~= '' then line = line .. ' | popped in within 300 m: ' .. pop end
+    local okG, gcs = pcall(c.gc or function() return '' end)
+    if okG and type(gcs) == 'string' and gcs ~= '' then line = line .. ' | ' .. gcs end
     reloadsAt = c.reloads
     out[#out + 1] = line
     frames, sumMin, hitchesMin, worstMin, summaryAt = {}, 0, 0, nil, now

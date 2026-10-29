@@ -95,6 +95,16 @@ T.check(N.modeAmount('busy', nil) == -1, 'modeAmount: the game\'s amount unknown
 T.check(N.cpuFloor(12) == 10 and N.cpuFloor(4) == 2 and N.cpuFloor(64) == N.CPU_FLOOR_MAX and N.cpuFloor(nil) == 0,
   'cpuFloor: the cores less CPU_SPARE, at most CPU_FLOOR_MAX')
 T.check(N.modeAmount('busy', math.max(7, N.cpuFloor(12))) == 15, 'busy on a 12-core CPU: 15')
+-- what startTraffic sets up (tools set traffic up with it: bench8 ran the game's 7, not the mod's 10)
+do
+  local gt0, eng0 = gameplay_traffic, Engine
+  gameplay_traffic = { getIdealSpawnAmount = function() return 7 end }
+  Engine = { Platform = { getCPUInfo = function() return { coresPhysical = 12 } end } }
+  local n, own = N.plannedAmount('normal')
+  T.check(n == 10 and own == 10, 'plannedAmount: normal on a 12-core CPU: 10 (the game picks 7): ' .. tostring(n))
+  T.check(N.plannedAmount('busy') == 15 and N.plannedAmount('off') == 0, 'plannedAmount: busy 15, off 0')
+  gameplay_traffic, Engine = gt0, eng0
+end
 T.check(not N.takeChoice(nil).parked, 'no freeroam: off (the radial menu still works)')
 settings = { getValue = function(k) if k == 'trafficParkedVehicles' then return false end end }
 T.check(not N.takeChoice({ trafficMode = 'enabled', trafficParked = 'enabled' }).parked,
@@ -209,6 +219,9 @@ do
   cutSet.d = nil
   T.check(N.cutAhead(g, cutSet, 'a', 'b', 10, 0, 1, 0, 300) == false, 'cutAhead: a junction whose cross street was cut: not')
   T.check(N.cutAhead(g, cutSet, 't', 'u', -40, 50, 0, 1, 300) == false, 'cutAhead: a real dead end (no cut): left to the AI')
+  -- a one-way road that ends (the server graph's edge, not the clip's): a cut too
+  g.f = nd(400, 0) g.e.links.f = { oneWay = true, inNode = 'e', outNode = 'f' } g.f.links.e = g.e.links.f
+  T.check(N.cutAhead(g, cutSet, 'd', 'e', 250, 0, 1, 0, 300) == true, 'cutAhead: a motorway that just ends: a cut')
   T.check(N.cutAhead(g, cutSet, 'x', 'y', 0, 0, 1, 0, 300) == nil, 'cutAhead: not on this graph: nil (the cone decides)')
   local adj = N.adjacency(g)
   g.b.links = { a = g.b.links.a }       -- (map.reset's convertToSingleSided gives each node a new links table)

@@ -14,6 +14,7 @@ lon, [mapcells.CellKey]), the latest list replacing the earlier one.
 """
 import logging
 import os
+import sys
 import queue
 import threading
 import time
@@ -135,10 +136,39 @@ def load_airports(cache_dir, dem):
 
 
 def _rss_mb():
+    """This process's resident size (MB): psutil where installed, else Windows' GetProcessMemoryInfo, else /proc
+    (it read 0 on Windows, 2026-10-29); 0.0 when none can tell."""
+    try:
+        import psutil
+        return psutil.Process().memory_info().rss / 1e6
+    except Exception:
+        pass
+    if sys.platform == "win32":
+        try:
+            import ctypes
+            from ctypes import wintypes
+
+            class PMC(ctypes.Structure):
+                _fields_ = [("cb", wintypes.DWORD), ("PageFaultCount", wintypes.DWORD),
+                            ("PeakWorkingSetSize", ctypes.c_size_t), ("WorkingSetSize", ctypes.c_size_t),
+                            ("QuotaPeakPagedPoolUsage", ctypes.c_size_t), ("QuotaPagedPoolUsage", ctypes.c_size_t),
+                            ("QuotaPeakNonPagedPoolUsage", ctypes.c_size_t),
+                            ("QuotaNonPagedPoolUsage", ctypes.c_size_t), ("PagefileUsage", ctypes.c_size_t),
+                            ("PeakPagefileUsage", ctypes.c_size_t)]
+            pmc = PMC()
+            pmc.cb = ctypes.sizeof(PMC)
+            k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+            psapi = ctypes.WinDLL("psapi", use_last_error=True)
+            k32.GetCurrentProcess.restype = wintypes.HANDLE
+            if psapi.GetProcessMemoryInfo(k32.GetCurrentProcess(), ctypes.byref(pmc), pmc.cb):
+                return pmc.WorkingSetSize / 1e6
+        except Exception:
+            pass
+        return 0.0
     try:
         with open("/proc/self/statm") as f:
             return int(f.read().split()[1]) * os.sysconf("SC_PAGE_SIZE") / 1e6
-    except (OSError, ValueError):
+    except (OSError, ValueError, AttributeError):
         return 0.0
 
 
@@ -762,7 +792,7 @@ def grass_cards_tile(aid, lat, lon, zoom, tx, ty, out_dir, vfs_dir, tex=None):
                             lambda la, lo: ground(frame, la, lo, _s.dem.sample(la, lo, zoom)), photo)
     if mesh is None:
         return grasscards.empty_tile(out_dir, vfs_dir, aid, tx, ty)
-    return grasscards.write_tile(mesh, out_dir, vfs_dir, aid, tx, ty, x0, y0)
+    return grasscards.write_tile(mesh, out_dir, vfs_dir, aid, tx, ty, x0, y0, size)
 
 
 def skyline_tile(aid, lat, lon, zoom, ux, uy, out_dir, vfs_dir, lamp_region=None):

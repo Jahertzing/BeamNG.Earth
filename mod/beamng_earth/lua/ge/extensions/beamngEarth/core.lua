@@ -167,6 +167,7 @@ local cacheClears = 0         -- answers to a clear so far (the settings page wa
 local function resetState()
   loadprogress.reset()
   perflog.reset()           -- (st.clock starts again at 0: its marks are of the old clock)
+  require('beamngEarth/gcwatch').reset()
   st = {
     inOurLevel = false,
     active = false,          -- world logic running (rebase, far field, sky, pose)
@@ -1056,6 +1057,11 @@ local function onMessage(msg)
     roads.onFarTile(msg, st.anchorId, 'G')
   elseif t == 'grfar_drop' then
     roads.onFarDrop(msg, 'G')
+  elseif t == 'grsub_tile' then
+    -- ... a near one's 64 m squares again, each hidden near the car on its own (roads.lua grassUpdate)
+    roads.onGrassSubs(msg, st.anchorId)
+  elseif t == 'grsub_drop' then
+    roads.onGrassSubsDrop(msg)
   elseif t == 'where_result' then
     statusbar.onResult(msg)
   elseif t == 'place_previews_ready' then      -- the level select's place pictures are there (levelinfo.lua)
@@ -1762,6 +1768,8 @@ local marks, prevMarks = {}, {}
 local hitches = {}
 local function mark(name, t0)
   local t = hitchClock()
+  local gw = package.loaded['beamngEarth/gcwatch']           -- (what the part allocated: gcwatch.lua)
+  if gw then gw.mark(name) end
   marks[name] = (marks[name] or 0) + (t - t0)
   return t
 end
@@ -1841,6 +1849,7 @@ local function perfContext()
   local okC, nr = pcall(roads.reloads)
   if okC then c.reloads = nr end
   c.popin = require('beamngEarth/popin').take     -- (the minute line only: it starts the counts again)
+  c.gc = require('beamngEarth/gcwatch').take        -- (the same)
   return c
 end
 local machineSent = false       -- the machine's lines sent to this server connection
@@ -1922,6 +1931,7 @@ local function onUpdate(dtReal, dtSim)
   prevMarks, marks = marks, prevMarks
   for k in pairs(marks) do marks[k] = nil end
   local t = hitchClock()
+  require('beamngEarth/gcwatch').begin()
   postfx.update(st.inOurLevel)
   do
     local look = { haze = require('beamngEarth/haze'), grade = require('beamngEarth/grade') }

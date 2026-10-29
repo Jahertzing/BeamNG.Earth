@@ -6,7 +6,7 @@ dofile(dir .. '/stubs.lua')
 local clock = 0
 os.clockhp = function() return clock end
 tableSizeC = function(t) local n = 0 while t[n] ~= nil do n = n + 1 end return n end
-parseColor = function(c) return c end
+parseColor = function() return 0xffffffff end    -- (the global one: a packed number, never used)
 ColorF = function(r, g, b, a) return { r, g, b, a } end
 
 local hl = require('beamngEarth/headlights')
@@ -29,7 +29,7 @@ local function car(id)
   }
   local vdata = { props = {
     [0] = { mesh = 'SPOTLIGHT', func = 'lowbeam', pid = 7, lightBrightness = 4, lightRange = 60, lightInnerAngle = 10,
-            lightOuterAngle = 30, lightColor = 'warm' },
+            lightOuterAngle = 30, lightColor = { r = 255, g = 204, b = 153, a = 255 } },
     [1] = { mesh = 'SPOTLIGHT', func = 'brakelight', pid = 8, lightBrightness = 1, lightRange = 5 },
     [2] = { mesh = 'SPOTLIGHT', func = 'highbeam', pid = 9, lightBrightness = 8, lightRange = 120 },
   } }
@@ -44,7 +44,9 @@ hl.reset()
 hl.setMode('bright')
 hl.update()
 T.check(lights[7].args[3] == 8 and lights[7].args[4] == 90, 'bright: the low beam twice as bright, half again as far')
-T.check(lights[7].args[1] == 10 and lights[7].args[2] == 30 and lights[7].args[5] == 'warm', '... its own cone and colour')
+local col = lights[7].args[5]
+T.check(lights[7].args[1] == 10 and lights[7].args[2] == 30 and type(col) == 'table' and col[1] == 1
+  and math.abs(col[2] - 0.8) < 1e-6 and col[4] == 1, '... its own cone and colour, a ColorF')
 T.check(lights[9].args[3] == 16 and lights[9].args[4] == 180, '... the high beam too')
 T.check(lights[8] == nil, 'the brake light untouched')
 T.check(#cmds == 1 and cmds[1]:find('k=2.0000', 1, true), 'the vehicle side told: ' .. tostring(cmds[1]))
@@ -77,6 +79,9 @@ clock = 20
 hl.update()
 T.check(lights[7] and lights[7].args[3] == 8, 'a respawned car: scaled again')
 
+local hx = hl.colorOf('#ff800040')
+T.check(hx[1] == 1 and math.abs(hx[2] - 128 / 255) < 1e-6 and math.abs(hx[4] - 64 / 255) < 1e-6, 'colorOf: #rrggbbaa')
+T.check(hl.colorOf(nil)[4] == 0, 'colorOf: none, black')
 hl.setMode('nonsense')
 T.check(hl.mode == 'bright', 'an unknown mode: bright')
 

@@ -45,12 +45,12 @@ LARGE_WALL_CELLS = 96       # cells of building walls for the street widths (roa
 # The BAKE profile (BNGE_BUDGET=bake: tools/headless_bake.py's servers): the desktop sizes, with the per-process caches
 # clamped. A bake runs several servers at once, each with its workers, and every process grew to ~1.6 GB over an hour,
 # mostly these caches (a 9-process server 14 GB; four of them paged a 64 GB PC, 2026-10-28). What falls out of a
-# smaller cache is read again from the decoded mirrors on disk: cheap beside a tile's build. Nothing a bake keeps
-# depends on a cache size.
+# smaller DEM or photo cache is read again from the decoded mirrors on disk, cheap beside a tile's build; the map
+# data layers and the building walls keep the large machine's sizes, since at the desktop's every road tile in
+# downtown Denver decoded its cells again (~0.25 s of a 0.54 s tile: the profile of 2026-10-29 00:00, 4.7 of 12 s in
+# layer_arrays). Nothing a bake keeps depends on a cache size.
 BAKE_DEM_TILES = 128        # decoded DEM tiles (dem.MEM_TILES, 512: 1 MB each)
-BAKE_MAPDATA_MB = 192       # decoded map data layers (mapdata.MEM_MB; 768 on a large machine)
 BAKE_IMAGERY_TILES = 128    # decoded photo tiles (imagery.MEM_TILES, 512)
-BAKE_WALL_CELLS = 48        # roadwidth.WALL_CELLS (96 on a large machine)
 
 
 def total_gb():
@@ -118,9 +118,11 @@ def apply(is_small=None):
         import mapdata
         import roadwidth
         dem.MEM_TILES = min(dem.MEM_TILES, BAKE_DEM_TILES)
-        mapdata.MEM_MB = min(mapdata.MEM_MB, BAKE_MAPDATA_MB)
         imagery.MEM_TILES = min(imagery.MEM_TILES, BAKE_IMAGERY_TILES)
-        roadwidth.WALL_CELLS = min(roadwidth.WALL_CELLS, BAKE_WALL_CELLS)
+        gb = total_gb()
+        if gb is not None and gb >= LARGE_GB:         # (the large machine's map data and walls: the road tiles' pace)
+            mapdata.MEM_MB = max(mapdata.MEM_MB, LARGE_MAPDATA_MB)
+            roadwidth.WALL_CELLS = max(roadwidth.WALL_CELLS, LARGE_WALL_CELLS)
     return is_small
 
 
