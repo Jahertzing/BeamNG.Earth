@@ -400,10 +400,47 @@ class ToolTest(unittest.TestCase):
             self.assertNotIn("--build-ahead", hb.server_command(user, 0, "/c", win=True))
         a = types.SimpleNamespace(speed=30, roads_q=1, backlog_q=1, edge_m=1, max_wait=1, ground_wait=1, ahead="off",
                                   cache_dir=None, world_dir=None, user_dir=None, rebase_m=None, profile=False, near=None,
-                                  no_record_deps=False, power=None, fly=200)
+                                  no_record_deps=False, power=None, fly=200, cold=False, keep_cold=False)
         cmd = hb.child_command(a, [("i25", False, None)], "/out", "alone", 2, 2)
         self.assertEqual(cmd[cmd.index("--ahead") + 1], "off")
+        self.assertNotIn("--cold", cmd)
 
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ColdRunTest(unittest.TestCase):
+    """headless_bake --cold: the server's revisit cache in a throwaway subdir, an empty pins folder, removed after."""
+
+    def test_cold_env_and_cleanup(self):
+        sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "tools"))
+        import headless_bake as hb
+        with tempfile.TemporaryDirectory() as tmp:
+            env, sub = hb.cold_env(os.path.join(tmp, "cache"), os.path.join(tmp, "out"), stamp="x")
+            self.assertEqual(env["BNE_REVISIT_SUBDIR"], "revisit-cold-x")
+            self.assertEqual(sub, os.path.join(tmp, "cache", "revisit-cold-x"))
+            self.assertTrue(os.path.isdir(env["BNE_REVISIT_PIN_DIR"]), "the empty baked-route folder exists")
+            os.makedirs(os.path.join(sub, "roads"))
+            said = []
+            hb.cold_done(sub, keep=True, say=lambda *a, **k: said.append(a))
+            self.assertTrue(os.path.isdir(sub))
+            hb.cold_done(sub, keep=False, say=lambda *a, **k: said.append(a))
+            self.assertFalse(os.path.exists(sub))
+        a = types.SimpleNamespace(speed=30, roads_q=1, backlog_q=1, edge_m=1, max_wait=1, ground_wait=1, ahead="on",
+                                  cache_dir=None, world_dir=None, user_dir=None, rebase_m=None, profile=False, near=None,
+                                  no_record_deps=False, power=None, fly=200, cold=True, keep_cold=False)
+        cmd = hb.child_command(a, [("i25", False, None)], "/out", "alone", 2, 2)
+        self.assertIn("--cold", cmd)
+        self.assertNotIn("--keep-cold", cmd)
+
+    def test_revisit_reads_the_switches(self):
+        import importlib
+        import revisit
+        with mock.patch.dict(os.environ, {"BNE_REVISIT_SUBDIR": "revisit-cold-t", "BNE_REVISIT_PIN_DIR": "/p"}):
+            importlib.reload(revisit)
+            self.assertEqual(revisit.SUBDIR, "revisit-cold-t")
+            self.assertEqual(revisit.PIN_DIR, "/p")
+            self.assertEqual(revisit.pin_dir("/c"), "/p")
+        importlib.reload(revisit)
+        self.assertEqual(revisit.SUBDIR, "revisit")

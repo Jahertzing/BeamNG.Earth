@@ -39,11 +39,12 @@ import cache
 ON = os.environ.get("BNE_REVISIT", "on") != "off"
 SKIP = {k for k in os.environ.get("BNE_REVISIT_SKIP", "").split(",") if k}     # kinds left out (tests: "roads,far")
 MAX_MB = float(os.environ.get("BNE_REVISIT_MB", "2000"))      # the cache's size, cut back at start (earthd)
-SUBDIR = "revisit"
+SUBDIR = os.environ.get("BNE_REVISIT_SUBDIR") or "revisit"    # (another: a build-cold benchmark, headless_bake --cold)
 PIN_SUBDIR = "bake"         # a baked route's items: never cut back (route_bake.py removes the stale ones)
 ANCHORS = "anchors.json"    # in PIN_SUBDIR: {"anchors": [[lat, lon], ...]} the baked route's anchors
 CACHE_DIR = None            # the server's cache folder (blockworker._State, earthd.Server): stores without one at hand
-PIN_DIR = None              # the baked route's folder; None: pin_dir's (the world folder's PIN_SUBDIR, else the cache's)
+PIN_DIR = os.environ.get("BNE_REVISIT_PIN_DIR") or None     # the baked route's folder; None: pin_dir's (the world
+                                                            # folder's PIN_SUBDIR, else the cache's)
 GENS = os.environ.get("BNE_REVISIT_GENS", "on")     # on: older baked generations as a fallback; bake: marks (the
                                                     # bake's server, which builds anew); off: neither
 GENS_SUBDIR = "gens"        # in PIN_SUBDIR: <code>/<lat>_<lon> an anchor that code baked, <code>/started its first mark
