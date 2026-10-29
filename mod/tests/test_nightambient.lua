@@ -55,6 +55,39 @@ T.check(sky:getField('nightColor') == na.colorFor(na.RURAL, na.URBAN, 0, 2), 'br
 na.setMode('nonsense')
 T.check(na.mode == 'normal', 'an unknown mode: normal')
 
+-- the sky's light over the camera and the night exposure: on at night, off by day, the stock values back
+local b0 = na.skyFillFor(0, 1)
+local b1, c1 = na.skyFillFor(1, 1)
+T.check(b1 > b0 and c1:match('^1%.000 ') ~= nil, 'skyFillFor: brighter and warm in the city')
+local le = S.newObject('PostEffectLocalExposure'); le:registerObject('PostEffectLocalExposureObject')
+le:setField('highlightProtectStrength', 0, '0.75'); le:setField('darkPixelMaxLogLuminance', 0, '-4')
+le:setField('darkPixelMinLogLuminance', 0, '-14'); le.exposureBiasEV = 0.5
+settings = { getValue = function(k, d) if k == 'GraphicEVCompensation' then return 0.5 end return d end }
+na.setMode('normal')
+local function fills() local n = 0 for _, o in ipairs(S.liveOf('PointLight')) do
+  if o.fields.isEnabled == 'true' then n = n + 1 end end return n end
+clock = clock + 3
+na.update(anchor, 1, true)
+T.check(fills() == 1, 'night: the sky light on: ' .. fills())
+local sl = S.liveOf('PointLight')[1]
+T.check(sl.pos.z == camAt.z + na.SKYFILL.height, '... over the camera')
+T.check(le:getField('highlightProtectStrength') == tostring(na.NIGHT_EXPOSURE.highlightProtectStrength)
+  and math.abs(le.exposureBiasEV - (0.5 + na.NIGHT_BIAS_EV)) < 1e-9, 'night exposure on, over the player\'s bias')
+camAt = vec3(10, 0, 1700)
+na.update(anchor, 1, true)
+T.check(sl.pos.z == 1700 + na.SKYFILL.height and sl.pos.x == 10, 'every frame: it follows the camera')
+clock = clock + 3
+na.update(anchor, 1, false)
+T.check(fills() == 0, 'day: the sky light off')
+T.check(le:getField('highlightProtectStrength') == '0.75' and le:getField('darkPixelMaxLogLuminance') == '-4'
+  and le.exposureBiasEV == 0.5, 'day: the stock exposure back')
+clock = clock + 3
+na.update(anchor, 1, true)
+na.reset()
+T.check(fills() == 0 and #S.liveOf('PointLight') == 0, 'reset: the sky light gone')
+T.check(le:getField('highlightProtectStrength') == '0.75' and le.exposureBiasEV == 0.5, 'reset: the stock exposure back')
+camAt = vec3(0, 0, 1600)
+
 -- the lamps' fill: under the nearest street lamps (with an arm), toward the road
 local nl = require('beamngEarth/nightlights')
 nl.FILL.max = 2
@@ -71,7 +104,9 @@ na.setMode('normal')
 clock = 20
 local function pointLights()
   local n = 0
-  for _, o in ipairs(S.liveOf('PointLight')) do if o.fields.isEnabled == 'true' then n = n + 1 end end
+  for _, o in ipairs(S.liveOf('PointLight')) do      -- (the lamps' and shops': not the sky light)
+    if o.fields.isEnabled == 'true' and o.fields.radius ~= tostring(na.SKYFILL.radius) then n = n + 1 end
+  end
   return n
 end
 for _ = 1, 3 do clock = clock + 2; nl.update(anchor, 1) end
@@ -100,4 +135,13 @@ local spot = S.liveOf('SpotLight')[1]
 T.check(spot.fields.range == '50', 'applyLook: the lights take the new look')
 nl.reset()
 T.check(#S.liveOf('SpotLight') == 0 and #S.liveOf('PointLight') == 0, 'reset: all gone')
+-- the road lines' night glow: a stock material, its own values back by day and when the level ends
+local lw = S.newObject('Material'); lw:registerObject('line_white')
+lw:setField('emissiveFactor', 0, '0.1 0.1 0.1'); lw:setField('emissiveIntensityNits', 0, '7')
+core_environment = { getLightState = function() return { isNight = true } end }
+clock = clock + 5; nl.update(anchor, 1)
+T.check(lw:getField('emissiveFactor') == nl.MATERIALS.line_white[1], 'night: the lines glow')
+nl.reset()
+T.check(lw:getField('emissiveFactor') == '0.1 0.1 0.1' and lw:getField('emissiveIntensityNits') == '7',
+  'the level ends: the stock line material as it was')
 T.done('test_nightambient')

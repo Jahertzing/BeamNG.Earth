@@ -133,6 +133,21 @@ local tintUsed = {}         -- stock material name -> { name = the material the 
 local tintPending = false   -- the objects are to be made again on new copies at the next block change
 local stockJson = {}        -- source -> its materials file decoded (the copies' fields)
 
+-- Bare stretches at speed (the user, 2026-10-29: the grass "still pops in a lot weirdly"; his drive at 110-180 mph,
+-- tools/gcpatch / gcpatchwin on, the physics block 0.7-1.7 s late). GroundCover makes a cell once, when it comes
+-- within the radius, from the block's layer map at that moment, and with the patch a block move no longer frees the
+-- cells (that is the patch's point). A cell made past the block's edge (the block not there yet) is empty, and stays
+-- empty while the player drives through it; everything comes back at the next teleport or rebase (a rebuild): bare
+-- patches ahead, then grass popping in all at once. So at a block change, when the grass's square around the player
+-- reached past the old block (by more than STALE_MARGIN_M), the objects are made again on the new block and
+-- generated that frame: the stock engine's own regrow (one slower frame) only when cells can be stale; on time, the
+-- patch keeps everything.
+M.STALE_MARGIN_M = 4
+local blockBox = nil      -- the block's { x0, y0, x1, y1 } (noteBlock)
+local maxRadius = 0       -- the largest radius of the objects made (ensure)
+local remake = false      -- the objects are to be made again at the next block change (stale cells)
+local nStale = 0          -- block changes that remade them (status)
+
 local created = {}        -- object names we made
 local layered = false     -- a block with surface layers was loaded this level (objects can exist)
 local defsCache = {}      -- source -> stock definitions by name (read once per level)
@@ -224,6 +239,7 @@ function M.ensure()
   layered = true
   if not M.enabled or #created > 0 then return #created > 0 end
   if not scenetree.MissionGroup then return false end
+  maxRadius = 0
   local ok, err = pcall(function()
     local defs = defsCache
     for _, d in ipairs(M.DEFS) do
@@ -248,6 +264,7 @@ function M.ensure()
         do
           local gc = createObject('GroundCover')
           local fields, factor = M.reachFor(d, M.reach)
+          maxRadius = math.max(maxRadius, tonumber(fields.radius) or tonumber(def.radius) or 0)
           for _, c in ipairs(M.fieldsFor(def, d.layer, d.share * M.density * factor)) do gc:setField(c[1], c[2], c[3]) end
           for k, v in pairs(fields) do gc:setField(k, 0, tostring(v)) end
           if mat then gc:setField('material', 0, mat) end     -- (a tinted copy of the stock one)
@@ -413,10 +430,32 @@ end
 
 -- The physics block was just imported or moved (core, same tick): regenerate all the grass before
 -- this frame is drawn. Returns true if it asked for that.
+-- Pure: does the square of half-side r around p reach past box { x0, y0, x1, y1 } by more than margin?
+function M.reachedPast(box, p, r, margin)
+  if not box or type(p) ~= 'table' or not p.x or not r or r <= 0 then return false end
+  local m = margin or 0
+  return p.x - r < box[1] - m or p.x + r > box[3] + m or p.y - r < box[2] - m or p.y + r > box[4] + m
+end
+
+-- The block is about to change to box { x0, y0, x1, y1 } (core, before afterBlockChange); player: the player's
+-- position (default: the player vehicle's). Returns true when the grass will be made again (stale cells).
+function M.noteBlock(x0, y0, x1, y1, player)
+  if player == nil and getPlayerVehicle then
+    local v = getPlayerVehicle(0)
+    local pos = v and v:getPosition()
+    if pos then player = { x = pos.x, y = pos.y } end
+  end
+  local stale = #created > 0 and M.reachedPast(blockBox, player, maxRadius, M.STALE_MARGIN_M)
+  blockBox = { x0, y0, x1, y1 }
+  if stale then remake = true end
+  return stale
+end
+
 function M.afterBlockChange()
   if #created == 0 or not flushGroundCoverGrids then return false end
-  if tintPending then           -- (the colour moved: the objects on the new copies, generated this frame too)
-    tintPending = false
+  if tintPending or remake then   -- (the colour moved, or cells made off the old block: made again, generated now)
+    if remake then nStale = nStale + 1 end
+    tintPending, remake = false, false
     removeAll()
     M.ensure()
   end
@@ -461,6 +500,7 @@ end
 -- the same game session found no m_grass_* / wca_groundcover and drew no grass, 2026-10-19).
 function M.reset()
   created = {}
+  blockBox, maxRadius, remake, nStale = nil, 0, false, 0
   tintUsed = {}
   tintPending = false
   stockJson = {}
@@ -473,7 +513,8 @@ end
 -- (their cells then start from nothing whatever the engine kept) and generate them this frame.
 function M.rebuild()
   if #created == 0 then return false end
-  tintPending = false
+  tintPending, remake = false, false
+  blockBox = nil                -- (a teleport or rebase: the old block's box is in another frame)
   removeAll()
   M.ensure()
   return M.afterBlockChange()
@@ -484,7 +525,7 @@ function M.status()
   for _, u in pairs(tintUsed) do mats[#mats + 1] = u.name end
   table.sort(mats)
   return { enabled = M.enabled, density = M.density, reach = M.reach, objects = #created, materialsLoaded = next(loadedMaterials) ~= nil,
-    error = lastError, tint = M.TINT and tintRgb or nil, tintMaterials = mats }
+    error = lastError, tint = M.TINT and tintRgb or nil, tintMaterials = mats, radius = maxRadius, staleRemakes = nStale }
 end
 
 return M

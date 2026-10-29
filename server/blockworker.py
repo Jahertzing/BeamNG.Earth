@@ -840,7 +840,8 @@ def far_geometry(aid, lat, lon, tile, zoom, q, ref_zoom, with_sink, layout):
     most of a far tile's cost; its texture is rendered in the server, where the imagery corrections live).
     Returns the Built; one built in this anchor's place before comes from the revisit cache."""
     import revisit
-    k = revisit.key("fargeo", *_far_key(lat, lon, tile, zoom, q, ref_zoom, with_sink, layout))
+    k = revisit.key("fargeo", *_far_key(lat, lon, tile, zoom, q, ref_zoom, with_sink, layout),
+                    modules=far_geometry_modules(tile.level))
     got = revisit.load(_s.cache_dir, "fargeo", k)
     if got is not None:
         return _built_from(got[0]["built.npz"], got[1])
@@ -852,6 +853,37 @@ def far_geometry(aid, lat, lon, tile, zoom, q, ref_zoom, with_sink, layout):
     return built
 
 
+# The modules an ungraded far tile's geometry is built by (traced: tests/test_far_geometry_key.py): its revisit key
+# hashes these alone, so a change to the roads, the grading or anything else keeps the baked far geometry (9.1 GB of
+# the Frederick route's 24 GB bake, 2026-10-28). Graded levels (<= 0, like the block) keep the whole code's key.
+FAR_GEOMETRY_MODULES = ("farfield", "dem", "geodesy", "heightmap", "fast",
+                        "dsmground", "polardem", "cog", "mapcells")     # (dem's own height sources and cell lookup)
+# Server modules the listed ones import that cannot change the geometry (tests/test_far_geometry_key.py walks the
+# imports and fails on any other): downloads, caches and file staging (cache, netfetch, rangeread, staging, xproc,
+# revisit, imagery_regional, pcnaip), and farfield's writers and texture helpers, used only after the Built is made
+# (cdae, dae, imagery, season).
+FAR_GEOMETRY_IO = ("cache", "netfetch", "rangeread", "staging", "xproc", "revisit", "imagery_regional", "pcnaip",
+                   "cdae", "dae", "imagery", "season")
+
+
+def far_geometry_modules(level):
+    """code_key's modules for a far tile's geometry at level: None (all the code) where it is graded."""
+    if level <= 0:
+        return None
+    mods = list(FAR_GEOMETRY_MODULES)
+    if _s.airports is not None:
+        mods += ["airportgrade", "runwaygeom"]
+    if _s.sea is not None and level <= seacarvemod.CARVE_MAX_LEVEL:
+        mods += ["seacarve"]
+    if not _FAR_SRC:
+        import inspect
+        _FAR_SRC.append("src:" + inspect.getsource(_far_geometry))
+    return tuple(mods) + (_FAR_SRC[0],)
+
+
+_FAR_SRC = []
+
+
 def _far_key(lat, lon, tile, zoom, q, ref_zoom, with_sink, layout):
     """What a far tile's geometry is built from (the revisit cache's key)."""
     return (round(float(lat), 7), round(float(lon), 7), (tile.level, tile.i, tile.j), zoom,
@@ -860,7 +892,8 @@ def _far_key(lat, lon, tile, zoom, q, ref_zoom, with_sink, layout):
 
 
 def _built_blob(built):
-    """(npz bytes, meta) of a farfield.Built (_built_from reads them back)."""
+    """(npz bytes, meta) of a farfield.Built (_built_from reads them back). A change to this format must change
+    FAR_GEOMETRY_MODULES' key on purpose (the "src:" text hashes _far_geometry alone): kept items would not read."""
     import io
     buf = io.BytesIO()
     arrays = {n: getattr(built, n) for n in ("positions", "normals", "uvs", "planar", "tris")}

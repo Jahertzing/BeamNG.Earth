@@ -195,6 +195,19 @@ do
   T.check(gc.rebuild() == false, 'rebuild without grass: nothing')
   T.check(gc.status().objects == 0 and gc.afterBlockChange() == false, 'disabled: objects gone, no rebuild')
   gc.setEnabled(true)
+  -- stale cells: the first block only recorded; on time no remake; late (the grass reached past it) a remake
+  local r = gc.status().radius
+  T.check(r and r > 0, 'the objects\' largest radius known (' .. tostring(r) .. ')')
+  T.check(gc.noteBlock(0, 0, 1024, 1024, { x = 512, y = 512 }) == false, 'first block: recorded')
+  local o1, fl2 = scenetree.findObject(gc.PREFIX .. gc.DEFS[1].src), flushes
+  T.check(gc.noteBlock(128, 0, 1152, 1024, { x = 600, y = 512 }) == false, 'on time: no remake')
+  gc.afterBlockChange()
+  T.check(scenetree.findObject(gc.PREFIX .. gc.DEFS[1].src) == o1 and flushes == fl2 + 1, 'on time: the same objects, flushed')
+  T.check(gc.noteBlock(256, 0, 1280, 1024, { x = 1152 - r + 10, y = 512 }) == true, 'late: the grass reached past the old block')
+  gc.afterBlockChange()
+  T.check(scenetree.findObject(gc.PREFIX .. gc.DEFS[1].src) ~= o1 and gc.status().staleRemakes == 1, 'late: made again')
+  gc.rebuild()
+  T.check(gc.noteBlock(0, 0, 10, 10, { x = 5000, y = 5000 }) == false, 'after a rebuild (another frame): only recorded')
   gc.reset()
   _G.readFile, _G.jsonDecode = realRead, realDecode
 end
@@ -281,6 +294,18 @@ do
   T.check(fb[1] == gc.TINT_RANGE[2] and fb[2] == gc.TINT_RANGE[1], 'bounded')
   local f2 = gc.tintFactor(orig, tex, { 140, 120, 80 }, 1, 2)
   T.check(math.abs(f2[2] / f[2] - 2) < 1e-6, 'brightness on top')
+end
+
+-- bare stretches at speed: a block change after the grass's square reached past the old block makes the objects
+-- again (cells made off the block stay empty with the grass patch); on time, nothing
+do
+  local gc = require('beamngEarth/groundcover')
+  T.check(gc.reachedPast({ 0, 0, 1000, 1000 }, { x = 500, y = 500 }, 200, 4) == false, 'reachedPast: inside')
+  T.check(gc.reachedPast({ 0, 0, 1000, 1000 }, { x = 900, y = 500 }, 200, 4) == true, 'reachedPast: past the east edge')
+  T.check(gc.reachedPast({ 0, 0, 1000, 1000 }, { x = 802, y = 500 }, 200, 4) == false, 'reachedPast: within the margin')
+  T.check(gc.reachedPast({ 0, 0, 1000, 1000 }, { x = 500, y = 150 }, 200, 4) == true, 'reachedPast: past the south edge')
+  T.check(gc.reachedPast(nil, { x = 0, y = 0 }, 200) == false and gc.reachedPast({ 0, 0, 1, 1 }, nil, 200) == false,
+    'reachedPast: nothing known')
 end
 
 T.done('test_surface_layers')

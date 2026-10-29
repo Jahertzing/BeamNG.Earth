@@ -91,6 +91,10 @@ T.check(N.modeAmount('light', 10) == 5 and N.modeAmount('light', 2) == 2 and N.m
 T.check(N.modeAmount('busy', 10) == 15 and N.modeAmount('busy', 4) == 8 and N.modeAmount('busy', 30) == N.BUSY_MAX,
   'modeAmount: busy one and a half, at least 4 more, at most BUSY_MAX')
 T.check(N.modeAmount('busy', nil) == -1, 'modeAmount: the game\'s amount unknown: the game\'s own')
+-- the game's own pick (at most 8, made at install) raised to the CPU's floor: 10 on a 12-core CPU, busy 15 from it
+T.check(N.cpuFloor(12) == 10 and N.cpuFloor(4) == 2 and N.cpuFloor(64) == N.CPU_FLOOR_MAX and N.cpuFloor(nil) == 0,
+  'cpuFloor: the cores less CPU_SPARE, at most CPU_FLOOR_MAX')
+T.check(N.modeAmount('busy', math.max(7, N.cpuFloor(12))) == 15, 'busy on a 12-core CPU: 15')
 T.check(not N.takeChoice(nil).parked, 'no freeroam: off (the radial menu still works)')
 settings = { getValue = function(k) if k == 'trafficParkedVehicles' then return false end end }
 T.check(not N.takeChoice({ trafficMode = 'enabled', trafficParked = 'enabled' }).parked,

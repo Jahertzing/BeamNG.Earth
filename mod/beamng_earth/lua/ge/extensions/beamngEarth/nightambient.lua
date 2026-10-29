@@ -6,6 +6,19 @@
 -- walls and yards between the lamps) near the big places (nightglow.lua's, by their rank), a starlit country one
 -- away from them, scaled by the "Night ambient light" setting. Written every CHECK_S when it changed (the sky reads it
 -- each frame; the stock night colour blends in as the sun sets, so it is the same field day and night).
+--
+-- That colour turned out to tint the sky only (the user's drive, 2026-10-29: "so darker than i would expect at night,
+-- and my headlights do like nothing"): BeamNG 0.40's ambient is the sky's SH9 (calculateSkySH9Skylut.cs.hlsl: the
+-- atmosphere LUT, the night panorama, and a fixed moonless 0.25 mcd/m2), and nightColor is not in it. Two more parts:
+--   * The sky's light (SKYFILL): one dim point light SKYFILL.height m over the camera, reaching SKYFILL.radius: what a
+--     city's lit sky (or the starlit country's) throws down on roofs, roads, yards and cars round the camera, warm by
+--     the city share. One light: a full-screen pass, no shadows.
+--   * The eye's night adaptation (NIGHT_EXPOSURE, on the stock auto exposure, PostEffectLocalExposureObject): by day
+--     its highlight protection closes the exposure down by up to 2 EV when the brightest 3% of the frame clips, and
+--     at night that 3% is our lamps, windows and glows, so the street was metered for the lamp lenses and everything
+--     else (and a car's headlights' pool) sank to black. At night the protection is eased, darker pixels count in the
+--     metering and the exposure opens a little (on top of the player's own EV compensation), back to the stock values
+--     by day and when leaving the level.
 local M = {}
 
 local nightglow = require('beamngEarth/nightglow')
@@ -21,6 +34,12 @@ M.FULL_R = 1.0              -- a place's city light is full within this many of 
 M.GONE_R = 3.0              -- ... and gone this many out
 M.BIG_R = 14000             -- (a place's weight: its glow radius over this, square-rooted: Denver 1, Boulder ~0.5)
 M.SHARE_STEP = 0.05
+-- the sky's light: urban (warm) and rural (cool) brightness and colour, mixed by the city share, times the setting
+M.SKYFILL = { height = 150, radius = 700, urban = 60, rural = 12, urbanColor = { 1.0, 0.74, 0.50 },
+  ruralColor = { 0.62, 0.72, 1.0 } }
+-- the auto exposure at night (field = value; exposureBiasEV: added to the player's GraphicEVCompensation)
+M.NIGHT_EXPOSURE = { highlightProtectStrength = 0.2, darkPixelMaxLogLuminance = -8, darkPixelMinLogLuminance = -16 }
+M.NIGHT_BIAS_EV = 0.75
 M.mode = 'normal'
 M.errors = 0
 
@@ -76,12 +95,98 @@ local function points(anchor, anchorId)
   return pts
 end
 
--- Every frame (nightlights.update; the work every CHECK_S). anchor, anchorId: the frame of the places.
-function M.update(anchor, anchorId)
+local fillId = nil
+local fillLook = nil      -- the brightness / colour string last given the sky light
+
+-- Pure: the sky light's brightness and colour string for a city share and strength k.
+function M.skyFillFor(share, k)
+  local F = M.SKYFILL
+  local b = (F.rural + (F.urban - F.rural) * share) * k
+  local c = {}
+  for i = 1, 3 do c[i] = string.format('%.3f', F.ruralColor[i] + (F.urbanColor[i] - F.ruralColor[i]) * share) end
+  return b, c[1] .. ' ' .. c[2] .. ' ' .. c[3] .. ' 1'
+end
+
+local function fillObj()
+  local o = fillId and scenetree.findObjectById(fillId)
+  if o then return o end
+  o = createObject('PointLight')
+  if not o then return nil end
+  o:setField('radius', 0, tostring(M.SKYFILL.radius))
+  o:setField('castShadows', 0, 'false')
+  o:setField('isEnabled', 0, 'false')
+  o.canSave = false
+  o:registerObject('')
+  if scenetree.MissionGroup then scenetree.MissionGroup:addObject(o) end
+  fillId, fillLook = o:getID(), nil
+  return o
+end
+
+-- The sky light over the camera (every frame at night: it follows the camera), off by day and when off.
+local function stepFill(on, share, k)
+  if not on then
+    local o = fillId and scenetree.findObjectById(fillId)
+    if o and fillLook then o:setField('isEnabled', 0, 'false'); fillLook = nil end
+    return
+  end
+  local o = fillObj()
+  if not o then return end
+  local cam = core_camera.getPosition()
+  o:setPosition(vec3(cam.x, cam.y, cam.z + M.SKYFILL.height))
+  local b, c = M.skyFillFor(share or 0, k)
+  local look = string.format('%.2f', b) .. '|' .. c
+  if look ~= fillLook then
+    o:setField('brightness', 0, string.format('%.2f', b))
+    o:setField('color', 0, c)
+    o:setField('radius', 0, tostring(M.SKYFILL.radius))
+    if not fillLook then o:setField('isEnabled', 0, 'true') end
+    fillLook = look
+  end
+end
+
+local dayExposure = nil   -- the auto exposure's own values, kept while ours are on (nil: ours are not on)
+
+local function exposureObj() return scenetree.findObject('PostEffectLocalExposureObject') end
+
+local function playerBias()
+  local okS, st = pcall(function() return settings.getValue('GraphicEVCompensation', 0) end)
+  return okS and tonumber(st) or 0
+end
+
+-- The auto exposure's night values on (night) or the kept ones back; checked every CHECK_S (the graphics settings
+-- write the bias back when the player changes it).
+local function stepExposure(night)
+  local o = exposureObj()
+  if not o then return end
+  if night then
+    if not dayExposure then
+      dayExposure = {}
+      for k in pairs(M.NIGHT_EXPOSURE) do dayExposure[k] = o:getField(k, 0) end
+    end
+    for k, v in pairs(M.NIGHT_EXPOSURE) do
+      if tonumber(o:getField(k, 0)) ~= v then o:setField(k, 0, tostring(v)) end
+    end
+    local want = playerBias() + M.NIGHT_BIAS_EV
+    if math.abs((tonumber(o.exposureBiasEV) or 0) - want) > 1e-3 then o.exposureBiasEV = want end
+  elseif dayExposure then
+    for k, v in pairs(dayExposure) do if v ~= nil then o:setField(k, 0, tostring(v)) end end
+    o.exposureBiasEV = playerBias()
+    dayExposure = nil
+  end
+end
+
+-- Every frame (nightlights.update; the work every CHECK_S). anchor, anchorId: the frame of the places; night:
+-- nightlights.lua's state.
+function M.update(anchor, anchorId, night)
+  local k = M.STRENGTH[M.mode] or 1
+  local lit = night == true and k > 0
+  local okF = pcall(stepFill, lit, M.share, k)
+  if not okF then M.errors = M.errors + 1 end
   local now = os.clockhp()
   if now - lastCheck < M.CHECK_S then return end
   lastCheck = now
-  local k = M.STRENGTH[M.mode] or 1
+  local okE = pcall(stepExposure, lit)
+  if not okE then M.errors = M.errors + 1 end
   if k <= 0 or not anchor then return end
   local o = sky()
   if not o then return end
@@ -103,21 +208,27 @@ end
 function M.setMode(v)
   local was = M.mode
   M.mode = M.STRENGTH[v] and v or 'normal'
-  lastCheck, written = -1e9, nil
+  lastCheck, written, fillLook = -1e9, nil, nil
   if M.mode == 'off' and was ~= 'off' then           -- back to the real sky's
     local o = sky()
     if o then pcall(function() o:setField('nightColor', 0, '0 0 0 1') o:setField('nightFogColor', 0, '0 0 0 1') end) end
   end
 end
 
--- A new level: the places' frame and the sky are new.
+-- A new level or leaving ours: the places' frame and the sky are new, the sky light goes, the exposure's own values
+-- back.
 function M.reset()
+  pcall(stepExposure, false)
+  local o = fillId and scenetree.findObjectById(fillId)
+  if o then o:delete() end
+  fillId, fillLook = nil, nil
   lastCheck, written = -1e9, nil
   cache = { anchorId = nil, pts = nil }
 end
 
 function M.status()
-  return { mode = M.mode, share = M.share, written = written, errors = M.errors }
+  return { mode = M.mode, share = M.share, written = written, errors = M.errors, fill = fillLook,
+           nightExposure = dayExposure ~= nil }
 end
 
 return M

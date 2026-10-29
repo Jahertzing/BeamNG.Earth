@@ -54,6 +54,7 @@ _code = []
 _lock = threading.Lock()
 _at = {}                    # key -> its anchor (lat, lon), from key(): whether store() pins it
 _parts = {}                 # key -> (kind, parts), from key(): the same item's key under an older generation's code
+_stable = set()             # keys made from their modules' code alone (key(modules=)): no generation fallback
 _gen_of = {}                # (pin dir, anchor) -> the code this process takes the anchor's items from (sticky)
 _marked = set()             # (pin dir, code, anchor) marked already
 _pins = {"stamp": None, "set": frozenset()}
@@ -68,8 +69,13 @@ def faults():
     return _faults[0]
 
 
-def code_key():
-    """A hash of the server's source files and native module (once per process)."""
+def code_key(modules=None):
+    """A hash of the server's source files and native module (once per process). modules (names, optionally with
+    extra text such as one function's source): the hash of those modules' sources, the native module and the build
+    switches alone, for a kind built by them only (blockworker.far_geometry's ungraded levels: FAR_GEOMETRY_MODULES), so a change
+    anywhere else keeps its items."""
+    if modules is not None:
+        return _modules_key(tuple(modules))
     with _lock:
         if not _code:
             here = os.path.dirname(os.path.abspath(__file__))
@@ -83,22 +89,59 @@ def code_key():
                             h.update(name.encode() + b"\0" + f.read())
                     except OSError:
                         pass
-            for k in sorted(os.environ):                # (the build switches: BNE_*)
-                if k.startswith("BNE_") and k not in ("BNE_REVISIT", "BNE_REVISIT_MB", "BNE_REVISIT_SKIP",
-                                                      "BNE_REVISIT_GENS"):
-                    h.update(f"{k}={os.environ[k]}".encode())
+            _switches(h)
             _code.append(h.hexdigest()[:16])
         return _code[0]
+
+
+def _switches(h):
+    """The build switches (BNE_* but the revisit cache's own) into hash h."""
+    for k in sorted(os.environ):                # (the build switches: BNE_*)
+        if k.startswith("BNE_") and k not in ("BNE_REVISIT", "BNE_REVISIT_MB", "BNE_REVISIT_SKIP", "BNE_REVISIT_GENS"):
+            h.update(f"{k}={os.environ[k]}".encode())
+
+
+_mod_codes = {}
+
+
+def _modules_key(modules):
+    """code_key(modules): "src:..." entries are hashed as text (a function's own source)."""
+    with _lock:
+        got = _mod_codes.get(modules)
+    if got is not None:
+        return got
+    here = os.path.dirname(os.path.abspath(__file__))
+    h = hashlib.sha1(b"modules\0")
+    names = [n for n in os.listdir(here) if n == "CODE_ID" or n.startswith("earthfast")]
+    for name in sorted(names) + sorted(m + ".py" for m in modules if not m.startswith("src:")):
+        try:
+            with open(os.path.join(here, name), "rb") as f:
+                h.update(name.encode() + b"\0" + f.read())
+        except OSError:
+            h.update(name.encode() + b"\0missing")
+    for m in sorted(m for m in modules if m.startswith("src:")):
+        h.update(m.encode())
+    _switches(h)
+    got = h.hexdigest()[:16]
+    with _lock:
+        _mod_codes[modules] = got
+    return got
 
 
 def _key_with(kind, code, parts):
     return hashlib.sha1(repr((kind, code, parts)).encode()).hexdigest()
 
 
-def key(kind, *parts):
+def key(kind, *parts, modules=None):
     """The cache key of an item: its kind, what it was built from (the anchor's lat/lon, the tile, the settings) and
-    the code."""
-    k = _key_with(kind, code_key(), parts)
+    the code (all of it, or modules': code_key). An item keyed by its modules outlives other code changes, so the
+    baked generations (load) are not looked at for it."""
+    k = _key_with(kind, code_key(modules), parts)
+    if modules is not None:
+        with _lock:
+            if len(_stable) > 100000:
+                _stable.clear()
+            _stable.add(k)
     if len(parts) >= 2 and isinstance(parts[0], float) and isinstance(parts[1], float):
         with _lock:
             if len(_at) > 100000:
@@ -238,6 +281,9 @@ def store(cache_dir, kind, k, blobs, extra=None):
             z.writestr("meta.json", json.dumps({"names": list(blobs), "extra": extra}))
         os.replace(tmp, path)
         if pinned and GENS == "bake":
+            # (also for an item keyed by its modules (key(modules=)): a server whose only new items are such marks
+            # the anchor as baked by its code though its other kinds come from an older generation; harmless for the
+            # module-keyed kinds, which skip the generations, but the mark means "this code stored here", no more)
             _mark(cache_dir, k)
         return True
     except Exception:
@@ -259,7 +305,7 @@ def load(cache_dir, kind, k):
     """({name: bytes}, extra) of the item under key k, or None when there is none (or it cannot be read)."""
     if not ON or kind in SKIP:
         return None
-    if GENS == "on" and _pinned(cache_dir, k):
+    if GENS == "on" and k not in _stable and _pinned(cache_dir, k):
         with _lock:
             at, kp = _at.get(k), _parts.get(k)
         g = _gen_for(cache_dir, at)

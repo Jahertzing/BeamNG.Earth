@@ -121,5 +121,65 @@
     "castShadows": false,
     "doubleSided": true,
     "translucent": false
+  },
+  "bne_rpm_white": {
+    "name": "bne_rpm_white",
+    "mapTo": "bne_rpm_white",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "4f636bc2-c862-5110-8f20-0d81471fa389",
+    "Stages": [
+      {
+        "baseColorFactor": [
+          0.8,
+          0.8,
+          0.78,
+          1.0
+        ],
+        "metallicFactor": 0,
+        "roughnessFactor": 0.3,
+        "emissiveFactor": [
+          0,
+          0,
+          0
+        ]
+      },
+      {},
+      {},
+      {}
+    ],
+    "castShadows": false,
+    "doubleSided": true,
+    "translucent": false
+  },
+  "bne_rpm_amber": {
+    "name": "bne_rpm_amber",
+    "mapTo": "bne_rpm_amber",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "a4d7c4e4-85af-560c-be62-cbc7808aed74",
+    "Stages": [
+      {
+        "baseColorFactor": [
+          0.8,
+          0.55,
+          0.08,
+          1.0
+        ],
+        "metallicFactor": 0,
+        "roughnessFactor": 0.3,
+        "emissiveFactor": [
+          0,
+          0,
+          0
+        ]
+      },
+      {},
+      {},
+      {}
+    ],
+    "castShadows": false,
+    "doubleSided": true,
+    "translucent": false
   }
 }

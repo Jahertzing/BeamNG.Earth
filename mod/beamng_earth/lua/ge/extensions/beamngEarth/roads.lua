@@ -20,6 +20,7 @@
 -- Console: beamngEarth_roads.status(), .setEnabled(bool)
 
 local stopwatch = require('beamngEarth/stopwatch')
+local popin = require('beamngEarth/popin')
 
 local M = {}
 
@@ -1069,7 +1070,7 @@ function M.update(gov, currentAnchor, player, view)
       local t0 = now()
       loadMaterials()
       local ok, id = pcall(createChunk, q.chunk)
-      if ok then t.objs[#t.objs + 1] = id else lastError = tostring(id) end
+      if ok then t.objs[#t.objs + 1] = id; popin.noteBox('decal', t.cx, t.cy, M.TILE_M / 2) else lastError = tostring(id) end
       t.queued = t.queued - 1
       local ms = now() - t0
       gov:charge('roadChunk', ms)
@@ -1103,6 +1104,9 @@ function M.update(gov, currentAnchor, player, view)
       -- the buildings' and sidewalks' lean meshes are a collision detail (server cdae collision_only): never drawn
       local ok, id = pcall(createWalk, q.walk, (q.what == 'bldcol' or q.what == 'walkcol' or q.what == 'signcol') and 'Collision Mesh' or not isRoad)
       if ok then slotMade(id, q.walk.shape) end
+      if ok and not (q.what == 'bldcol' or q.what == 'walkcol' or q.what == 'signcol') then   -- (drawn: popin.lua)
+        popin.noteBox(q.what, t.cx, t.cy, M.TILE_M / 2)
+      end
       if ok then
         if not isRoad then t.cq = t.cq or {}; t.cq[q.what] = q end
         if isRoad then t[q.what] = id else

@@ -408,6 +408,7 @@ local function loadBlock(tr)
   local layers = (type(tr.layers) == 'table' and type(tr.materials) == 'table')
     and { masks = tr.layers, materials = tr.materials } or nil -- server --surface on (surface.py)
   if layers then groundcover.ensure(); groundcover.setTint(tr.grassTint) end   -- (the grass: the photo's colour)
+  groundcover.noteBlock(lattice.coverBox(tr.cx, tr.cy))     -- (grass made past the old block: made again)
   -- detail mode: the block's aerial photo as its base colour (server write_base); else the level's
   -- (false: detail mode without a photo -> the level's flat base; nil: other modes, untouched)
   local base = nil
@@ -1839,6 +1840,7 @@ local function perfContext()
     st.terrainLatency and string.format(', last block %.1fs', st.terrainLatency) or '')
   local okC, nr = pcall(roads.reloads)
   if okC then c.reloads = nr end
+  c.popin = require('beamngEarth/popin').take     -- (the minute line only: it starts the counts again)
   return c
 end
 local machineSent = false       -- the machine's lines sent to this server connection
@@ -1892,6 +1894,8 @@ end
 local function onUpdate(dtReal, dtSim)
   dtReal = dtReal or 0
   local frameMs0 = frameTimer and frameTimer:stopAndReset() or dtReal * 1000
+  pcall(require('beamngEarth/lod').update, st.inOurLevel)    -- (the detail distance's engine LOD: our level only)
+  if not M.popinCamera then M.popinCamera = function() return st.cam end; require('beamngEarth/popin').camera = M.popinCamera end
   if not st.inOurLevel and not st.active then
     -- Other levels and the menus: nothing but the connection to the world server, kept open (on Linux the
     -- launcher's sign that the game still runs, launcher.game_connected; its messages only store what the
@@ -2068,6 +2072,10 @@ local function onUpdate(dtReal, dtSim)
     end
     parking.update(st.anchorId, not (st.player and st.player.camera) and st.player or nil, pb, gov)  -- (no car: none parked)
     t = mark('parking', t)
+    for k, v in pairs(parking.parts or {}) do   -- (its parts: which one a "parking" hitch was)
+      if v > 0 then marks['parking.' .. k] = (marks['parking.' .. k] or 0) + v end
+      parking.parts[k] = 0
+    end
     navgraph.update(st.anchorId, pb, gov)
     t = mark('navgraph', t)
     updateSky(dtReal)

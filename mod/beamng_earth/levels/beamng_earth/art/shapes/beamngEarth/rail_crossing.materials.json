@@ -14,7 +14,12 @@
           1.0
         ],
         "metallicFactor": 0.0,
-        "roughnessFactor": 0.5
+        "roughnessFactor": 0.5,
+        "emissiveFactor": [
+          0,
+          0,
+          0
+        ]
       },
       {},
       {},
@@ -58,7 +63,12 @@
           1.0
         ],
         "metallicFactor": 0.0,
-        "roughnessFactor": 0.45
+        "roughnessFactor": 0.45,
+        "emissiveFactor": [
+          0,
+          0,
+          0
+        ]
       },
       {},
       {},
@@ -140,6 +150,12 @@
     "Stages": [
       {
         "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/bne_rr_crossbuck.png",
+        "emissiveMap": "/levels/beamng_earth/art/shapes/beamngEarth/bne_rr_crossbuck.png",
+        "emissiveFactor": [
+          0,
+          0,
+          0
+        ],
         "metallicFactor": 0,
         "roughnessFactor": 0.4
       },
@@ -157,6 +173,12 @@
     "Stages": [
       {
         "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/bne_rr_cross_eu.png",
+        "emissiveMap": "/levels/beamng_earth/art/shapes/beamngEarth/bne_rr_cross_eu.png",
+        "emissiveFactor": [
+          0,
+          0,
+          0
+        ],
         "metallicFactor": 0,
         "roughnessFactor": 0.4
       },

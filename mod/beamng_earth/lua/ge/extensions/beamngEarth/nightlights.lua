@@ -37,6 +37,23 @@ M.MATERIALS = {
   bne_gsign_white = { '1 1 1', 12 },
   bne_gsign_reflect = { '1 1 1', 400 },
   bne_gsign_amber = { '1 0.7 0.15', 400 },
+  -- the road markings (server roads.py: the stock line materials on the road mesh): retroreflective paint (glass beads)
+  -- throws a car's headlights back at the driver, so at night the lines read far ahead of the beam's pool (the user,
+  -- 2026-10-29: "should there be some reflective things on the road more?"). Stock materials: put back when the
+  -- level ends (stock = true).
+  line_white = { '1 1 1', 3, stock = true },
+  line_dashed_long = { '1 1 1', 3, stock = true },
+  line_yellow = { '1 0.78 0.32', 2.5, stock = true },
+  line_dashed_short_yellow = { '1 0.78 0.32', 2.5, stock = true },
+  -- the raised pavement markers on the highways' lines (server roads.rpm_rows, tools/build_rpm.py): their reflectors
+  bne_rpm_white = { '1 1 1', 300 },
+  bne_rpm_amber = { '1 0.68 0.18', 300 },
+  -- level crossings (tools/build_rail_crossing_props.py): the crossbucks' sheeting (their own picture as the glow map:
+  -- the letters stay dark) and the gate arms' red and white stripes
+  bne_rr_crossbuck = { '1 1 1', 45 },
+  bne_rr_cross_eu = { '1 1 1', 45 },
+  bne_rr_white = { '1 1 1', 30 },
+  bne_rr_red = { '1 0.08 0.05', 30 },
 }
 M.STADIUM_OFF_H = 23.0      -- local hour the stadiums' lights go out (a game is over by then)
 M.STAR_LAST = { 1, 25 }     -- the star goes off after the National Western Stock Show (month, day; mid to late January)
@@ -138,6 +155,7 @@ local function clock()
 end
 
 local lit = {}           -- material name -> whether it was last lit
+local stockSaved = {}    -- stock material name -> { emissiveFactor, emissiveIntensityNits } before ours
 
 local function apply(night)
   local c = clock()
@@ -147,9 +165,13 @@ local function apply(night)
     if glow.when then on = glow.when(c) == true end
     local m = lit[name] ~= on and scenetree.findObject(name)
     if m then
+      if glow.stock and not stockSaved[name] then
+        stockSaved[name] = { m:getField('emissiveFactor', 0), m:getField('emissiveIntensityNits', 0) }
+      end
+      local day = stockSaved[name] or {}
       local ok = pcall(function()
-        m:setField('emissiveFactor', 0, on and glow[1] or '0 0 0')
-        m:setField('emissiveIntensityNits', 0, tostring(on and glow[2] or -1))
+        m:setField('emissiveFactor', 0, on and glow[1] or day[1] or '0 0 0')
+        m:setField('emissiveIntensityNits', 0, tostring(on and glow[2] or day[2] or -1))
         m:flush()
         m:reload()
       end)
@@ -158,7 +180,7 @@ local function apply(night)
   end
   -- the lamps' far glow (trees.lua's lampglow group, off by day)
   local okt, trees = pcall(require, 'beamngEarth/trees')
-  if okt and trees.setGroupEnabled then pcall(trees.setGroupEnabled, { 'lampglow', 'beaconglow' }, night) end
+  if okt and trees.setGroupEnabled then pcall(trees.setGroupEnabled, { 'lampglow', 'beaconglow', 'rpm_white', 'rpm_amber' }, night) end
   M.night = night
 end
 
@@ -365,7 +387,7 @@ end
 -- the frame (nightglow.lua's objects are placed by latitude and longitude).
 function M.update(anchor, anchorId)
   pcall(nightglow.update, anchor, anchorId, M.night)
-  local okA = pcall(nightambient.update, anchor, anchorId)
+  local okA = pcall(nightambient.update, anchor, anchorId, M.night)
   if not okA then M.errors = M.errors + 1 end
   local now = os.clockhp()
   if now - lastCheck >= M.CHECK_S then
@@ -380,8 +402,21 @@ function M.update(anchor, anchorId)
   end
 end
 
--- A new level or session: the materials are new (applied again at the next check), the lights gone.
+-- A new level or session: the materials are new (applied again at the next check), the stock ones dark again (other
+-- levels share them), the lights gone.
 function M.reset()
+  for name, was in pairs(stockSaved) do
+    local m = scenetree.findObject(name)
+    if m then
+      pcall(function()
+        m:setField('emissiveFactor', 0, was[1] or '0 0 0')
+        m:setField('emissiveIntensityNits', 0, was[2] or '-1')
+        m:flush()
+        m:reload()
+      end)
+    end
+  end
+  stockSaved = {}
   nightglow.reset()
   nightambient.reset()
   M.night, lastCheck, lastLights = nil, -1e9, -1e9

@@ -34,6 +34,19 @@ M.GUARD_S = 0.5
 M.FALL_MS = -12         -- a parked car falling faster than this (m/s) is off the ground: moved too
 M.OFF_SPOT_M = 4        -- ... and one this far from its spot (none, or another frame's) ...
 M.OFF_SPOT_FAR_M = 60   -- ... once the player is this far from it (a car the player pushed stays in view)
+-- Nothing parked appears or disappears in view (Jeff's drive 2026-10-28: "when looking at a car lot, a ton of cars sorta
+-- just flicker in and out, like its regenerating a lot"). The stock system moves a parked car to a spot ahead once the
+-- player is 50 m (plus speed, plus 150 m ahead of the car) from it, with no look at the camera, and its search point
+-- follows the camera's direction in a free camera: looking round a lot moved its cars about in plain sight. Every
+-- GUARD_S, the spots within VIEW_M in front of the camera (within VIEW_DEG of its axis) are banned for a car to come to
+-- (the stock tag its spot search skips), and the parked cars there are not moved (the stock ignoreTeleport; this
+-- module's guard too, unless one falls).
+-- The stock reuse radius (gameplay/parking.lua radiusCoef: a car stays where it is within 50 m x this, plus speed, of
+-- the player, and the search runs again every 50 m x this of travel): fewer moves, each one farther out.
+M.RADIUS_COEF = 2.5
+M.VIEW_M = 600
+M.VIEW_DEG = 70
+M.VIEW_NEAR_M = 40      -- (this near, any direction: the side windows and mirrors)
 M.enabled = true
 
 local spots = {}        -- tile key -> { anchor, rows }
@@ -190,25 +203,116 @@ end
 -- about in the distance, ~30 moves a second (the user's session 2026-10-15, Arizona). Those cars wait hidden instead
 -- and come back once spots are near (M.freeNear).
 local hidden = {}       -- parked car id -> true while it waits hidden for a spot
-function M.freeNear(player, rad)
-  local n = 0
-  local r2 = (rad or M.START_M) ^ 2
+local banned = {}       -- spot object -> true: banned by this module (in view)
+local held = {}         -- parked car id -> true: its ignoreTeleport set by this module (in view)
+local spotAt = {}       -- parked car id -> { x, y } of the spot it was last seen on (its spot may leave the sites)
+
+-- Pure: is (x, y) in view of a camera at (cx, cy) looking along unit (fx, fy)?
+function M.inView(x, y, cx, cy, fx, fy)
+  if not cx then return false end
+  local dx, dy = x - cx, y - cy
+  local d = math.sqrt(dx * dx + dy * dy)
+  if d > M.VIEW_M then return false end
+  if d < M.VIEW_NEAR_M then return true end
+  return (dx * fx + dy * fy) >= math.cos(math.rad(M.VIEW_DEG)) * d
+end
+
+-- Pure: the camera (x, y, unit forward x, y) from core_camera, or nil.
+local function camera()
+  local cam = rawget(_G, 'core_camera')
+  if not (cam and cam.getPosition and cam.getForward) then return nil end
+  local okP, cp = pcall(cam.getPosition)
+  local okF, cf = pcall(cam.getForward)
+  if not (okP and okF and cp and cf) then return nil end
+  local l = math.sqrt(cf.x * cf.x + cf.y * cf.y)
+  if l < 1e-6 then return cp.x, cp.y, 1, 0 end
+  return cp.x, cp.y, cf.x / l, cf.y / l
+end
+
+-- The spots and parked cars in view: banned / held still (see VIEW_M); the rest as the stock system has them.
+local function holdView(data, list)
+  local cx, cy, fx, fy = camera()
   for _, ps in pairs(objs) do
     local p = ps.pos
-    if p and not ps.vehicle and (p.x - player.x) ^ 2 + (p.y - player.y) ^ 2 < r2 then n = n + 1 end
+    local tags = ps.customFields and ps.customFields.tags
+    if p and tags then
+      if M.inView(p.x, p.y, cx, cy, fx, fy) then
+        if not tags.banned then tags.banned = true banned[ps] = true end
+      elseif banned[ps] then
+        tags.banned = nil
+        banned[ps] = nil
+      end
+    end
+  end
+  local live = {}
+  for _, ps in pairs(objs) do live[ps] = true end
+  for ps in pairs(banned) do if not live[ps] then banned[ps] = nil end end   -- (spots that left the sites)
+  if not data then return end
+  for _, id in ipairs(list) do
+    local d = data[id]
+    local o = getObjectByID(id)
+    if d and o and o:getActive() then
+      local p = o:getPosition()
+      d.randomPaint = false           -- (a car moved to another spot keeps its paint: not "regenerated")
+      if M.inView(p.x, p.y, cx, cy, fx, fy) then
+        -- (ignoreTeleport: the stock reuse loop; ignoreForceTeleport: its forceTeleport, which the pool's
+        -- activation, the scatter and the stock fallbacks call)
+        if not d.ignoreTeleport then d.ignoreTeleport = true d.ignoreForceTeleport = true held[id] = true end
+      elseif held[id] then
+        d.ignoreTeleport = nil
+        d.ignoreForceTeleport = nil
+        held[id] = nil
+      end
+    end
+  end
+end
+-- The free spots out of view (not banned: the stock search skips those) between minRad and rad of the player. A
+-- banned spot counted free sent cars to the stock forceTeleport with none it would take, and its fallback put them on
+-- any road of the map, in view or not.
+function M.freeNear(player, rad, minRad)
+  local n = 0
+  local r2, m2 = (rad or M.START_M) ^ 2, (minRad or 0) ^ 2
+  for _, ps in pairs(objs) do
+    local p = ps.pos
+    local tags = ps.customFields and ps.customFields.tags
+    if p and not ps.vehicle and not (tags and tags.banned) then
+      local d2 = (p.x - player.x) ^ 2 + (p.y - player.y) ^ 2
+      if d2 < r2 and d2 >= m2 then n = n + 1 end
+    end
   end
   return n
 end
+M.ACTIVATE_MIN_M = 100  -- (the stock pool's activation moves a car to a spot this far from the player at least)
+-- Moves a guard pass makes at most (a forceTeleport or a hidden car shown again): the rest wait for the next pass, which
+-- comes GUARD_BACKLOG_S later while any wait. Moving every car the block left behind in one frame cost 94-145 ms (the
+-- perf log's "parking" part, south Denver 2026-10-29: 120 ms at 35 mph, 94 ms at a block swap); a falling car that
+-- finds no move left is hidden at once and comes back later the same way.
+M.MOVES_PER_PASS = 1
+M.GUARD_BACKLOG_S = 0.1
+-- ms spent this frame, by part (core.lua adds them to the frame's marks as parking.<part>, and zeroes them)
+M.parts = { view = 0, guard = 0, rebuild = 0, start = 0 }
 
+-- Returns the number of moves left waiting for the next pass.
 local function guard(player)
   local gp = gameplay_parking
-  if not box or not gp or not gp.getState() then return end
+  if not box or not gp or not gp.getState() then return 0 end
   local data = (not scatterPending and sites and gp.getParkedCarsData) and gp.getParkedCarsData() or nil
+  local sw = stopwatch.new()
+  local okV, errV = pcall(holdView, data, gp.getParkedCarsList() or {})
+  if not okV then log('W', 'beamngEarth', 'parking view: ' .. tostring(errV)) end
+  M.parts.view = M.parts.view + sw()
+  local moves, waiting = M.MOVES_PER_PASS, 0
+  local cx, cy, fx, fy = camera()
   local free = M.freeNear(player)
+  local freeFar = M.freeNear(player, M.START_M, M.ACTIVATE_MIN_M)
   for _, id in ipairs(gp.getParkedCarsList() or {}) do
     local o = getObjectByID(id)
     if o and hidden[id] then
-      if free > 0 then                     -- spots near again: back, onto one of them
+      if freeFar > 0 and free > 0 and moves <= 0 then
+        waiting = waiting + 1
+      elseif freeFar > 0 and free > 0 then     -- spots near again: back, onto one of them
+        moves = moves - 1
+        freeFar = freeFar - 1
         hidden[id] = nil
         o:setActive(1)
         pcall(gp.forceTeleport, id, vec3(player.x, player.y, player.z), 0, M.START_M)
@@ -218,11 +322,22 @@ local function guard(player)
       local p = o:getPosition()
       local falling = o:getVelocity().z < M.FALL_MS               -- off the ground (a stale spot): rescue it
       local d = data and data[id]
-      local off = d and M.offSpot(p, d.parkingSpotId and sites.parkingSpots.objects[d.parkingSpotId], player)
-      if falling or off or not M.inside(box, p.x, p.y, M.GUARD_M) then
-        if free > 0 then
+      local ps = d and d.parkingSpotId and sites.parkingSpots.objects[d.parkingSpotId]
+      if ps and not ps.missing and ps.pos then spotAt[id] = { x = ps.pos.x, y = ps.pos.y } end
+      -- (a spot gone from the sites, the nearest MAX_SPOTS having moved on, is where the car was put: not off it)
+      if (not ps or ps.missing) and spotAt[id] then ps = { pos = spotAt[id] } end
+      local off = d and M.offSpot(p, ps, player)
+      local seen = M.inView(p.x, p.y, cx, cy, fx, fy)
+      if falling or (not seen and (off or not M.inside(box, p.x, p.y, M.GUARD_M))) then
+        if d and held[id] then             -- (a falling car in view: rescued all the same)
+          d.ignoreTeleport, d.ignoreForceTeleport, held[id] = nil, nil, nil
+        end
+        if free > 0 and moves > 0 then
+          moves = moves - 1
           pcall(gp.forceTeleport, id, vec3(player.x, player.y, player.z), 0, M.START_M)
           free = free - 1
+        elseif free > 0 and not falling then
+          waiting = waiting + 1              -- (next pass: it stands on the ground out of view meanwhile)
         else
           hidden[id] = true
           o:setActive(0)
@@ -230,6 +345,7 @@ local function guard(player)
       end
     end
   end
+  return waiting
 end
 
 -- The stock gameplay_parking.setupVehicles (the radial menu's parked cars, our own start) rebuilds the sites first
@@ -256,6 +372,7 @@ end
 M.REBUILD_ROOM_MS = 4.0
 M.REBUILD_WAIT_FRAMES = 30
 local waited = 0
+local backlog = 0       -- guard moves waiting for the next pass
 
 function M.update(aid, player, blk, gov)
   if aid ~= anchorId then
@@ -268,10 +385,13 @@ function M.update(aid, player, blk, gov)
     box = { blk[1], blk[2], blk[3], blk[4] }
     dirty = true
   end
-  if player and os.clock() - lastGuard >= M.GUARD_S then
+  if player and os.clock() - lastGuard >= (backlog > 0 and M.GUARD_BACKLOG_S or M.GUARD_S) then
     lastGuard = os.clock()
-    local okG, errG = pcall(guard, player)
-    if not okG then log('W', 'beamngEarth', 'parking guard: ' .. tostring(errG)) end
+    local sw = stopwatch.new()
+    local okG, n = pcall(guard, player)
+    if not okG then log('W', 'beamngEarth', 'parking guard: ' .. tostring(n)) end
+    backlog = okG and n or 0
+    M.parts.guard = M.parts.guard + sw()
   end
   if player then lastPlayer = player end
   hookSetup()
@@ -291,13 +411,22 @@ function M.update(aid, player, blk, gov)
   lastBuild, dirty = t, false
   local sw = stopwatch.new()
   local ok, near = pcall(rebuild, player)
-  if gov and gov.noteFrame then gov:noteFrame(sw()) end
+  local ms = sw()
+  M.parts.rebuild = M.parts.rebuild + ms
+  if gov and gov.noteFrame then gov:noteFrame(ms) end
   if not ok then
     log('W', 'beamngEarth', 'parking: ' .. tostring(near))
     return
   end
   local gp = gameplay_parking
   if not gp or near < M.START_MIN then return end
+  sw = stopwatch.new()
+  M.start(gp, player)
+  M.parts.start = M.parts.start + sw()
+end
+
+-- The parked cars' start (the first rebuild with enough spots near), or the scatter a teleport left pending.
+function M.start(gp, player)
   if not started then
     started = true
     -- the player's level-start choice (navgraph.choice; the radial menu works at any time)
@@ -306,6 +435,7 @@ function M.update(aid, player, blk, gov)
       local amount = (c.parkedAmount and c.parkedAmount > 0) and c.parkedAmount or -1
       local okS, err = pcall(gp.setupVehicles, amount, { pos = vec3(player.x, player.y, player.z) })
       if not okS then log('W', 'beamngEarth', 'parking: setupVehicles: ' .. tostring(err)) end
+      if okS and gp.setParkingVars then pcall(gp.setParkingVars, { radiusCoef = M.RADIUS_COEF }) end
     end
     scatterPending = false
   elseif scatterPending then
@@ -329,6 +459,8 @@ end
 function M.reset()
   spots, objs, anchorId, dirty, lastBuild, sites = {}, {}, nil, false, -math.huge, nil
   hidden = {}
+  banned, held, spotAt = {}, {}, {}
+  backlog = 0
   box, lastGuard, heldActive = nil, -math.huge, nil
   started, scatterPending = false, false
   lastPlayer = nil

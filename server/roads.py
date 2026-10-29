@@ -4063,6 +4063,52 @@ def tile_needs(frame, tx, ty, buildings=True, widths=True, water_ring=0):
 COVER_MARGIN_M = 30.0   # m past the tile: the ground carriageways a deck's parapet is tested against (build_tile cover_out)
 
 
+# Raised pavement markers (the user, 2026-10-29: "should there be some reflective things on the road more?"): on a
+# motorway's or trunk's lane lines and yellow lines (not its white edge lines) a retroreflective marker every
+# RPM_STEP_M (MUTCD 3B.11: 80 ft on a freeway's lane lines), white on the lane lines, amber on yellow ones; trees.lua's
+# rpm_white / rpm_amber groups, shown at night only (nightlights.lua; tools/build_rpm.py: a marker growing with
+# distance, as the lamps' far glow).
+RPM_STEP_M = 24.4
+RPM_START_M = 7.5           # (in a dash cycle's gap: West Coast USA's 3 m dash)
+RPM_CLASSES = {"motorway", "trunk", "motorway_link", "trunk_link"}
+RPM_GROUPS = {"line_dashed_long": "rpm_white", "line_yellow": "rpm_amber",
+              "line_dashed_short_yellow": "rpm_amber"}
+RPM_DECK_M = 1.0            # a line this far off the ground under it is on a deck (its own height kept)
+
+
+def rpm_rows(frame, elev, pieces):
+    """Prop rows [group, x, y, z, yaw, 1, 1, 0] of raised pavement markers along marking pieces [(material, (k, 3)
+    polyline)] of the RPM_CLASSES, every RPM_STEP_M from RPM_START_M along each, on the graded ground (elev) under the
+    road mesh's markings, or the line's own height on a deck. Pure given elev."""
+    import grading
+    pts, yaws, groups = [], [], []
+    for m, line in pieces:
+        g = RPM_GROUPS.get(m)
+        if g is None or len(line) < 2:
+            continue
+        seg = np.hypot(*np.diff(line[:, :2], axis=0).T)
+        c = np.concatenate(([0.0], np.cumsum(seg)))
+        if c[-1] < RPM_START_M:
+            continue
+        t = np.arange(RPM_START_M, c[-1], RPM_STEP_M)
+        k = np.clip(np.searchsorted(c, t, side="right") - 1, 0, len(seg) - 1)
+        f = (t - c[k]) / np.maximum(seg[k], 1e-9)
+        p = line[k] + (line[k + 1] - line[k]) * f[:, None]
+        d = line[k + 1, :2] - line[k, :2]
+        pts.append(p)
+        yaws.append(np.degrees(np.arctan2(d[:, 1], d[:, 0])))
+        groups += [g] * len(p)
+    if not pts:
+        return []
+    P, Y = np.concatenate(pts), np.concatenate(yaws)
+    la, lo, _ = frame.enu_to_geodetic(P[:, 0], P[:, 1], np.zeros(len(P)))
+    gz = np.asarray(frame.geodetic_to_enu(la, lo, np.asarray(elev(la, lo), np.float64))[2], np.float64)
+    gz = gz + grading.ROAD_LIFT + roadmesh.LIFT["mark"]
+    z = np.where(np.abs(gz - P[:, 2]) <= RPM_DECK_M, gz, P[:, 2] + roadmesh.LIFT["mark"])
+    return [[g, round(float(x), 2), round(float(y), 2), round(float(zz), 3), round(float(yw), 1), 1.0, 1.0, 0.0]
+            for g, x, y, zz, yw in zip(groups, P[:, 0], P[:, 1], z, Y)]
+
+
 def _chunk(look, w, c):
     return {"m": look["m"], "w": round(float(w), 2), "tl": look["tl"], "p": look["p"],
             "n": [[round(float(v), 3) for v in p] for p in c]}
@@ -6190,6 +6236,7 @@ def build_tile(frame, tx, ty, cells, elev, urban_fn=None, walks=None, bridges=No
     painted = [(np.array([cw["a"][:2], cw["b"][:2]]), cw["w"] / 2 + CUT_MARGIN) for cw in crosswalks]
     wide = [(roads[k][0], b) for k, wr in enumerate(road_wid) if wr is not None
             for b in _widened_blockers(roads[k][1], roads[k][2], road_edges[k])]     # (a pocket's carriageway too)
+    rpm_pieces = []                             # the RPM_CLASSES' lines in the tile: (material, polyline)
     for k_road, (fid, spec, pts, lon) in enumerate(roads):
         ex = extras(spec, pts, lon, left_hand, road_wid[k_road]) if fid not in jinternal else []   # in a junction: none
         if not ex:
@@ -6233,11 +6280,16 @@ def build_tile(frame, tx, ty, cells, elev, urban_fn=None, walks=None, bridges=No
                 pieces = [cp for p in clip_polyline(line, *box) for cp, _ in junctions.apply_cuts(p, jlines[fid])]
             else:
                 pieces = clip_polyline(line, *box)
+            rpm = props is not None and not walk and spec.cls in RPM_CLASSES and look["m"] in RPM_GROUPS
             for piece in pieces:
                 for run in cut_outside(piece, wb if walk else blockers, 0.5 if walk else 2.0):
+                    if rpm and len(run) >= 2:
+                        rpm_pieces.append((look["m"], np.asarray(run, np.float64)))
                     for c in split(densify(simplify(run))):
                         if len(c) >= 2:
                             chunks.append(_chunk(look, w, c))
+    if rpm_pieces:                              # raised pavement markers along them
+        props.extend(rpm_rows(frame, elev, rpm_pieces))
     if walks is not None:
         runs_near = join_walk_ends(runs_near, [(p2[:, :2], s2.width / 2) for _, s2, p2, _ in roads]
                                    + list(walk_cuts))       # (a cut's gap stays open: a driveway crosses it)
