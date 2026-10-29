@@ -229,6 +229,22 @@ do
     "driving: the first object made again, no flush (its cells under the engine's own budget)")
   for _ = 2, #gc.DEFS do gc.update(40) end
   T.check(gc.status().staged == nil and gc.status().remakes.stale == 1, 'all made again over frames')
+  -- a stale remake while driving with a moved tint keeps the materials in use (a new copy's first draw is the
+  -- ~120 ms pipeline build); the tint goes on at the next stop
+  gc.setTintEnabled(true)
+  gc.setTint({ 60, 140, 40 })
+  for _ = 1, #gc.DEFS do gc.update(0) end
+  local before2, matBefore = longObj(), longObj().fields.material
+  local nCopies = copies()
+  T.check(gc.setTint({ 160, 100, 50 }) == true, 'the colour moves again')
+  T.check(gc.noteBlock(384, 0, 1408, 1024, { x = 1280 - r + 10, y = 512 }) == true and gc.afterBlockChange(40) == true,
+    'late again while driving')
+  for _ = 1, #gc.DEFS do gc.update(40) end
+  T.check(longObj() ~= before2 and longObj().fields.material == matBefore and copies() == nCopies and gc.status().tintPending == true,
+    'driving: made again on the same materials, no new copy, the tint still waiting')
+  for _ = 1, #gc.DEFS + 1 do gc.update(0) end
+  T.check(longObj().fields.material ~= matBefore and copies() == nCopies + 1 and gc.status().tintPending == false,
+    'at a stop: the new colour, one new copy')
   gc.rebuild()
   T.check(gc.noteBlock(0, 0, 10, 10, { x = 5000, y = 5000 }) == false, 'after a rebuild (another frame): only recorded')
   gc.reset()

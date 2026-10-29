@@ -268,8 +268,10 @@ local function defsOf(d)
 end
 
 -- Makes definition i's GroundCover (an older one of that name deleted first). Returns its name, or nil (no such
--- stock definition, logged). Errors propagate (the callers pcall).
-local function makeObject(i)
+-- stock definition, logged). Errors propagate (the callers pcall). keepMaterial: the material it drew with before
+-- stays (a stale remake while driving: a new tinted copy's first draw is a ~120 ms frame, the pipeline built, so
+-- copies are only made at a stop or a rebuild).
+local function makeObject(i, keepMaterial)
   local d = M.DEFS[i]
   local defs, e = defsOf(d)
   if not defs then error(e) end
@@ -280,7 +282,12 @@ local function makeObject(i)
   end
   local name = M.PREFIX .. (d.name or d.src)
   local stock = d.tint and (def.material or def.Material)
-  local mat = type(stock) == 'string' and M.tintMaterial(d.source, stock) or nil
+  local mat = nil
+  if type(stock) == 'string' then
+    local old = keepMaterial and scenetree.findObject(name)
+    local cur = old and old:getField('material', 0)
+    mat = (type(cur) == 'string' and cur ~= '' and scenetree.findObject(cur)) and cur or M.tintMaterial(d.source, stock)
+  end
   -- one left by an earlier module instance (a GE Lua reload keeps the level's objects) may
   -- have older fields, e.g. GPU placement: made again from the current definition
   local old = scenetree.findObject(name)
@@ -326,14 +333,15 @@ end
 -- filling in round the car), so no frame carries them all.
 local function stepStaged(speed)
   local i = staged.i
+  local keep = staged.why == 'stale' and (speed or 0) > M.TINT_APPLY_V     -- (driving: no new tinted copies)
   local ok, err = pcall(function()
     local old = madeAt[i]
-    if old then
+    if old and not keep then
       local o = scenetree.findObject(old)
       if o then pcall(function() o:delete() end) end
       madeAt[i] = nil
     end
-    makeObject(i)
+    makeObject(i, keep)
   end)
   if not ok then
     lastError = 'grass remake: ' .. tostring(err)

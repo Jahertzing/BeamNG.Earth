@@ -150,7 +150,7 @@
     <li><b>The tint moved.</b> With "grass takes the ground's colour" on, a block whose mean photo colour differs by more than 8 % per channel from the last gets new tinted materials, and the objects are made again on them.</li>
     <li><b>Stale cells.</b> When the grass square (250 m at "far") reached past the old block's edge, cells there were generated empty, so the objects are made again. The next block arrives late at speed (0.7-1.7 s at 110-180 mph), so the car is often within 250 m of the edge.</li>
   </ul>
-  <p>The builder is running the confirming A/B now: D = grass off, E = grass on with the tint off. If D makes every swap a quiet one (Render ~15 ms), fix 1 is exactly this.</p>
+  <p><b>Confirmed by the builder's laps (16:21-16:50 MDT, 8 km each):</b> grass off took the swap hitches from 12 to 1 (4.5 ms of render); grass on with the tint off, 0. The ~120 ms is the first draw of each newly made tinted grass Material, when the engine builds its pipeline, not the remake itself. The perf thread's quick fix (661bcc3: coarser tint steps, so few copies) left 3 hitches a lap, one per new colour; fix 1 below moves those to a standstill.</p>
 
   <h2>3. The fixes, in build order</h2>
 
@@ -158,7 +158,7 @@
     <header><span class="num">1</span><h3>No grass rebuild at a block change</h3><span class="meta">block swaps · 96 hitches → 0</span></header>
     <ul>
       <li><b>Tint changes wait.</b> A moved tint is noted, not applied, while the car moves faster than a crawl; it goes on at the next stop, teleport or origin rebase (which rebuilds the grass anyway). The change threshold rises from 8 % to 15 %, so neighbouring fields stop toggling it.</li>
-      <li><b>No stale cells.</b> The next block is asked for as soon as the car passes the current block's centre, and its centre sits 384 m ahead at speed instead of 256 m, so the block always reaches past the grass radius ahead of the car. Where a block is still late, the stale remake runs without the flush, one object per frame, instead of all cells in one render.</li>
+      <li><b>Stale cells without a hitch.</b> A ready block now commits past 240 m from the centre without waiting for a calm frame (the wait held commits for up to 60 frames), which keeps the grass square inside the old block; where a block is still late, the stale remake runs one object per frame, flushed only when the car is slow, instead of all cells in one render. A centre further ahead at speed (384 m, 25 % fewer swaps) is a later step: the server mirrors the follow rule for its prefetch, so both sides change together.</li>
       <li><b>What is left</b> is the .ter apply (7 ms) plus about 10 ms of render: a 25-30 ms swap frame every 7 s, under the stutter line. The governor already isolates it.</li>
       <li>Verify: the builder's lap with swap_render_ms median ≤ 20 and no "ground block swap" hitch lines.</li>
     </ul>
