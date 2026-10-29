@@ -12,7 +12,7 @@ between a deck and the road it lands on (where the short ramps were), along the 
 the least change of height that keeps |a| under the class's limit, with the deck ends and junctions where they are;
 it reports how far it had to move the surface.
 
-    python tools/ride_probe.py [--only mousetrap_i70] [--smooth]
+    python tools/ride_probe.py [--only mousetrap_i70] [--smooth]       (several places: a process each)
 """
 import argparse
 import math
@@ -328,12 +328,21 @@ def main():
     a = ap.parse_args()
     global DECK_ONLY
     DECK_ONLY = a.deck_only
+    names = [n for n in PLACES if not a.only or n in a.only.split(",")]
+    if len(names) > 1:
+        # one process per place: a run of all of them in one held every place's map cells, elevation and lidar in its
+        # caches (12 GB beside a bake on Jeff's PC, 2026-10-29); each child exits with its own
+        import subprocess
+        flags = ["--cache-dir", a.cache_dir] + (["--smooth"] if a.smooth else []) + (["--deck-only"] if a.deck_only
+                                                                                       else [])
+        for name in names:
+            subprocess.run([sys.executable, os.path.abspath(__file__), "--only", name] + flags, check=False)
+        return
     import apppaths
     import cache
     cache.set_world(apppaths.saved_world_dir() or apppaths.default_world_dir(), a.cache_dir)
-    for name, (la, lo, r) in PLACES.items():
-        if a.only and name not in a.only.split(","):
-            continue
+    for name in names:
+        la, lo, r = PLACES[name]
         run(name, la, lo, r, a.cache_dir, a.smooth)
 
 
