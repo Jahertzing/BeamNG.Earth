@@ -52,6 +52,8 @@ M.SCHEMA = {
   -- our own colour grade on the tone mapped image (grade.lua): BeamNG 0.40 dropped the stock one
   colorGrade = { kind = 'enum', default = 'colorado', values = { 'off', 'natural', 'colorado', 'vivid' },
     label = 'Colour grade' },
+  -- the game's lighting tuned for a city (fidelity.lua): city-scale ambient occlusion with specular occlusion, sun shafts
+  renderFidelity = { kind = 'enum', default = 'on', values = { 'off', 'on' }, label = 'Render fidelity' },
   skyMode = { kind = 'enum', default = 'real', values = { 'real', 'manual' }, label = 'Sky' },
   clouds = { kind = 'bool', default = true, label = 'Clouds' },
   weatherMode = { kind = 'enum', default = 'real', values = { 'real', 'manual' }, label = 'Weather' },
@@ -118,7 +120,7 @@ M.SCHEMA = {
   updateDismissed = { kind = 'string', default = '', maxLen = 40, label = 'Update notice dismissed (version)' },
 }
 M.ORDER = { 'theDriveTime', 'theDriveAutodrive', 'rebaseDistance', 'viewDistanceMode', 'viewDistanceKm', 'hazeStrength',
-  'colorGrade', 'skyMode', 'clouds', 'weatherMode', 'realGravity', 'groundCover', 'groundCoverDensity', 'groundCoverDistance',
+  'colorGrade', 'renderFidelity', 'skyMode', 'clouds', 'weatherMode', 'realGravity', 'groundCover', 'groundCoverDensity', 'groundCoverDistance',
   'groundGrass', 'grassTint', 'grassCards', 'rocks', 'roads', 'cityGlow', 'nightAmbient', 'aiTraffic', 'trafficPopulation', 'parkedCars', 'streetLife', 'staticCars', 'drcog', 'lidarHeights', 'dashboardSatellite', 'hudVisible', 'statusBar',
   'placeNamesOnline', 'creditsVisible', 'beammpOnLaunch',
   'creditsCorner', 'creditsSize', 'cacheCapGb', 'devOutlineKm', 'devMapKm' }
@@ -338,6 +340,7 @@ M.APPLY = {
   end,
   hazeStrength = function(v) haze.setStrength(v) end,
   colorGrade = function(v) grade.setMode(v) end,
+  renderFidelity = function(v) require('beamngEarth/fidelity').setMode(v) end,
 }
 
 function M.apply(key)

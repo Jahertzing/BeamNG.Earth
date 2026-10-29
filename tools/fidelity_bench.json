@@ -1,0 +1,35 @@
+{
+ "version": 1,
+ "about": "Render fidelity views (tools/probe_look.py with fidelity_variants.json): street-level AO and glass at midday from the facade shots (research/shots/recess set4), and sun shafts looking into a low sun",
+ "defaults": {
+  "date": "2026-10-20",
+  "hour": 13.5,
+  "weather": "clear",
+  "views": [
+   {"name": "ground", "agl": 1.7, "pitch": 0, "fov": 70}
+  ]
+ },
+ "places": [
+  {"id": "fd_16th", "name": "16th Street Mall, towers and the mall street wall", "lat": 39.7445, "lon": -104.992,
+   "views": [{"name": "mall_wall", "lat": 39.7459329, "lon": -104.9905627, "agl": 1.7, "heading": 67.6, "pitch": 26.0, "fov": 75.0}],
+   "group": "fidelity", "tags": ["ao", "glass"]},
+  {"id": "fd_lodo", "name": "LoDo brick block", "lat": 39.753, "lon": -105.0,
+   "views": [{"name": "lodo_block", "lat": 39.7539074, "lon": -104.9983222, "agl": 1.7, "heading": 337.3, "pitch": 22.0, "fov": 75.0}],
+   "group": "fidelity", "tags": ["ao", "glass"]},
+  {"id": "fd_frederick", "name": "Frederick houses and street trees", "lat": 40.0992, "lon": -104.9372,
+   "views": [{"name": "house_front", "lat": 40.0999216, "lon": -104.9354261, "agl": 1.7, "heading": 20.9, "pitch": 8.0, "fov": 70.0}],
+   "group": "fidelity", "tags": ["ao"]},
+  {"id": "fd_castle_rock", "name": "Castle Rock main street", "lat": 39.3722, "lon": -104.8561,
+   "views": [{"name": "main_street", "lat": 39.3718825, "lon": -104.8587136, "agl": 1.7, "heading": 294.3, "pitch": 15.0, "fov": 70.0}],
+   "group": "fidelity", "tags": ["ao", "glass"]},
+  {"id": "sh_colfax", "name": "Colfax looking west into the low sun", "lat": 39.7402, "lon": -104.98, "hour": 16.6,
+   "views": [{"name": "colfax_west", "lat": 39.74025, "lon": -104.9800, "agl": 1.7, "heading": 262.0, "pitch": 4.0, "fov": 70.0}],
+   "group": "fidelity", "tags": ["shafts"]},
+  {"id": "sh_frederick", "name": "Frederick houses and trees, the sun behind them", "lat": 40.0992, "lon": -104.9372, "hour": 16.6,
+   "views": [{"name": "trees_west", "lat": 40.0996565, "lon": -104.9350391, "agl": 1.7, "heading": 250.0, "pitch": 5.0, "fov": 70.0}],
+   "group": "fidelity", "tags": ["shafts"]},
+  {"id": "sh_castle_rock", "name": "Castle Rock main street looking west at golden hour", "lat": 39.3722, "lon": -104.8561, "hour": 16.6,
+   "views": [{"name": "main_west", "lat": 39.3718825, "lon": -104.8587136, "agl": 1.7, "heading": 250.0, "pitch": 5.0, "fov": 70.0}],
+   "group": "fidelity", "tags": ["shafts"]}
+ ]
+}

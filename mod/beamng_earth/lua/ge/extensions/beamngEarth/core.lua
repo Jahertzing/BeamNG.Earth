@@ -1921,6 +1921,9 @@ local function onUpdate(dtReal, dtSim)
     if not okH and not st.hazeWarned then st.hazeWarned = true; log('W', 'beamngEarth', 'haze: ' .. tostring(errH)) end
     local okG, errG = pcall(look.grade.update, st.inOurLevel)
     if not okG then look.grade.setMode('off'); log('W', 'beamngEarth', 'grade: ' .. tostring(errG) .. '; off this session') end
+    local fidelity = require('beamngEarth/fidelity')
+    local okF, errF = pcall(fidelity.update, st.inOurLevel)
+    if not okF then fidelity.setMode('off'); log('W', 'beamngEarth', 'fidelity: ' .. tostring(errF) .. '; off this session') end
   end
   local stg = rawget(_G, 'beamngEarth_settings')
   if stg and stg.redirectBigMap then stg.redirectBigMap(st.inOurLevel) end
@@ -2181,6 +2184,7 @@ local function onClientEndMission()
   postfx.restore()
   require('beamngEarth/haze').restore()
   require('beamngEarth/grade').restore()
+  require('beamngEarth/fidelity').restore()
   pcall(terrainpatch.clear)
   pcall(gasstations.reset)
   pcall(farcars.reset)
@@ -2247,6 +2251,7 @@ local function onExtensionUnloaded()
   horizon.restoreSky()
   require('beamngEarth/haze').restore()
   require('beamngEarth/grade').restore()
+  require('beamngEarth/fidelity').restore()
   if st.visibleDistance and horizon.setVisibleDistance(VISIBLE_DISTANCE) then st.visibleDistance = nil end
 end
 
