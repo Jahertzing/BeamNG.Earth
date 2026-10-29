@@ -46,6 +46,19 @@ local lastKind = 'map'
 local wallMs = require('beamngEarth/stopwatch').clock()
 local function now() return wallMs() / 1000 end
 
+-- The display's refresh period (ms): the pacing numbers' frame budget (getDesktopVideoMode; 60 Hz when unknown).
+M.BUDGET_MS = nil
+local function budgetMs()
+  if M.BUDGET_MS then return M.BUDGET_MS end
+  local hz = 60
+  pcall(function()
+    local vm = rawget(_G, 'getDesktopVideoMode') and getDesktopVideoMode()
+    if type(vm) == 'table' and tonumber(vm.refreshRate) and vm.refreshRate > 0 then hz = vm.refreshRate end
+  end)
+  M.BUDGET_MS = 1000 / hz
+  return M.BUDGET_MS
+end
+
 local function stats(dts)
   local n = #dts
   if n == 0 then return { frames = 0 } end
@@ -57,6 +70,18 @@ local function stats(dts)
   local over = { 33, 50, 100 }
   local res = { frames = n, avgMs = sum / n, fps = n / (sum / 1000), p50 = pct(0.5), p95 = pct(0.95),
     p99 = pct(0.99), maxMs = mx }
+  -- pacing (Jeff, 2026-10-29: the frame rate "60, 80, 50, 80, 90, 70"): the share of frames within the refresh's
+  -- budget, the share at two refreshes or more (vsync: a frame over the budget waits for the next refresh), the mean
+  -- change from one frame to the next
+  local budget = budgetMs()
+  local within, two, jit = 0, 0, 0
+  for i = 1, n do
+    if dts[i] <= budget + 0.5 then within = within + 1 end
+    if dts[i] >= 2 * budget - 1 then two = two + 1 end
+    if i > 1 then jit = jit + math.abs(dts[i] - dts[i - 1]) end
+  end
+  res.budgetMs, res.withinBudget, res.twoRefresh = budget, within / n, two / n
+  res.jitterMs = n > 1 and jit / (n - 1) or 0
   for _, o in ipairs(over) do
     local c = 0
     for i = 1, n do if dts[i] > o then c = c + 1 end end

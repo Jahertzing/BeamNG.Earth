@@ -24,9 +24,20 @@ M.MIN_FPS = 12              -- a usual rate below this (a weak machine, a menu):
 M.SUMMARY_S = 60
 M.HITCH_GAP_S = 2           -- hitch lines at most this often (the ones between are counted into the next)
 M.ENGINE_EVERY = 5          -- the engine's breakdown sampled every this many frames for the window means
+-- Stutters (2026-10-29: 240 frames of 50-100 ms on Jeff's 36-minute drive, 15-21 a minute at speed, and the minute
+-- line named only the engine's subsystem of each: "Lua" said nothing about which part of the mod). The mod's largest
+-- part in each stutter of PART_MIN_MS or more is counted ("stutter parts: roads 4 (38 ms)"), and the first
+-- STUTTER_LINES a minute get a line of their own with the parts and what the mod was doing, as the hitches have.
+M.STUTTER_LINES = 3
+M.PART_MIN_MS = 5
+-- Pacing (Jeff, 2026-10-29: the frame rate "60, 80, 50, 80, 90, 70, over and over"): the minute line's share of
+-- frames within the display's refresh period (BUDGET_MS, from M.setRefresh), the share that took two refreshes or
+-- more (vsync: a frame over the budget waits for the next refresh), and the mean change from one frame to the next.
+M.REFRESH_HZ = 60
+M.BUDGET_MS = 1000 / 60
 
 local w, base, frames, sumMin, hitchesMin, worstMin, lastHitchAt, skipped, drop, summaryAt
-local stuttersMin, causesMin, reloadsAt
+local stuttersMin, causesMin, reloadsAt, partsMin, stutterLines, prevMs, jitterSum, jitterN
 
 function M.reset()
   w = { t0 = nil, n = 0, ms = 0, worst = {}, mod = {}, eng = {}, engN = 0, k = 0 }
@@ -34,8 +45,23 @@ function M.reset()
   frames, sumMin, hitchesMin, worstMin = {}, 0, 0, nil
   lastHitchAt, skipped, drop, summaryAt = -math.huge, 0, nil, nil
   stuttersMin, causesMin, reloadsAt = 0, { stutter = {}, hitch = {} }, nil
+  partsMin, stutterLines, prevMs, jitterSum, jitterN = {}, 0, nil, 0, 0
 end
 M.reset()
+
+-- The display's refresh (Hz): the pacing numbers' frame budget.
+function M.setRefresh(hz)
+  hz = tonumber(hz)
+  if hz and hz > 0 then M.REFRESH_HZ, M.BUDGET_MS = hz, 1000 / hz end
+  return M.BUDGET_MS
+end
+
+-- The largest numeric entry of a {name = ms} table: name, ms (nil when none).
+local function largest(t)
+  local bk, best = nil, 0
+  for k, v in pairs(t or {}) do if type(v) == 'number' and v > best then best, bk = v, k end end
+  return bk, best
+end
 
 local function r1(v) return math.floor(v * 10 + 0.5) / 10 end
 local function r0(v) return math.floor(v + 0.5) end
@@ -117,7 +143,26 @@ function M.frame(ms, now, ctx, hitch, mod, engine)
     stuttersMin = stuttersMin + 1
     local n = causeName(M.cause(ms, hitch))
     causesMin.stutter[n] = (causesMin.stutter[n] or 0) + 1
+    local pk, pv = largest(hitch and hitch.mod)       -- (the mod's largest part in it, whatever the cause names)
+    if pk and pv >= M.PART_MIN_MS then
+      local p = partsMin[pk] or { n = 0, max = 0 }
+      p.n, p.max = p.n + 1, math.max(p.max, pv)
+      partsMin[pk] = p
+    end
+    if stutterLines < M.STUTTER_LINES then
+      stutterLines = stutterLines + 1
+      local c = ctx and ctx() or {}
+      local line = string.format('perf stutter %d ms %s', r0(ms), where(c))
+      if hitch and next(hitch.mod or {}) then line = line .. ' | mod: ' .. top(hitch.mod, 4, 1) end
+      if hitch and next(hitch.engine or {}) then line = line .. ' | engine: ' .. top(hitch.engine, 4, 1) end
+      if hitch and next(hitch.gpu or {}) then line = line .. ' | gpu: ' .. top(hitch.gpu, 4, 1) end
+      if c.doing and c.doing ~= '' then line = line .. ' | doing: ' .. c.doing end
+      out[#out + 1] = line
+    end
   end
+  -- pacing: the change from the last frame
+  if prevMs then jitterSum, jitterN = jitterSum + math.abs(ms - prevMs), jitterN + 1 end
+  prevMs = ms
   -- hitches
   if ms >= M.HITCH_MS then
     hitchesMin = hitchesMin + 1
@@ -129,6 +174,7 @@ function M.frame(ms, now, ctx, hitch, mod, engine)
       local line = string.format('perf hitch %d ms %s', r0(ms), where(c))
       if hitch and next(hitch.mod or {}) then line = line .. ' | mod: ' .. top(hitch.mod, 5, 1) end
       if hitch and next(hitch.engine or {}) then line = line .. ' | engine: ' .. top(hitch.engine, 5, 1) end
+      if hitch and next(hitch.gpu or {}) then line = line .. ' | gpu: ' .. top(hitch.gpu, 4, 1) end
       if M.cause(ms, hitch) == M.UNMEASURED then line = line .. ' | ' .. M.UNMEASURED end
       if c.doing and c.doing ~= '' then line = line .. ' | doing: ' .. c.doing end
       if skipped > 0 then line = line .. string.format(' | (%d more hitches since the last line)', skipped) end
@@ -205,6 +251,23 @@ function M.frame(ms, now, ctx, hitch, mod, engine)
     line = line .. ' ' .. where(c)
     if hitchesMin > 0 then line = line .. ' | hitches by cause: ' .. counts(causesMin.hitch, 5) end
     if stuttersMin > 0 then line = line .. ' | stutters by cause: ' .. counts(causesMin.stutter, 5) end
+    if next(partsMin) then
+      local arr = {}
+      for k, p in pairs(partsMin) do arr[#arr + 1] = { k, p.n, p.max } end
+      table.sort(arr, function(a, b) return a[2] > b[2] or (a[2] == b[2] and a[1] < b[1]) end)
+      local sp = {}
+      for i = 1, math.min(5, #arr) do sp[i] = string.format('%s %d (%d ms)', arr[i][1], arr[i][2], r0(arr[i][3])) end
+      line = line .. ' | stutter parts: ' .. table.concat(sp, ', ')
+    end
+    do                              -- pacing: within the refresh's budget, two refreshes or more, frame-to-frame change
+      local within, two = 0, 0
+      for _, v in ipairs(frames) do
+        if v <= M.BUDGET_MS + 0.5 then within = within + 1 end
+        if v >= 2 * M.BUDGET_MS - 1 then two = two + 1 end
+      end
+      line = line .. string.format(' | pacing: %d%% within %.1f ms, %d%% at 2+ refreshes, jitter %.1f ms',
+        r0(100 * within / #frames), M.BUDGET_MS, r0(100 * two / #frames), jitterN > 0 and jitterSum / jitterN or 0)
+    end
     if c.extra and c.extra ~= '' then line = line .. ' | ' .. c.extra end
     if c.reloads and reloadsAt then line = line .. string.format(', %d collision rebuilds', c.reloads - reloadsAt) end
     local okP, pop = pcall(c.popin or function() return '' end)
@@ -215,6 +278,7 @@ function M.frame(ms, now, ctx, hitch, mod, engine)
     out[#out + 1] = line
     frames, sumMin, hitchesMin, worstMin, summaryAt = {}, 0, 0, nil, now
     stuttersMin, causesMin = 0, { stutter = {}, hitch = {} }
+    partsMin, stutterLines, jitterSum, jitterN = {}, 0, 0, 0
   end
   return out
 end

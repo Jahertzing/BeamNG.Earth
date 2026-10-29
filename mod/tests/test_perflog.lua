@@ -76,4 +76,41 @@ T.check(P.cause(1600, { mod = {}, engine = { FPSLimiter = 13 } }) == P.UNMEASURE
   'a 1.6 s frame with 13 ms measured: not blamed on that part')
 T.check(P.cause(300, { mod = { terrainCommit = 280 }, engine = {} }) == 'terrainCommit 280', 'a part that explains it: named')
 T.check(#P.frame(0 / 0, now, ctx) == 0 and #P.frame(-1, now, ctx) == 0, 'bad frame times ignored')
+
+-- stutters named (2026-10-29): the mod's largest part of each 50-100 ms frame, the first few a minute as lines with
+-- the parts and what the mod was doing; the GPU pass timings when the engine gives them; the pacing numbers
+lines = {}
+P.reset()
+now = 0
+ctx = function() return { lat = 39.7, lon = -105, mph = 120, doing = 'tree tiles 900 pending' } end
+P.setRefresh(85)
+run(5, 1000 / 85)
+for i = 1, 5 do
+  now = now + 0.07
+  for _, l in ipairs(P.frame(70, now, ctx, { mod = { roads = 38 + i, trees = 4 }, engine = { Lua = 52 } }, nil, nil)) do
+    lines[#lines + 1] = l
+  end
+end
+local sl = find('perf stutter')
+T.check(#sl == P.STUTTER_LINES and sl[1]:find('^perf stutter 70 ms at 39.7') ~= nil and sl[1]:find('mod: roads 39', 1, true)
+  and sl[1]:find('engine: Lua 52', 1, true) and sl[1]:find('doing: tree tiles', 1, true),
+  'stutter lines: the first ' .. P.STUTTER_LINES .. ' a minute, with the parts and the doing')
+now = now + 0.2
+lines[#lines + 1] = P.frame(200, now, ctx, { mod = {}, engine = { Render = 150 }, gpu = { Shadows = 41.2, Main = 9 } }, nil, nil)[1]
+local hl = find('perf hitch')
+T.check(#hl == 1 and hl[1]:find('gpu: Shadows 41.2, Main 9', 1, true), 'a hitch line carries the GPU pass timings')
+run(61, 1000 / 85)
+m = find('perf minute')
+T.check(#m >= 1 and m[#m]:find('stutter parts: roads 5 (43 ms)', 1, true), "the minute line: the mod's largest part of each stutter, its worst: " .. tostring(m[#m]))
+T.check(m[#m]:find('pacing: %d+%% within 11.8 ms, %d+%% at 2%+ refreshes, jitter [%d.]+ ms') ~= nil, "pacing: within the refresh's budget, two refreshes or more, jitter")
+local within, two = m[#m]:match('pacing: (%d+)%% within 11.8 ms, (%d+)%% at 2%+ refreshes')
+T.check(tonumber(within) >= 99 and tonumber(two) == 0, 'steady 85 fps: all within, none at two refreshes (' .. tostring(within) .. ', ' .. tostring(two) .. ')')
+lines = {}
+run(30, 1000 / 85)
+for _ = 1, 100 do now = now + 0.0235; P.frame(23.5, now, ctx, nil, nil, nil); now = now + 0.0118; P.frame(11.8, now, ctx, nil, nil, nil) end
+run(61, 1000 / 85)
+m = find('perf minute')
+within, two = m[#m]:match('pacing: (%d+)%% within 11.8 ms, (%d+)%% at 2%+ refreshes')
+local jit = m[#m]:match('jitter ([%d.]+) ms')
+T.check(tonumber(two) >= 1 and tonumber(jit) > 0.3, 'vsync misses (23.5 ms frames): counted at two refreshes, the jitter up (' .. tostring(two) .. '%, ' .. tostring(jit) .. ' ms)')
 T.done('test_perflog')

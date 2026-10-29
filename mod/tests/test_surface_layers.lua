@@ -126,12 +126,26 @@ do
   T.check(gc.setTint({ 142, 121, 80 }) == false, 'a small change: the same copies')
   T.check(gc.setTint(nil) == false and gc.status().tint[1] == 142, 'none in the message keeps the last')
   local fl0, before = flushes, longObj()
-  T.check(gc.setTint({ 90, 120, 60 }) == true and longObj() == before, 'a moved colour: waits for the block change')
-  T.check(gc.afterBlockChange() == true and flushes == fl0 + 1 and longObj() ~= before, 'block change: made again, generated now')
+  T.check(gc.setTint({ 90, 120, 60 }) == true and longObj() == before, 'a moved colour: waits (tintPending)')
+  -- a block change while driving: the flush alone, nothing made again in that frame (the remake was the hitching
+  -- half of the block swaps on Jeff's drive, 2026-10-29); the tint waits for the car to slow down
+  T.check(gc.afterBlockChange(30) == true and flushes == fl0 + 1 and longObj() == before
+    and gc.status().tintPending == true and gc.lastChange == 'tint moved: waits for a stop',
+    'block change at speed: flushed, the tint waits (' .. tostring(gc.lastChange) .. ')')
+  gc.update(30)
+  T.check(longObj() == before and gc.status().staged == nil, 'still driving: nothing made again')
+  gc.update(0)
+  T.check(gc.status().staged == 'tint' and gc.status().tintPending == false and flushes == fl0 + 2,
+    'at a stop: the remake starts, one object a frame, each flushed')
+  for _ = 2, #gc.DEFS do gc.update(0) end
+  T.check(gc.status().staged == nil and longObj() ~= before and flushes == fl0 + 1 + #gc.DEFS,
+    'all objects made again over ' .. #gc.DEFS .. ' frames')
   T.check(copies() == made + 1, 'one new copy (' .. copies() .. ')')
   gc.setTint({ 142, 121, 80 })
-  gc.afterBlockChange()
-  T.check(copies() == made + 1, 'back to an earlier colour: its copy re-used')
+  gc.afterBlockChange(0)
+  for _ = 1, #gc.DEFS do gc.update(0) end
+  T.check(copies() == made + 1 and gc.status().staged == nil, 'back to an earlier colour: its copy re-used')
+  T.check(gc.setTint({ 90, 120, 60 }) == true and gc.setTint({ 142, 121, 80 }) == false, 'a colour that moved back drops the pending remake')
   gc.setTintEnabled(false)
   T.check(longObj().fields.material == 'm_long_grass_distant' and mLong.fields.baseColorFactor == '0.9 0.95 0.8 1',
     'tint off: the stock material again, untouched')
@@ -150,7 +164,7 @@ do
   end
   T.check(gc.status().objects == #gc.DEFS, 'one object per definition')
   local fl1 = flushes
-  T.check(gc.afterBlockChange() == true and flushes == fl1 + 1, 'a block change rebuilds the grass in the same tick')
+  T.check(gc.afterBlockChange() == true and flushes == fl1 + 1 and gc.lastChange == 'quiet', 'a quiet block change flushes the grass in the same tick')
   -- a GE Lua reload: the module starts over, the level's objects stay (here with an old field)
   o.fields.useNewPlacementGpu = '1'
   local matLoads, realLoad = {}, _G.loadJsonMaterialsFile
@@ -206,8 +220,15 @@ do
   gc.afterBlockChange()
   T.check(scenetree.findObject(gc.PREFIX .. gc.DEFS[1].src) == o1 and flushes == fl2 + 1, 'on time: the same objects, flushed')
   T.check(gc.noteBlock(256, 0, 1280, 1024, { x = 1152 - r + 10, y = 512 }) == true, 'late: the grass reached past the old block')
-  gc.afterBlockChange()
-  T.check(scenetree.findObject(gc.PREFIX .. gc.DEFS[1].src) ~= o1 and gc.status().staleRemakes == 1, 'late: made again')
+  local fl3 = flushes
+  gc.afterBlockChange(40)
+  T.check(scenetree.findObject(gc.PREFIX .. gc.DEFS[1].src) == o1 and gc.status().staleRemakes == 1
+    and gc.status().staged == 'stale' and flushes == fl3 + 1, 'late: a staged remake starts, nothing made again in the swap frame')
+  gc.update(40)
+  T.check(scenetree.findObject(gc.PREFIX .. gc.DEFS[1].src) ~= o1 and flushes == fl3 + 1,
+    "driving: the first object made again, no flush (its cells under the engine's own budget)")
+  for _ = 2, #gc.DEFS do gc.update(40) end
+  T.check(gc.status().staged == nil and gc.status().remakes.stale == 1, 'all made again over frames')
   gc.rebuild()
   T.check(gc.noteBlock(0, 0, 10, 10, { x = 5000, y = 5000 }) == false, 'after a rebuild (another frame): only recorded')
   gc.reset()
