@@ -92,7 +92,7 @@ local lastRestore = -math.huge
 function M.onTeleport()
   scatterPending = true
   local gp = gameplay_parking
-  if restore then                        -- (another teleport mid-way: the amount from before the first)
+  if restore and gp then                 -- (another teleport mid-way: the amount from before the first)
     heldActive, restore = restore.final, nil
     pcall(gp.setActiveAmount, 0)
   elseif gp and gp.getState() and not heldActive then
