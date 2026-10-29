@@ -1,0 +1,360 @@
+<title>Ground Pipeline Plan</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;600;700;800&family=Source+Serif+4:opsz,wght@8..60,400;8..60,600&family=JetBrains+Mono:wght@400;500&display=swap">
+<style>
+/* Layout: one reading column (~70ch) with full-width tables and two diagrams; a survey-sheet feel: contour teal + marker amber on a cool paper */
+:root {
+  --paper: #f4f6f3;
+  --sheet: #ffffff;
+  --ink: #18211f;
+  --ink-2: #4a5754;
+  --rule: #d5dcd8;
+  --teal: #0f6a66;
+  --teal-soft: #dcece9;
+  --amber: #a8640f;
+  --amber-soft: #f6ead6;
+  --bad: #a3361f;
+  --good: #2c6e2f;
+  --f-display: "Archivo", "Arial Narrow", system-ui, sans-serif;
+  --f-body: "Source Serif 4", Georgia, "Times New Roman", serif;
+  --f-mono: "JetBrains Mono", ui-monospace, "Cascadia Mono", Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --paper: #0f1514; --sheet: #151d1b; --ink: #e2e9e6; --ink-2: #a3b1ad; --rule: #2c3936;
+    --teal: #5cc2b8; --teal-soft: #173431; --amber: #e2a54f; --amber-soft: #352915; --bad: #e57a62; --good: #7cc77f;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --paper: #0f1514; --sheet: #151d1b; --ink: #e2e9e6; --ink-2: #a3b1ad; --rule: #2c3936;
+  --teal: #5cc2b8; --teal-soft: #173431; --amber: #e2a54f; --amber-soft: #352915; --bad: #e57a62; --good: #7cc77f;
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+body {
+  background: var(--paper); color: var(--ink); font-family: var(--f-body); font-size: 17px; line-height: 1.6;
+  padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px));
+  padding-block: 32px 64px;
+}
+main { max-width: 980px; margin: 0 auto; display: grid; gap: 40px; }
+.col { max-width: 72ch; }
+h1, h2, h3 { font-family: var(--f-display); line-height: 1.15; text-wrap: balance; margin: 0; }
+h1 { font-size: clamp(2rem, 5vw, 3rem); font-weight: 800; letter-spacing: -0.01em; }
+h2 { font-size: 1.55rem; font-weight: 700; display: flex; gap: 12px; align-items: baseline; }
+h2 .n { font-family: var(--f-mono); font-size: 0.85rem; color: var(--teal); font-weight: 500; }
+h3 { font-size: 1.1rem; font-weight: 600; }
+p { margin: 0; }
+section { display: grid; gap: 16px; }
+.eyebrow { font-family: var(--f-mono); font-size: 0.78rem; letter-spacing: 0.08em; text-transform: uppercase; color: var(--ink-2); }
+.lede { font-size: 1.15rem; }
+.answer { background: var(--sheet); border: 1px solid var(--rule); border-left: 4px solid var(--teal); padding: 20px 24px; display: grid; gap: 12px; }
+.answer ul { margin: 0; padding-left: 1.2em; display: grid; gap: 8px; }
+code, .mono { font-family: var(--f-mono); font-size: 0.86em; }
+code { background: var(--teal-soft); padding: 0.05em 0.35em; border-radius: 3px; }
+.tablewrap { overflow-x: auto; border: 1px solid var(--rule); background: var(--sheet); }
+table { border-collapse: collapse; width: 100%; font-size: 0.92rem; line-height: 1.45; }
+th, td { text-align: left; vertical-align: top; padding: 10px 12px; border-bottom: 1px solid var(--rule); }
+th { font-family: var(--f-display); font-weight: 600; font-size: 0.82rem; letter-spacing: 0.03em; text-transform: uppercase; color: var(--ink-2); background: var(--paper); }
+tr:last-child td { border-bottom: 0; }
+td.k { font-weight: 600; min-width: 150px; }
+.num { font-variant-numeric: tabular-nums; font-family: var(--f-mono); font-size: 0.86em; }
+.pill { display: inline-block; font-family: var(--f-mono); font-size: 0.72rem; padding: 1px 7px; border-radius: 999px; border: 1px solid currentColor; white-space: nowrap; }
+.yes { color: var(--good); } .no { color: var(--bad); } .maybe { color: var(--amber); }
+figure { margin: 0; background: var(--sheet); border: 1px solid var(--rule); padding: 16px; overflow-x: auto; }
+figcaption { font-size: 0.85rem; color: var(--ink-2); margin-top: 8px; }
+svg text { font-family: var(--f-mono); }
+.stages { display: grid; gap: 14px; }
+.stage { background: var(--sheet); border: 1px solid var(--rule); padding: 16px 18px; display: grid; gap: 8px; }
+.stage header { display: flex; flex-wrap: wrap; gap: 8px 14px; align-items: baseline; }
+.stage .tag { font-family: var(--f-mono); font-size: 0.78rem; color: var(--amber); }
+.note { background: var(--amber-soft); padding: 14px 18px; border-radius: 4px; }
+ul.tight { margin: 0; padding-left: 1.2em; display: grid; gap: 6px; }
+.sources { font-size: 0.85rem; color: var(--ink-2); }
+.sources a { color: var(--teal); }
+a { color: var(--teal); }
+@media (max-width: 560px) { body { font-size: 16px; } th, td { padding: 8px; } }
+</style>
+
+<main>
+  <header style="display:grid;gap:10px">
+    <div class="eyebrow">BeamNG.Earth · terrain research · 28 Oct 2026 (MDT)</div>
+    <h1>Ground Pipeline Plan</h1>
+    <p class="lede col">Jeff asked whether there is a better way to generate and bake the ground. This page maps how the fork builds it today, why its known problems happen, what big open-world games and sims do instead, what BeamNG 0.40 lets a mod do, and a staged plan.</p>
+  </header>
+
+  <div class="answer col">
+    <h3>The short answer</h3>
+    <p>Yes. The biggest gain is not a new renderer. It is changing <em>where and when</em> the ground is computed.</p>
+    <ul>
+      <li><strong>Build the ground once, in world space.</strong> Today every block, road plan and far tile is built in the frame of whichever anchor the car is near, so the same ground is built again for each anchor, and a bake depends on the path driven. Studios keep the data in a fixed world grid and apply the origin shift only when drawing.</li>
+      <li><strong>Split it into layers that each have their own version.</strong> Elevation, the road network, the graded ground and the photo should be separate stages with their own cache keys, like Unreal's landscape edit layers. Then a change to signs or buildings stops rebaking the terrain.</li>
+      <li><strong>Make the road profile the master.</strong> Solve each road's height along its whole length, bridges included, with real design limits on grade and on how fast the grade may change. The terrain then conforms to the roads. That removes the short ramps at bridge ends and the humps under overpasses at their source, where today they are patched one rule at a time.</li>
+    </ul>
+    <p>BeamNG limits the rendering side more than the data side: one colliding terrain block, no virtual texturing, and a terrain shader whose detail stops at 250 m. Within those limits the block edge can be made far less visible by giving both sides of it the same photo and material treatment.</p>
+  </div>
+
+  <section>
+    <h2><span class="n">1</span>How the ground is built today</h2>
+    <p class="col">Everything is computed by the companion server (Python, plus the <code>earthfast</code> native module) and handed to the game as files. In "detail" mode, the mode <code>start.py</code> uses, the car drives on one TerrainBlock that is also drawn, and mesh tiles draw everything beyond it.</p>
+    <figure>
+      <svg viewBox="0 0 940 300" width="940" height="300" role="img" aria-label="Today's pipeline: data sources feed per-anchor stages that produce the block, road tiles and far tiles">
+        <defs><marker id="ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="var(--ink-2)"/></marker></defs>
+        <g font-size="12" fill="var(--ink)">
+          <rect x="10" y="20" width="170" height="250" fill="var(--teal-soft)" stroke="var(--rule)"/>
+          <text x="22" y="44" font-weight="500">Data (world space)</text>
+          <text x="22" y="74" fill="var(--ink-2)">DEM: Mapterhorn z16,</text>
+          <text x="22" y="92" fill="var(--ink-2)">3DEP lidar (1 m)</text>
+          <text x="22" y="122" fill="var(--ink-2)">Imagery: NAIP / USGS,</text>
+          <text x="22" y="140" fill="var(--ink-2)">EOX far away</text>
+          <text x="22" y="170" fill="var(--ink-2)">Overture + OSM roads,</text>
+          <text x="22" y="188" fill="var(--ink-2)">land cover, buildings</text>
+          <text x="22" y="218" fill="var(--ink-2)">CDOT / DRCOG tables</text>
+
+          <rect x="230" y="20" width="330" height="250" fill="var(--amber-soft)" stroke="var(--amber)" stroke-dasharray="5 4"/>
+          <text x="244" y="44" font-weight="500">Per anchor frame (rebuilt each anchor)</text>
+          <rect x="246" y="62" width="298" height="44" fill="var(--sheet)" stroke="var(--rule)"/>
+          <text x="258" y="82">Road plans per map cell</text>
+          <text x="258" y="98" fill="var(--ink-2)">grading.Grader: profiles, bridges, cuts</text>
+          <rect x="246" y="118" width="298" height="44" fill="var(--sheet)" stroke="var(--rule)"/>
+          <text x="258" y="138">elev(lat, lon) = DEM, sea, runways,</text>
+          <text x="258" y="154" fill="var(--ink-2)">road grading + 4 cm lift, arches</text>
+          <rect x="246" y="174" width="298" height="44" fill="var(--sheet)" stroke="var(--rule)"/>
+          <text x="258" y="194">Photos: imagery, de-shadow, seams,</text>
+          <text x="258" y="210" fill="var(--ink-2)">roofs filled, roads painted, rock</text>
+          <text x="246" y="246" fill="var(--ink-2)">cached by (kind, anchor, tile, ALL server code)</text>
+
+          <rect x="610" y="20" width="320" height="76" fill="var(--sheet)" stroke="var(--rule)"/>
+          <text x="622" y="44" font-weight="500">Physics + near block</text>
+          <text x="622" y="64" fill="var(--ink-2)">512² at 2 m (1 km), .ter swap per 128 m</text>
+          <text x="622" y="82" fill="var(--ink-2)">1024² BC7 photo, 10 land-cover layers</text>
+          <rect x="610" y="108" width="320" height="76" fill="var(--sheet)" stroke="var(--rule)"/>
+          <text x="622" y="132" font-weight="500">Road tiles (256 m)</text>
+          <text x="622" y="152" fill="var(--ink-2)">road, sidewalk and deck meshes,</text>
+          <text x="622" y="170" fill="var(--ink-2)">signs, barriers, navgraph</text>
+          <rect x="610" y="196" width="320" height="74" fill="var(--sheet)" stroke="var(--rule)"/>
+          <text x="622" y="220" font-weight="500">Far tiles L-1 to L10</text>
+          <text x="622" y="240" fill="var(--ink-2)">quadtree in the anchor plane, 64 cells,</text>
+          <text x="622" y="258" fill="var(--ink-2)">own DXT1 photo each; L1+ ungraded</text>
+        </g>
+        <g stroke="var(--ink-2)" stroke-width="1.5" fill="none" marker-end="url(#ah)">
+          <path d="M180 145 H226"/>
+          <path d="M560 84 H606"/><path d="M560 145 H606"/><path d="M560 232 H606"/>
+        </g>
+      </svg>
+      <figcaption>The dashed box is the problem: its work is tied to an anchor's frame, and its cache key is a hash of every server source file.</figcaption>
+    </figure>
+    <div class="tablewrap">
+      <table>
+        <tr><th>Piece</th><th>Today</th><th>Measured cost</th></tr>
+        <tr><td class="k">Physics + near ground</td><td>One TerrainBlock, 512² samples at 2 m, recentred on a 128 m grid by swapping a server-written <code>.ter</code>. Drawn in detail mode with a 1024² aerial photo (1 m per texel) packed straight into the game's BC7 cache, plus stock detail and macro textures per land-cover class.</td><td class="num">.ter swap 10–15 ms; block build 1.6–2.4 s (0.16 s grading with plans cached); 93 blocks in 96 s on the route</td></tr>
+        <tr><td class="k">Grading</td><td>Per anchor, per map cell: centrelines from the DEM every 2 m, Gaussian smoothed (σ 12 m), flat across the carriageway, 1:2 slopes back to the ground. Bridge decks interpolated between abutments; 6.5 m clearance over roads beneath; local fixes for approaches and dips.</td><td class="num">1.8 s per block cold</td></tr>
+        <tr><td class="k">Far field</td><td>Quadtree tiles in the anchor plane, levels L-1 (128 m) to L10 (262 km). L-1 and L0 are graded; L1+ are raw DEM. Each tile has its own photo (L-1: 256 px per 128 m, so 0.5 m per texel).</td><td class="num">~300 tiles per pose; after a rebase every tile is rebuilt in the new frame</td></tr>
+        <tr><td class="k">Bake</td><td>A headless car drives the routes; every item lands in the revisit cache, pinned in <code>world/bake</code>. "Generations" keep an older bake usable after a code change.</td><td class="num">375 km in 91 min with 2 servers; 0.8–2.7 of 24 cores busy; ~24 GB per bake (far geometry 9.1 GB)</td></tr>
+      </table>
+    </div>
+  </section>
+
+  <section>
+    <h2><span class="n">2</span>Why the known problems happen</h2>
+    <div class="tablewrap">
+      <table>
+        <tr><th>Symptom</th><th>Root cause</th><th>Fixed by</th></tr>
+        <tr><td class="k">Whole-route rebakes</td><td>The revisit key hashes every <code>.py</code> in <code>server/</code>. Terrain depends on grading, grading on <code>roads.py</code>, and <code>roads.py</code> pulls in most of the content code, so module-level keys can't separate them either.</td><td>Stage keys (target design, stage 1); quick win Q1 for the far geometry</td></tr>
+        <tr><td class="k">Same ground built many times</td><td>Blocks, road plans and far tiles are keyed by anchor latitude and longitude. The route has 7 anchors whose far fields overlap almost entirely, and a rebase rebuilds all ~300 visible tiles. It is also why the area processor needed a path-dependent anchor rule.</td><td>World-space tiles (stages 1 and 3)</td></tr>
+        <tr><td class="k">Short ramps at bridge ends</td><td>Deck heights are solved per bridge chain and the approach roads separately, from rules with fixed numbers. The highway beside a bridge end isn't raised to the deck's measured height, so the deck dives ~1 m in its last 10 m (the bridges thread's finding).</td><td>Road profile solver (stage 2); the bridges thread's local fix first</td></tr>
+        <tr><td class="k">Humps under overpasses</td><td>3DEP bare-earth DEMs remove bridge decks and interpolate under them, leaving 3–4 m hills. A separate dip rule then digs some highways lower under decks that already had headroom.</td><td>Solver with zero data weight under decks plus clearance constraints (stage 2)</td></tr>
+        <tr><td class="k">Far textures stuck in the main process</td><td>With de-shadow and seam matching on, far tile textures render in the server process, because those analyses live there. One interpreter lock serves the event loop, the photos and dispatch.</td><td>World photo pyramid built by worker processes (stage 3); bake thread's interim move</td></tr>
+        <tr><td class="k">~1.6 GB per worker process</td><td>Every process keeps its own decoded DEM tiles, imagery tiles, road plans, height chunks and map cells. Nine processes per server hold nine copies of overlapping data.</td><td>Shared memory-mapped tile store (Q3); far less recomputation in the target design</td></tr>
+        <tr><td class="k">Visible block edge</td><td>Two renderers meet about 250–500 m away. Inside: the terrain shader, a 1 m BC7 photo, a macro texture to 1500 m. Outside: mesh tiles with a 0.5 m DXT1 photo rendered separately, no macro layer, vertex normals.</td><td>One look across the seam (Q4), then a bigger drawn block as an A/B (stage 4)</td></tr>
+      </table>
+    </div>
+  </section>
+
+  <section>
+    <h2><span class="n">3</span>What AAA games and sims do</h2>
+    <p class="col">Public talks and docs agree on a handful of patterns. None of these studios builds terrain in a moving frame, and all of them separate slow offline enrichment from cheap runtime assembly.</p>
+    <div class="tablewrap">
+      <table>
+        <tr><th>Technique</th><th>Who</th><th>What it buys</th><th>Fit here</th></tr>
+        <tr><td class="k">Fixed world grid, streamed cells</td><td>Unreal World Partition; Decima's WorldData (2D maps streamed in sections, ~4 MB per km²); MSFS's global tiles of imagery, elevation and vector data</td><td>Data is built once per cell and reused for any camera position; the origin shift happens only at draw time</td><td><span class="pill yes">yes</span> core of the plan</td></tr>
+        <tr><td class="k">Non-destructive layer stacks</td><td>Unreal Landscape edit layers (base, sculpt, spline layers blended in order); Frostbite caches intermediate terrain results in a procedural virtual texture</td><td>Changing one layer recomposites only what it touches</td><td><span class="pill yes">yes</span> as cache stages</td></tr>
+        <tr><td class="k">Roads as splines that own the ground near them</td><td>Unreal landscape splines (cosine falloff on each side); Ghost Recon Wildlands' road tool and Houdini terrain carving; Outerra draws roads into each tile's height and material maps</td><td>Roads are smooth by construction; the terrain adapts, never the reverse</td><td><span class="pill yes">yes</span> stage 2</td></tr>
+        <tr><td class="k">Virtual or procedural texturing</td><td>Far Cry 4's adaptive virtual texture (10 km world at 10 texels per cm); Battlefield 3's procedural virtual texture with spline and quad decals; Unreal Runtime Virtual Texturing</td><td>Photo, roads and decals composited once into one texture that every distance samples the same way, so no material seam</td><td><span class="pill maybe">partly</span> no engine support; we bake per tile instead</td></tr>
+        <tr><td class="k">Continuous terrain LOD</td><td>Geometry clipmaps (Losasso and Hoppe), CDLOD (Strugar), Far Cry 5's GPU quadtree with stitching</td><td>No visible rings; levels morph into each other</td><td><span class="pill maybe">partly</span> TerrainBlock LOD is the engine's; our far field already crossfades</td></tr>
+        <tr><td class="k">Masks drive materials and placement</td><td>Frostbite terrain decoration by mask; Horizon Zero Dawn's GPU placement from density maps (deterministic, locally stable)</td><td>Detail and props follow data, not hand painting</td><td><span class="pill yes">already</span> land-cover layers, grass, cards</td></tr>
+        <tr><td class="k">Sharp rock as meshes on a smooth heightfield</td><td>BeamNG's own official maps; Far Cry 5's cliffs</td><td>Cliffs and boulders look right without noisy heightmaps</td><td><span class="pill yes">yes</span> already proven in the Oct 12 lab</td></tr>
+      </table>
+    </div>
+  </section>
+
+  <section>
+    <h2><span class="n">4</span>What BeamNG 0.40 lets a mod do</h2>
+    <p class="col">From the fork's own probes (Oct 9–12), the game's shipped shader sources, and the look thread's custom post effect.</p>
+    <div class="tablewrap">
+      <table>
+        <tr><th>Capability</th><th></th><th>Detail</th></tr>
+        <tr><td class="k">One colliding TerrainBlock</td><td><span class="pill yes">yes</span></td><td>Flat, axis-aligned, at most 8192². Only the first block collides. Creating a second block while a car exists drops the car through the ground. Collision follows a <code>.ter</code> swap or <code>setHeight</code> edit by the next frame without <code>reloadCollision</code>.</td></tr>
+        <tr><td class="k">Bigger block</td><td><span class="pill maybe">costly</span></td><td><code>.ter</code> swap: 512² 10–15 ms, 1024² 26–38 ms, 2048² ~92 ms on the main thread. Rendering is cheap (+0.5 ms for 4096² at 1 m).</td></tr>
+        <tr><td class="k">Extra render-only blocks</td><td><span class="pill maybe">untested</span></td><td>Blocks defined in the level file load with a car present and draw, but never collide. Their photo didn't show in the Oct 12 test, cause unknown.</td></tr>
+        <tr><td class="k">Terrain materials</td><td><span class="pill yes">yes</span></td><td>Up to 32 materials, 4 per pixel, each with base, macro and detail textures and height blending. Detail is cut at <code>min(250 m, …)</code> and macro at <code>min(1000 m, …)</code> in <code>terrainImpl.hlsl</code>. Texture-set slot sizes are fixed when the level loads.</td></tr>
+        <tr><td class="k">Our own shaders</td><td><span class="pill maybe">plausible</span></td><td>The game ships plain HLSL in <code>shaders/common</code>, and the look thread already ships its own compute shader. Overriding <code>terrain/terrainImpl.hlsl</code> from the mod (to add, say, a far photo layer) looks possible but is untested and would break on game updates.</td></tr>
+        <tr><td class="k">Virtual texturing</td><td><span class="pill no">no</span></td><td>No engine support. 2048² is the practical texture size to stream; a 4096² texture costs an ~82 ms frame.</td></tr>
+        <tr><td class="k">Meshes</td><td><span class="pill yes">yes</span></td><td>Server-written <code>.cdae</code> TSStatics load in 2–4 ms and can be placed with any rotation, which is what tile-local frames need. Collision rebuilds are global and grow with every collidable triangle, so collidable meshes stay few and near.</td></tr>
+        <tr><td class="k">Native patches</td><td><span class="pill maybe">last resort</span></td><td>Possible (the Linux grass patch did it), but tied to one game build. Windows needs DLL injection. Candidates: an asynchronous terrain import, an incremental collision rebuild.</td></tr>
+      </table>
+    </div>
+  </section>
+
+  <section>
+    <h2><span class="n">5</span>Target design: a world ground store</h2>
+    <p class="col">Four stages, each a pure function of its inputs with its own version number, stored per world tile on a fixed grid. Each tile keeps its own small local frame. Elevation is stored as height above the ellipsoid, which does not depend on any frame. The anchor only enters at the last, cheap step.</p>
+    <figure>
+      <svg viewBox="0 0 940 250" width="940" height="250" role="img" aria-label="Target pipeline: four world-space stages feed a cheap per-anchor assembly step">
+        <defs><marker id="ah2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="var(--ink-2)"/></marker></defs>
+        <g font-size="12" fill="var(--ink)">
+          <rect x="10" y="20" width="200" height="88" fill="var(--teal-soft)" stroke="var(--teal)"/>
+          <text x="22" y="44" font-weight="500">A · Elevation tiles</text>
+          <text x="22" y="64" fill="var(--ink-2)">best DEM merged, sea,</text>
+          <text x="22" y="82" fill="var(--ink-2)">runways; 0.5–1 m</text>
+          <text x="22" y="100" fill="var(--amber)">key: sources + ELEV_V</text>
+
+          <rect x="10" y="132" width="200" height="88" fill="var(--teal-soft)" stroke="var(--teal)"/>
+          <text x="22" y="156" font-weight="500">B · Road network</text>
+          <text x="22" y="176" fill="var(--ink-2)">3D splines, z(s) solved</text>
+          <text x="22" y="194" fill="var(--ink-2)">per corridor, bridges in</text>
+          <text x="22" y="212" fill="var(--amber)">key: road cells + ROAD_V</text>
+
+          <rect x="260" y="76" width="200" height="88" fill="var(--teal-soft)" stroke="var(--teal)"/>
+          <text x="272" y="100" font-weight="500">C · Ground tiles</text>
+          <text x="272" y="120" fill="var(--ink-2)">A + road corridors,</text>
+          <text x="272" y="138" fill="var(--ink-2)">pads; heights + materials</text>
+          <text x="272" y="156" fill="var(--amber)">key: A, B nearby, GROUND_V</text>
+
+          <rect x="510" y="76" width="200" height="88" fill="var(--teal-soft)" stroke="var(--teal)"/>
+          <text x="522" y="100" font-weight="500">D · Photo pyramid</text>
+          <text x="522" y="120" fill="var(--ink-2)">relit, seams, roofs,</text>
+          <text x="522" y="138" fill="var(--ink-2)">roads painted; BC7 mips</text>
+          <text x="522" y="156" fill="var(--amber)">key: imagery, C mask, LOOK_V</text>
+
+          <rect x="760" y="20" width="170" height="200" fill="var(--sheet)" stroke="var(--rule)"/>
+          <text x="772" y="44" font-weight="500">Per anchor (cheap)</text>
+          <text x="772" y="70" fill="var(--ink-2)">block = resample C</text>
+          <text x="772" y="88" fill="var(--ink-2)">into the 2 m lattice</text>
+          <text x="772" y="118" fill="var(--ink-2)">far + road tiles: built</text>
+          <text x="772" y="136" fill="var(--ink-2)">in tile frames, placed</text>
+          <text x="772" y="154" fill="var(--ink-2)">with a rotation; a</text>
+          <text x="772" y="172" fill="var(--ink-2)">rebase reuses them</text>
+          <text x="772" y="202" fill="var(--ink-2)">no grading here</text>
+        </g>
+        <g stroke="var(--ink-2)" stroke-width="1.5" fill="none" marker-end="url(#ah2)">
+          <path d="M210 64 C235 64 235 100 256 104"/>
+          <path d="M210 176 C235 176 235 140 256 136"/>
+          <path d="M460 120 H506"/>
+          <path d="M460 102 C600 40 700 40 756 60"/>
+          <path d="M710 120 H756"/>
+        </g>
+      </svg>
+      <figcaption>Changing road markings touches nothing here. Changing grading rebuilds C and D for the tiles near the roads it changed, not the whole route.</figcaption>
+    </figure>
+
+    <div class="stages">
+      <div class="stage"><header><h3>A · Elevation tiles</h3><span class="tag">world grid, e.g. 1 km tiles at 0.5–1 m</span></header>
+        <p>The merged best source per tile (3DEP 1 m lidar, Mapterhorn z16–17, fallbacks), with the sea carve and runway flattening applied. It only changes when a source or its version does, so it is effectively permanent.</p></div>
+      <div class="stage"><header><h3>B · Road network with a profile solver</h3><span class="tag">per connected corridor, world space</span></header>
+        <p>Plan the horizontal geometry as today, then solve height along each whole road chain, ground and bridge parts together, in one least-squares fit:</p>
+        <ul class="tight">
+          <li>Fit the lidar where the road sits on ground. Fit deck lidar (3DEP class 17) on bridges. Give zero weight to the interpolated DEM under decks.</li>
+          <li>Limit grade by class, and limit how fast the grade may change, which is the "K value" of a highway vertical curve. At 70 mph a crest needs on the order of 70–80 m per 1 % of grade change. That single limit is what rules out a 1 m dive over 10 m.</li>
+          <li>Keep at least 5 m clearance (16 ft, the US interstate minimum) at every crossing as an inequality, so the lower road dips only as much as it must, over a length the K value allows.</li>
+          <li>Give at-grade junctions one shared height. Make bridge ends tangent to their approaches.</li>
+        </ul>
+        <p>Output: 3D centrelines, widths and cross-section templates. Ground tiles, road meshes, decks and the AI graph all read the same splines, as they read the same grading today.</p></div>
+      <div class="stage"><header><h3>C · Ground tiles</h3><span class="tag">world grid, heights + material ids</span></header>
+        <p>A plus each road's corridor: the template across the carriageway, then an embankment that blends to the natural ground, the same idea as an Unreal spline layer. Lots, gas station pads and plazas are flatten layers. Stored as rasters for the drawn ground and far tiles. The physics block applies the same corridors point by point from the shared plans instead, because the prototype showed rasters smear graded walls (section 8).</p></div>
+      <div class="stage"><header><h3>D · Photo pyramid</h3><span class="tag">world quadtree, 0.5 m at the bottom</span></header>
+        <p>De-shadowed, seam-matched imagery with roofs filled and road surfaces painted, BC7 encoded with mips. The block's base photo and every far tile's texture become crops of the same pyramid, which removes the separate rendering paths behind the block-edge mismatch and takes far textures out of the server process.</p></div>
+      <div class="stage"><header><h3>Per-anchor assembly</h3><span class="tag">milliseconds, not seconds</span></header>
+        <p>The block resamples C at its 2 m lattice in the anchor frame (the existing <code>elev(lat, lon)</code> interface, fed from tiles instead of from grading). Far tiles and road tiles are built in their own tile frames and placed with a rotation and translation. Moving between ENU frames is a rigid transform, so this is exact, and a rebase keeps every tile already loaded instead of re-streaming ~300.</p></div>
+    </div>
+  </section>
+
+  <section>
+    <h2><span class="n">6</span>Trade-offs</h2>
+    <div class="tablewrap">
+      <table>
+        <tr><th>Gain</th><th>Cost or risk</th></tr>
+        <tr><td>Grading and photos done once per place; a bake becomes a grid job that needs no car, splits across all 24 threads and keeps going where it stopped</td><td>A real refactor of <code>grading.py</code> (2,350 lines, anchor-framed), the road tiles and the far field. Weeks, not days.</td></tr>
+        <tr><td>A code change rebuilds only the stages it touches</td><td>Version numbers need discipline. A test that traces which functions each stage runs (the pipeline review's traced key) can catch a forgotten bump.</td></tr>
+        <tr><td>Rebases keep the far field (no 10 s reload, no texture re-render)</td><td>A mod change: tiles carry their own frame and get a rotation. The tilt is ~0.07° at 8 km, 0.7° at 80 km, invisible and exact.</td></tr>
+        <tr><td>Storage per area instead of per drive. Rough sizes: heights at 0.5 m in 16 bits ~8 MB per km² raw (2–3 MB compressed); BC7 photo at 0.5 m ~5.3 MB per km² with mips</td><td>The I-25 corridor (100 km × 4 km) is ~3 GB, below today's 24 GB route bake. Denver metro at 0.5 m is ~20 GB; use 2 m beyond 1 km from roads.</td></tr>
+        <tr><td>Road solver ends ramps and humps everywhere, not interchange by interchange</td><td>It changes every road's profile, so it needs a regression check: worst grade change per km and per bridge end, measured on the six I-25 interchanges the bridges thread already uses.</td></tr>
+        <tr><td>Blocks built from shared, region-framed plans</td><td>Measured: within 2 cm of today. Raster lookups would smear graded walls by metres, so the physics path keeps the per-point grading.</td></tr>
+      </table>
+    </div>
+  </section>
+
+  <section>
+    <h2><span class="n">7</span>Staged path</h2>
+    <h3>Quick wins (days, independent of the redesign)</h3>
+    <div class="tablewrap">
+      <table>
+        <tr><th></th><th>Change</th><th>Payoff</th></tr>
+        <tr><td class="k">Q1</td><td>Key the far geometry of levels L1 and up by the modules it actually runs (<code>farfield</code>, <code>dem</code>, <code>heightmap</code>, <code>geodesy</code>, <code>cdae</code>, plus the sea and runway carvers when they are on) instead of all server code. Those tiles are never graded.</td><td>The biggest bake item (9.1 GB, most of the 17 % "far" time) survives road and grading changes</td></tr>
+        <tr><td class="k">Q2</td><td>Give each stage of the current code its own version constant inside the key (terrain block, road tile, far texture), and keep the whole-code hash only as a fallback during a transition.</td><td>Rebakes follow what changed</td></tr>
+        <tr><td class="k">Q3</td><td>Store decoded DEM and imagery tiles once on disk as raw arrays and memory-map them in every process, so the OS shares one copy.</td><td>Most of the ~1.6 GB per process, so more servers fit in 64 GB</td></tr>
+        <tr><td class="k">Q4</td><td>One look across the block edge: render the L-1 ring's photos from the block's own photo (same pass, same resolution), give ring and L0 materials the block's macro textures per land-cover class, and compute tile normals the way the terrain does. Confirm the cause first with snapshot pairs at a block edge.</td><td>The edge stops reading as a line ~250 m ahead</td></tr>
+        <tr><td class="k">Q5</td><td>Keep the bridges thread's local fixes (bridge-end grade change 12.6 % → 6.6 % at the Mousetrap) and add its metrics to the tests, so stage 2 has a baseline to beat.</td><td>Better drives now, a yardstick later</td></tr>
+      </table>
+    </div>
+    <h3>The redesign</h3>
+    <div class="tablewrap">
+      <table>
+        <tr><th>Stage</th><th>What</th><th>Size</th><th>Unblocks</th></tr>
+        <tr><td class="k">1a · Region graders</td><td>Graders on a fixed lattice of region frames instead of anchor frames; the shared plan cache keyed by region; blocks of any anchor call them. Proven by the prototype.</td><td class="num">days</td><td>Plans once per place; the same ground for every anchor</td></tr>
+        <tr><td class="k">1b · World ground</td><td>Stages A and C as world tiles with their own keys; rasters for the drawn and far ground.</td><td class="num">1–2 weeks</td><td>Terrain rebakes by stage</td></tr>
+        <tr><td class="k">2 · Profile solver</td><td>Stage B replaces the per-chain bridge rules and dips; checked against the interchange metrics.</td><td class="num">1–2 weeks</td><td>Ramps and humps gone by construction</td></tr>
+        <tr><td class="k">3 · Tile-local far field</td><td>Far and road tiles in their own frames, placed with a rotation; photo pyramid D built by worker processes.</td><td class="num">2–3 weeks</td><td>Rebases reuse everything; area processor without a car; no textures in the main process</td></tr>
+        <tr><td class="k">4 · Rendering experiments</td><td>A/B a 1024² drawn block (the edge twice as far, a 26–38 ms swap every 256 m); try level-defined render-only blocks; try a terrain shader override for a far photo layer.</td><td class="num">days each</td><td>Decide whether the edge needs more than Q4</td></tr>
+      </table>
+    </div>
+    <p class="col note">Not recommended: pushing more detail into a bigger single heightmap, procedural noise on the heightmap (the Oct 12 lab showed contour ripples), or a native terrain patch before stages 1–3, since the data side is where the time and the bugs are.</p>
+  </section>
+
+  <section id="prototype">
+    <h2><span class="n">8</span>Prototype: world ground tiles</h2>
+    <p class="col">Question: can the physics block be a cheap resample of world-space graded tiles instead of being graded per anchor, without losing accuracy? The test grades a stretch of I-25 once in a world tile, then builds the same block for two different anchors from it, and compares against today's direct build for each anchor.</p>
+    <p class="col">Setup: I-25 at 6th Avenue, a 512² block at 2 m, built for the route's pinned anchors 3 and 2 (2 km and 13 km away). DEM z16 and map data from the PC's cache, offline. Tool: <code>tools/world_ground_proto.py</code> on branch <code>feature/world-ground</code>.</p>
+    <div class="tablewrap">
+      <table>
+        <tr><th>Way of building the block</th><th>Time</th><th>Heights vs today's direct build</th></tr>
+        <tr><td class="k">Today: a grader per anchor</td><td class="num">9.2 s (anchor 3), 7.8 s (anchor 2); each anchor plans the same roads again</td><td>reference</td></tr>
+        <tr><td class="k">One grader in a fixed region frame, shared by both anchors</td><td class="num">8.7 s once, then 0.2 s for the other anchor</td><td class="num">anchor 3: max 1.7 cm. Anchor 2: p99 0.3 cm; 166 samples differ by 10–52 cm (see below)</td></tr>
+        <tr><td class="k">Graded ground stored as a raster, resampled</td><td class="num">7–10 s once (1 m / 0.5 m), then 0.04 s per anchor</td><td class="num">0.5 m raster: p99 0.9–1.2 cm, but 57–100 samples off by 0.5–4 m</td></tr>
+      </table>
+    </div>
+    <div class="col" style="display:grid;gap:10px">
+      <p><strong>Grading once per place works and is exact.</strong> A grader on a fixed region frame gives the same heights as today's to within 2 cm and makes every other anchor's block 40 times cheaper. In a bake, each place's road plans would be made once instead of once per anchor that sees it.</p>
+      <p><strong>Today's per-anchor grading is not consistent.</strong> Graded in anchor 2's frame, two spots near the interchange come out up to 2.4 m different from anchor 3's for the same ground. So after a rebase the ground can change under a car at a few places. Region frames remove that by construction.</p>
+      <p><strong>Rasters are the wrong store for the physics ground.</strong> They are accurate almost everywhere, but the retaining walls and cut slopes that grading makes are near vertical, and bilinear lookups smear them by metres (65–92 % of the bad samples sit on slopes steeper than 1:2). Going to 0.25 m only halves it. So the block should keep applying road corridors from shared plans point by point (0.2 s), and rasters should serve the drawn ground and far tiles, where a smeared wall is invisible.</p>
+    </div>
+    <p class="col note">This changes the first step of stage 1: move the graders from anchor frames to a fixed lattice of region frames and key the shared plan cache by region. That is days of work, not weeks, and it delivers most of stage 1's speed and all of its consistency. It touches <code>grading.py</code>, which the bridges thread is changing tonight, so it should start after that lands.</p>
+  </section>
+
+  <section class="sources">
+    <h3>Sources</h3>
+    <p>Fork: <code>docs/ARCHITECTURE.md</code>, <code>docs/research/2026-10-12-engine-limits-and-worldgen.md</code>, <code>server/revisit.py</code>, <code>server/blockworker.py</code>, <code>server/grading.py</code>, the game's <code>shaders/common/terrain/</code>, the bake and bridges threads. External:
+    <a href="https://dev.epicgames.com/documentation/en-us/unreal-engine/landscape-edit-layers-in-unreal-engine">Unreal landscape edit layers</a> ·
+    <a href="https://dev.epicgames.com/documentation/unreal-engine/landscape-splines-in-unreal-engine">Unreal landscape splines</a> ·
+    <a href="https://media.contentapi.ea.com/content/dam/eacom/frostbite/files/gdc12-terrain-in-battlefield3.pdf">Terrain in Battlefield 3 (Widmark, GDC 2012)</a> ·
+    <a href="https://gdcvault.com/play/1025480/Terrain-Rendering-in-Far-Cry">Terrain Rendering in Far Cry 5 (Moore, GDC 2018)</a> ·
+    <a href="https://gdcvault.com/play/1021760/Adaptive-Virtual-Texture-Rendering-in">Adaptive Virtual Texture Rendering in Far Cry 4</a> ·
+    <a href="https://gdcvault.com/play/1024029/-Ghost-Recon-Wildlands-Terrain">Ghost Recon Wildlands terrain tools (GDC 2017)</a> ·
+    <a href="https://80.lv/articles/procedural-technology-in-ghost-recon-wildlands/">Wildlands procedural roads (80.lv)</a> ·
+    <a href="https://www.guerrilla-games.com/media/News/Files/GDC2017_VanMuijden_GPUBasedProceduralPlacementInHorizonZeroDawn.pdf">GPU-based procedural placement in Horizon Zero Dawn</a> ·
+    <a href="https://www.asobostudio.com/files/inline-images/Designing_Terrain_System_Fuentes_Lionel.pdf">Designing a terrain system (Asobo, MSFS)</a> ·
+    <a href="https://outerra.blogspot.com/2010/05/integrating-vector-data-roads.html">Outerra: integrating vector roads</a> ·
+    Losasso and Hoppe, "Geometry Clipmaps" (SIGGRAPH 2004) · Strugar, "Continuous Distance-Dependent Level of Detail" (2009). Forza Horizon 5: no public technical detail on its terrain pipeline turned up, so it is left out.</p>
+  </section>
+</main>
