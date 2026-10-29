@@ -151,6 +151,28 @@ class MergeJointTest(TestCase):
         self.assertLess(float(first), 0.25)
 
 
+class JoinNodesTest(TestCase):
+    def test_short_part_between_raised_joints_has_no_sag(self):
+        # a 7 m part between two joints, each raised to a higher part's end (US-36 at I-25: it sagged 0.44 m mid-part)
+        a = np.c_[np.arange(-40.0, 0.1, 4.0), np.zeros(11)]
+        b = np.array([[0.0, 0.0], [3.5, 0.0], [7.0, 0.0]])
+        c = np.c_[np.arange(7.0, 47.1, 4.0), np.zeros(11)]
+        zs = [np.full(11, 11.0), np.array([10.0, 10.2, 10.4]), np.full(11, 11.4)]
+        out = roads._join_nodes([a, b, c], zs)
+        self.assertAlmostEqual(float(out[1][0]), 11.0)
+        self.assertAlmostEqual(float(out[1][-1]), 11.4)
+        self.assertAlmostEqual(float(out[1][1]), 11.2, places=6)
+
+    def test_long_part_keeps_its_middle(self):
+        a = np.c_[np.arange(-40.0, 0.1, 4.0), np.zeros(11)]
+        b = np.c_[np.arange(0.0, 120.1, 4.0), np.zeros(31)]
+        c = np.c_[np.arange(120.0, 160.1, 4.0), np.zeros(11)]
+        zs = [np.full(11, 11.0), np.full(31, 10.0), np.full(11, 11.0)]
+        out = roads._join_nodes([a, b, c], zs)
+        self.assertAlmostEqual(float(out[1][15]), 10.0)
+        self.assertAlmostEqual(float(out[1][0]), 11.0)
+
+
 class TwinLiftTest(TestCase):
     def test_a_lift_to_a_twin_fades_no_steeper_than_a_deck_climbs(self):
         # two ramps of one level side by side from a joint, parting after 120 m (the High Five, Dallas: one lifted 11 m

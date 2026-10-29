@@ -220,6 +220,9 @@ def parts(frame, cells, box, reach=REACH_M, clip=False, worn=None, gauges=None):
     out.sort(key=lambda p: (p[0], p[2], float(p[3][0, 0]), float(p[3][0, 1])))
     if old_lines:
         out = _cut_at_motorways(out, old_lines, motorways(frame, cells, near))
+    live = {p[0] for p in out if p[0] not in old_lines and p[2] == "ground"}
+    if live:
+        out = _under_motorways(out, live, motorways(frame, cells, near, UNDER_CLASSES))
     out = _drop_stubs(out)
     out = _span_underpasses(out, road_underpasses(frame, cells, box, reach))
     return _clip(out, near) if clip else out
@@ -229,15 +232,15 @@ def parts(frame, cells, box, reach=REACH_M, clip=False, worn=None, gauges=None):
 # An old line (disused, abandoned) the map has crossing a motorway or trunk at grade was cut when the road was built:
 # none of its track within MOTORWAY_CUT_M of a carriageway's edge, the median between the two carriageways too (the
 # abandoned Boulder Industrial Lead's rails and ballast lay across I-25 by Erie, CO, in the median and flush in the
-# lanes, and stopped Jeff's car dead, 2026-10-28). A line in use is left to the map (a bridge it lacks is #387's).
+# lanes, and stopped Jeff's car dead, 2026-10-28). A line in use passes under (_under_motorways).
 MOTORWAY_CLASSES = ("motorway", "trunk")
 MOTORWAY_CUT_M = 20.0
 CUT_SAMPLE_M = 2.0              # m between the points tested for that
 
 
-def motorways(frame, cells, near):
-    """[(xy (k, 2), half width)] of the motorways' and trunks' ground parts (their links too) meeting the window near,
-    each road at its widest copy across the cells (crossings)."""
+def motorways(frame, cells, near, classes=MOTORWAY_CLASSES):
+    """[(xy (k, 2), half width)] of the motorways' and trunks' (classes') ground parts (their links too) meeting the
+    window near, each road at its widest copy across the cells (crossings)."""
     got = {}
     for feats in cells:
         if feats is None or len(feats) == 0:
@@ -245,7 +248,7 @@ def motorways(frame, cells, near):
         specs = roads.road_specs(feats)
         fb = feats.boxes(frame)
         for i, sp in enumerate(specs):
-            if sp is None or sp.cls not in MOTORWAY_CLASSES or not _box_hit(fb[i], near):
+            if sp is None or sp.cls not in classes or not _box_hit(fb[i], near):
                 continue
             fid = str(feats.ids[i])
             if fid in got:
@@ -291,6 +294,49 @@ def _cut_at_motorways(rails, old_lines, lines):
             continue
         xy = roads.densify(xy, CUT_SAMPLE_M)         # (a vertex either side of a 60 m road: none near it)
         for i, j in _runs(motorway_mask(xy, lines)):
+            out.append((fid, c, kind, xy[i:j + 1]))
+    return out
+
+
+# A line in use the map has crossing a motorway or its ramp on the ground passes under it, the road's embankment over it
+# in the bare earth with no bridge mapped: the light rail by C-470's ramp at Lone Tree, CO, climbed a 7 m hump at up to
+# 45 %, and its bed's grading pulled the ramp 0.6 m down where they crossed (an 8 g dip at 65 mph, 2026-10-29). None of
+# its track within MOTORWAY_CUT_M of the carriageway's edge, along it either side of the crossing (a short tunnel): the
+# bed either side keeps its own level and grades nothing under the road. (Not a trunk: Santa Fe Drive in Denver has a
+# level crossing.)
+UNDER_CLASSES = ("motorway",)
+UNDER_MIN_SIN = 0.25            # (a shallow crossing: the cut along the line as at this angle)
+
+
+def _under_motorways(rails, live, lines):
+    """rails (parts' list) with the live lines' ground parts cut where they cross a motorway on the ground (lines:
+    motorways), over MOTORWAY_CUT_M past its edge along the track either side of each crossing; a line beside the road
+    that never crosses it keeps its track. Pure."""
+    if not lines:
+        return rails
+    mls = [ln for ln, _hw in lines]
+    out = []
+    for fid, c, kind, xy in rails:
+        if fid not in live or kind != "ground":
+            out.append((fid, c, kind, xy))
+            continue
+        s = _arc(xy)
+        cut = np.zeros(len(xy), bool)
+        for g, crs in enumerate(roads._crossings_by([xy], mls)):
+            line, hw = lines[g]
+            for _pi, sc, pt in crs:
+                j = int(np.clip(np.searchsorted(s, sc) - 1, 0, len(xy) - 2))
+                r = xy[j + 1] - xy[j]
+                ab = np.diff(line, axis=0)
+                t = np.clip(((pt - line[:-1]) * ab).sum(1) / np.maximum((ab * ab).sum(1), 1e-12), 0.0, 1.0)
+                d = ab[int(np.argmin(np.hypot(*(line[:-1] + t[:, None] * ab - pt).T)))]
+                sin = abs(r[0] * d[1] - r[1] * d[0]) / max(float(np.hypot(*r) * np.hypot(*d)), 1e-12)
+                half = (hw + MOTORWAY_CUT_M) / max(sin, UNDER_MIN_SIN)
+                cut |= np.abs(s - sc) <= half
+        if not cut.any():
+            out.append((fid, c, kind, xy))
+            continue
+        for i, j in _runs(cut):
             out.append((fid, c, kind, xy[i:j + 1]))
     return out
 
