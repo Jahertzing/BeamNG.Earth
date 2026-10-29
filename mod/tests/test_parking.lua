@@ -152,4 +152,72 @@ T.check(P.offSpot({ x = 100, y = 0 }, nil, P0) and P.offSpot({ x = 100, y = 0 },
   'far, no spot (or another frame\'s): moved')
 T.check(not P.offSpot({ x = 100, y = 0 }, { pos = { x = 101, y = 1 } }, P0), 'on its spot: stays')
 T.check(P.offSpot({ x = 100, y = 0 }, { pos = { x = 110, y = 0 } }, P0), 'off its spot: moved')
+-- nothing parked appears or disappears in view (Jeff's drive 2026-10-28: a car lot's cars flickering in and out)
+T.check(P.inView(100, 0, 0, 0, 1, 0), 'inView: 100 m straight ahead')
+T.check(not P.inView(-100, 0, 0, 0, 1, 0), 'inView: 100 m behind: not')
+T.check(P.inView(-20, 0, 0, 0, 1, 0), 'inView: 20 m behind (mirrors, side windows): in view')
+T.check(not P.inView(P.VIEW_M + 10, 0, 0, 0, 1, 0), 'inView: past VIEW_M: not')
+T.check(not P.inView(100, 0, nil, nil, nil, nil), 'inView: no camera: not')
+do
+  -- spots ahead of the camera banned, behind not; a parked car ahead held, one behind left to the stock system
+  local cam = { pos = vec3(0, 0, 0), fwd = vec3(1, 0, 0) }
+  core_camera = { getPosition = function() return cam.pos end, getForward = function() return cam.fwd end }
+  local cars = {
+    [71] = { p = vec3(200, 0, 0) },      -- in view, on a lot ahead
+    [72] = { p = vec3(-300, 0, 0) },     -- behind the camera, far: the stock system may move it
+  }
+  for _, c in pairs(cars) do
+    function c:getActive() return true end
+    function c:getPosition() return self.p end
+    function c:getVelocity() return vec3(0, 0, 0) end
+    function c:setActive() end
+  end
+  function getObjectByID(id) return cars[id] end
+  local data = { [71] = {}, [72] = {} }
+  local teleported = {}
+  active = true
+  gameplay_parking.getParkedCarsList = function() return { 71, 72 } end
+  gameplay_parking.getParkedCarsData = function() return data end
+  gameplay_parking.forceTeleport = function(id) teleported[#teleported + 1] = id end
+  P.reset()
+  P.onRows(9, '9:0_0', { { 200, 5, 1600, 0, 1 }, { -300, 5, 1600, 0, 1 }, { 120, -6, 1600, 90, 1 } })
+  clock = clock + 3
+  P.update(9, { x = 0, y = 0, z = 1600 }, { -1000, -1000, 1000, 1000 })
+  clock = clock + 1
+  P.update(9, { x = 0, y = 0, z = 1600 }, { -1000, -1000, 1000, 1000 })
+  local ahead, behind = 0, 0
+  for _, ps in pairs(given.parkingSpots.objects) do
+    if ps.pos.x > 0 and ps.customFields.tags.banned then ahead = ahead + 1 end
+    if ps.pos.x < 0 and ps.customFields.tags.banned then behind = behind + 1 end
+  end
+  T.check(ahead == 2 and behind == 0, 'holdView: the 2 spots in view banned, the one behind not: ' .. ahead .. '/' .. behind)
+  T.check(data[71].ignoreTeleport and not data[72].ignoreTeleport, 'holdView: the car in view held, the one behind not')
+  -- the camera turns round: the hold moves with it, and only what this module set is undone
+  cam.fwd = vec3(-1, 0, 0)
+  clock = clock + 1
+  P.update(9, { x = 0, y = 0, z = 1600 }, { -1000, -1000, 1000, 1000 })
+  T.check(not data[71].ignoreTeleport and data[72].ignoreTeleport, 'holdView: turned round, the holds follow')
+  local nowAhead = 0
+  for _, ps in pairs(given.parkingSpots.objects) do
+    if ps.pos.x > 0 and ps.customFields.tags.banned then nowAhead = nowAhead + 1 end
+  end
+  T.check(nowAhead == 0, 'holdView: the spots now behind free again')
+  -- a car off its spot but in view stays; out of view it is moved
+  clock = clock + 1
+  P.update(9, { x = 0, y = 0, z = 1600 }, { -1000, -1000, 1000, 1000 })   -- (a car the first pass hid comes back)
+  for i = #teleported, 1, -1 do teleported[i] = nil end
+  data[72].parkingSpotId = nil
+  cars[72].p = vec3(-300, 50, 0)
+  cam.fwd = vec3(-1, 0, 0)
+  clock = clock + 1
+  P.update(9, { x = 0, y = 0, z = 1600 }, { -1000, -1000, 1000, 1000 })
+  local function moved(id) for _, t in ipairs(teleported) do if t == id then return true end end return false end
+  T.check(not moved(72), 'guard: a car off its spot in view is not moved')
+  cam.fwd = vec3(1, 0, 0)
+  clock = clock + 1
+  P.update(9, { x = 0, y = 0, z = 1600 }, { -1000, -1000, 1000, 1000 })
+  T.check(moved(72), 'guard: out of view it is')
+  core_camera, getObjectByID = nil, nil
+  P.reset()
+end
 T.done('test_parking')
