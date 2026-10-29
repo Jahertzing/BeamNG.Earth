@@ -142,7 +142,9 @@ MOD_TO_SERVER = {
     "geocode": {"id": F(int), "q": F(str), "lat": F(NUM, OPT), "lon": F(NUM, OPT)},   # the map's search box
     "route": {"id": F(int), "lat0": F(NUM), "lon0": F(NUM), "lat1": F(NUM), "lon1": F(NUM),
               "bearing": F(NUM, OPT),    # the GPS (routing.py); bearing: the car's heading, the route starts that way
-              "via": F((list, dict), OPT), "avoid": F(str, OPT)},   # The Drive (thedrive.lua): waypoints, "toll"
+              "via": F((list, dict), OPT), "avoid": F(str, OPT),   # The Drive (thedrive.lua): waypoints, "toll"
+              "pins": F(bool, OPT), "rebaseM": F(NUM, OPT),        # the build-ahead (buildahead.py): the mod re-centres
+              "points": F(list, OPT)},   # on the anchors it plans (route_anchors); a client's own line (headless_bake)
     "where": {"id": F(int), "lat": F(NUM), "lon": F(NUM), "online": F(bool)},   # the status bar (geocode.py)
     "server_list": {},                  # the BeamNG.Earth servers for the tab in BeamMP's browser (serverlist.lua)
     # the update notice's button: the server opens the releases page (updates.open_page; additive)
@@ -166,6 +168,7 @@ SERVER_TO_MOD = {
     "route_result": {"id": F(int), "points": F(list), "dist": F(NUM), "dur": F(NUM), "error": F(str, OPT),
                       "elev": F((list, dict), OPT)},  # OSRM; elev: the map's profile (routing.resample, dem.sample)
     "route_download": {"total": F(int), "done": F(int), "active": F(bool)},  # routeahead.py: the route's corridor
+    "route_anchors": {"anchors": F(list), "pinM": F(NUM)},  # buildahead.py: the anchors planned along the route
     "update": {"current": F(str), "latest": F(str), "url": F(str)},   # a newer version on GitHub (updates.py)
     "update_status": {"state": F(str), "text": F(str), "done": F(int, OPT), "total": F(int, OPT),
                       "version": F(str, OPT)},      # the "Update now" download (selfupdate.py)
@@ -235,7 +238,8 @@ SERVER_TO_MOD = {
     # data credits for the tiles around the player (credits.py; additive, protocol 4, --credits on)
     "credits": {"v": F(int), "near": F(str), "far": F(str), "ids": F(list), "farIds": F(list)},
     # the loading line's counts (Connection.send_progress, the mod's loadprogress.lua): [done, wanted] each
-    "load_progress": {"anchorId": F(int), "ground": F(list), "roads": F(list), "trees": F(list), "far": F(list)},
+    "load_progress": {"anchorId": F(int), "ground": F(list), "roads": F(list), "trees": F(list), "far": F(list),
+                      "ahead": F(list, OPT)},   # [m ready ahead of the car, the horizon] (buildahead.py)
     # road tiles near the player (roads.py; additive, with map data only): a JSON file of DecalRoad chunks
     "roads_tile": {"anchorId": F(int), "key": F(str), "path": F(str), "n": F(int),
                    "data": F(dict, OPT),       # the file's JSON, so the game need not open it (staging.inline_json)
@@ -303,6 +307,7 @@ EXERCISED_ELSEWHERE = {"far_retex", "roads_tile", "roads_drop",   # roads: needs
                        "update",                                     # only when GitHub has a newer version (online)
                        "geocode_result", "route_result",             # only when the map / GPS asks
                        "route_download",                             # only when the GPS plans a route (routeahead.py)
+                       "route_anchors",                              # only with a route and pins (buildahead.py)
                        "server_list"}                                # only when the BeamMP tab asks (online)
 # events the mod's net.lua makes up itself (not on the wire)
 MOD_INTERNAL = {"_connected": set(), "_disconnected": {"error"}}

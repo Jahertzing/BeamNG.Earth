@@ -130,6 +130,7 @@ import rockface as rockfacemod  # noqa: E402
 import riverlines as riverlinesmod  # noqa: E402
 import groundahead as groundaheadmod  # noqa: E402
 import routeahead as routeaheadmod  # noqa: E402
+import buildahead as buildaheadmod  # noqa: E402
 import furniture as furnituremod  # noqa: E402
 import heightmap  # noqa: E402
 import staging  # noqa: E402
@@ -243,6 +244,10 @@ AHEAD_LAYERS = ("roads", "buildings", "building_parts", "infrastructure", "water
 # instead of the player's current heading, since a road route can wander off that heading entirely.
 ROUTE_AHEAD_ON = True            # --route-prefetch
 ROUTE_AHEAD_MAX_M = 20000.0      # --route-prefetch-km * 1000 (15-25 km is sane; the user, 2026-10-22)
+BUILD_AHEAD_ON = True            # --build-ahead: the near tier built live ahead of the car (buildahead.py)
+BUILD_AHEAD_MAX_M = buildaheadmod.MAX_M  # --ahead-km * 1000: its horizon at most
+BUILD_AHEAD_JOBS = buildaheadmod.ROAD_JOBS   # --ahead-jobs: its road tiles building at once
+PHANTOM_BASE = 1000000           # Server.phantom_anchor ids (a mod's grow from 1; blockworker keeps the highest)
 ROUTE_RETRY_S = 2.0               # a deferred tile/cell backs off this long before the next one in the corridor
 FAST_BASE_V = 70.0              # m/s (157 mph): faster, a block waits at most BASE_FAST_WAIT_S for its photo after its
 BASE_FAST_WAIT_S = 0.15         # heights, then goes without it (block_base later): blocks took 0.6-3 s at 600 mph on a
@@ -748,12 +753,15 @@ class Server:
         self.ahead_last = None          # (anchor id, x, y) of the last round
         self.ahead_stats = {"dem": 0, "cells": 0, "deferred": 0}
         self.route_pool = ThreadPoolExecutor(1, thread_name_prefix="route-download")   # Connection.route_download
+        self.ahead_pool = ThreadPoolExecutor(max(1, BUILD_AHEAD_JOBS), thread_name_prefix="build-ahead")  # build_ahead_roads
         self.horizon_grids = {}             # anchorId -> farfield.HorizonGrid
         self.horizon_inflight = {}          # anchorId -> (future, half-size)
         self.horizon_failed = {}            # anchorId -> monotonic time of the last failed build
         self.horizon_blocks = OrderedDict()     # (zoom, x, y, block) -> block maxima, LRU
         self.anchors = {}
         self._next_anchor = 1
+        self.phantoms = {}              # (lat, lon) -> Anchor the mod has not asked for: the build-ahead's frames
+        self._next_phantom = PHANTOM_BASE
         self.connections = set()
         # Heightmaps: (anchorId, cx, cy) -> info, LRU order.
         self.hm = OrderedDict()
@@ -956,8 +964,12 @@ class Server:
         """Nearest block centre coordinate on the layout's grid (256 m; M4 512²: 128 m)."""
         return heightmap.snap(v, self.layout.grid)
 
-    def new_anchor(self, lat, lon):
-        a = Anchor(self._next_anchor, lat, lon, geodesy.EnuFrame(lat, lon))
+    def new_anchor(self, lat, lon, aid=None):
+        """A new Anchor at (lat, lon): the next id (aid None; the mod's), or aid (a phantom's, phantom_anchor)."""
+        a = Anchor(self._next_anchor if aid is None else aid, lat, lon, geodesy.EnuFrame(lat, lon))
+        ph = self.phantoms.get((round(float(lat), 7), round(float(lon), 7)))
+        if ph is not None and ph.q is not None and aid is None:    # (surveyed for the build-ahead already)
+            a.q = ph.q
         a.hm_zoom = demmod.zoom_for(lat, 1.25, demmod.FINE_ZOOM)    # ~1 m pixels where the data exists (dem.FINE_ZOOM)
         a.zooms = {lvl: self.layout.dem_zoom(lat, lvl) for lvl in range(1, farfield.HORIZON_MAX_LEVEL + 1)}
         a.zooms[0] = a.hm_zoom                      # L0 shares the terrain's DEM (§1.4)
@@ -965,7 +977,29 @@ class Server:
             self.deshadow.prepare(lat, lon)         # the regions around it, in the background
         if self.colormatch is not None:
             self.colormatch.prepare(lat, lon)
-        self._next_anchor += 1
+        if aid is None:
+            self._next_anchor += 1
+        return a
+
+    def phantom_anchor(self, lat, lon):
+        """An Anchor at (lat, lon) the mod has not asked for (yet): the frame the build-ahead builds in (buildahead.py;
+        the revisit cache keys on the place, not the id, so the mod's anchor there finds it all). Ids from
+        PHANTOM_BASE: never a mod's, and above them (blockworker's Server.anchor keeps the highest ids). The last few
+        kept (the one ahead, and the car's place when it is one)."""
+        k = (round(float(lat), 7), round(float(lon), 7))
+        a = self.phantoms.get(k)
+        if a is None:
+            a = self.phantoms[k] = self.new_anchor(k[0], k[1], aid=self._next_phantom)
+            self._next_phantom += 1
+            for old in list(self.phantoms)[:-4]:
+                del self.phantoms[old]
+        return a
+
+    def anchor_by_id(self, aid):
+        """The Anchor of id aid: the mod's, or a phantom (build_roads_tile builds ahead in those too)."""
+        a = self.anchors.get(aid)
+        if a is None and isinstance(aid, int) and aid >= PHANTOM_BASE:
+            a = next((p for p in self.phantoms.values() if p.id == aid), None)
         return a
 
     def anchor_q(self, anchor):
@@ -1352,10 +1386,65 @@ class Server:
                        key=lambda kl: (self.WARM_ORDER.get(kl[1], 9), where(kl[0]), str(kl[0]), kl[1]))
         return self.mapdata.warm(order)
 
+    def roads_tile_cached(self, anchor, tx, ty):
+        """Whether the revisit cache has the road tile (tx, ty) of anchor as build_roads_tile would build it now
+        (blockworker.roads_key: the same key). Worker threads (anchor_q surveys)."""
+        k = blockworker.roads_key(anchor.lat, anchor.lon, anchor.zooms[0], tx, ty, self.sidewalks,
+                                  DETAIL_ROAD_LIFT if self.near_visual == "detail" else 0.0, self.buildings,
+                                  self.left_hand(anchor), self.mph(anchor), self.anchor_q(anchor), self.gas_stations,
+                                  self.mapdata.versions() if self.mapdata is not None else None, self.buried(anchor),
+                                  self.lamp_region(anchor), self.country(anchor))
+        return revisitmod.has(self.cache_dir, "roads", k)
+
+    def build_ahead_roads(self, anchor, tx, ty):
+        """The build-ahead's road tile (tx, ty) of a phantom anchor (buildahead.py, Connection.ahead_tick): built into
+        the revisit cache like the mod's (build_roads_tile in the road processes), its session copies discarded (the
+        mod never sees this anchor's names; its own tile there is a cache hit). -> "cached" | "built" | "empty".
+        Worker threads (ahead_pool)."""
+        if self.roads_tile_cached(anchor, tx, ty):
+            return "cached"
+        res = self.build_roads_tile(anchor.id, tx, ty)
+        if res is None:
+            return "empty"
+        self.discard_tile_files(res[0].rsplit("/", 1)[-1])
+        return "built"
+
+    def discard_tile_files(self, name):
+        """A road tile's session files (name: its JSON in out_dir, and the shapes it names) removed: a build-ahead's
+        copies, never sent to the mod."""
+        p = os.path.join(self.out_dir, name)
+        try:
+            with open(p, encoding="utf-8") as f:
+                text = f.read()
+        except OSError:
+            return
+        for n in revisitmod.shapes_in(text, self.vfs_dir):
+            self._remove(os.path.join(self.out_dir, n))
+        self._remove(p)
+
+    def build_ahead_block(self, anchor, cx, cy):
+        """The build-ahead's terrain block (cx, cy) of a phantom anchor: built (with its base photo) into the revisit
+        cache as make_heightmap does for the mod's, at the prefetch lane, its session copies discarded.
+        -> "cached" | "built". Worker threads (hm_pool)."""
+        key = (anchor.id, cx, cy)
+        detail = self.near_visual == "detail" and self.imagery is not None
+        if revisitmod.has(self.cache_dir, blockcache.KIND, self._block_key(anchor, cx, cy)) and (
+                not detail or revisitmod.has(self.cache_dir, blockcache.BASE_KIND,
+                                             self._block_key(anchor, cx, cy, blockcache.BASE_KIND))):
+            return "cached"
+        info = self.make_heightmap(anchor, cx, cy, None, LANE_PREFETCH)
+        for n in [self.hm_name(key), info.get("ter"), info.get("base")] + list(info.get("layers") or []):
+            if n:
+                self._remove(os.path.join(self.out_dir, n))
+        self.base_pending.pop(key, None)
+        self.base_stale.discard(key)
+        self.hm_stage.pop(key, None)
+        return "built"
+
     def build_roads_tile(self, aid, tx, ty):
         """roads.py: one road tile of anchor aid, written to the session folder. Returns (vfs path,
         chunks) or None if the anchor is gone. Worker threads (fetches the map cells it lacks)."""
-        anchor = self.anchors.get(aid)
+        anchor = self.anchor_by_id(aid)
         if anchor is None or self.mapdata is None:
             return None
         if self.road_pool is not None:
@@ -3276,6 +3365,14 @@ class Connection:
         self.credits = creditsmod.Tracker()     # data credits: throttle, last message sent (--credits on)
         self.ground_busy = False                # a groundahead job is running (one at a time)
         self.route_dl_version = 0               # bumped by every route(): supersedes a running route_download job
+        # the build-ahead (buildahead.py): the near tier built into the revisit cache along the route (or heading)
+        # ahead of the car, instead of baked (--build-ahead; needs the revisit cache)
+        self.ahead = None
+        if BUILD_AHEAD_ON and buildaheadmod.ON and revisitmod.ON and server.mapdata is not None:
+            self.ahead = buildaheadmod.Cursor(self._ahead_follow, road_jobs=BUILD_AHEAD_JOBS if server.road_pool is not None
+                                              else 0, max_m=BUILD_AHEAD_MAX_M,
+                                              pins=revisitmod.pinned_anchors(server.cache_dir))
+        self.ahead_sent = 0                     # planned anchors sent to the mod (route_anchors)
         self.sea_busy = False                   # a water-tile plan is running (sea_tiles)
         self.sea_checked = None                 # (anchor id, 512 m square, monotonic, complete) of the last plan
         self.sea_sent = None                    # (anchor id, tiles) of the last "sea" message
@@ -3331,9 +3428,13 @@ class Connection:
         version = self.route_dl_version
         out = {"type": "route_result", "id": msg.get("id"), "points": [], "dist": 0.0, "dur": 0.0}
         try:
-            r = await asyncio.get_running_loop().run_in_executor(
-                self.s.ui_pool, routingmod.plan, float(msg["lat0"]), float(msg["lon0"]), float(msg["lat1"]),
-                float(msg["lon1"]), self.s.net, msg.get("bearing"), msg.get("via"), msg.get("avoid"))
+            if isinstance(msg.get("points"), list) and len(msg["points"]) >= 2:    # a client's own line (headless_bake)
+                pts = [[float(p[0]), float(p[1])] for p in msg["points"]]
+                r = {"points": pts, "dist": sum(buildaheadmod.metres(a, b) for a, b in zip(pts, pts[1:])), "dur": 0.0}
+            else:
+                r = await asyncio.get_running_loop().run_in_executor(
+                    self.s.ui_pool, routingmod.plan, float(msg["lat0"]), float(msg["lon0"]), float(msg["lat1"]),
+                    float(msg["lon1"]), self.s.net, msg.get("bearing"), msg.get("via"), msg.get("avoid"))
             out.update(r)
         except Exception as e:          # offline, no route, rate limited: the mod falls back to steering
             out["error"] = f"{type(e).__name__}: {e}"[:200]
@@ -3350,6 +3451,11 @@ class Connection:
                  (" (" + out["error"] + ")") if "error" in out else "")
         self.send(out)
         self.route_download(version, out["points"])
+        if self.ahead is not None:
+            self.ahead.set_route(out["points"] if "error" not in out else None, pinned_rule=bool(msg.get("pins")),
+                                 rebase_m=msg.get("rebaseM"))
+            self.ahead_sent = 0
+            self.ahead_plan()
 
     def _route_elevation(self, points):
         """The route's elevation profile for the map (routing.resample onto even steps, dem.sample): [[dist_m,
@@ -3603,13 +3709,19 @@ class Connection:
         trees = self.veg.progress() if self.s.veg is not None else (0, 0)
         want = len(self.desired)
         far = (want - self.backlog(), want)
-        counts = (self.ground_progress(aid), roads, trees, far)
+        ahead = None
+        if self.ahead is not None and self.ahead.plan_at is not None:   # m ready ahead of the car, and its horizon
+            ahead = (int(self.ahead.ready_m() // 250 * 250), int(self.ahead.horizon() // 250 * 250))
+        counts = (self.ground_progress(aid), roads, trees, far, ahead)
         now = time.monotonic()
         if counts == getattr(self, "progress_sent", None) or now - getattr(self, "progress_at", 0.0) < PROGRESS_S:
             return
         self.progress_sent, self.progress_at = counts, now
-        self.send({"type": "load_progress", "anchorId": aid, "ground": list(counts[0]), "roads": list(roads),
-                   "trees": list(trees), "far": list(far)})
+        m = {"type": "load_progress", "anchorId": aid, "ground": list(counts[0]), "roads": list(roads),
+             "trees": list(trees), "far": list(far)}
+        if ahead is not None:
+            m["ahead"] = list(ahead)
+        self.send(m)
 
     def ground_progress(self, aid):
         """(1, 1) once the ground under the player is final, else (0, 1): a teleport's graded first block still on its
@@ -4320,6 +4432,8 @@ class Connection:
             if source is not None and self.signs_on:      # (after the roads: signs only for road tiles sent)
                 self.signs.on_pose(self, aid, *self.focus, asyncio.get_running_loop(), self.s.build_signs_tile,
                                    self.roads.sent, version=source.tags.known())
+        if self.ahead is not None and aid == self.active and self.following:
+            self.ahead_tick(aid)
         if self.s.veg is not None and aid == self.active:
             anchor = self.s.anchors.get(aid)
             if anchor is not None:                            # a teleport's cells built at once, ahead
@@ -4669,6 +4783,86 @@ class Connection:
         if self.radius_sent is None or abs(radius - self.radius_sent) > RADIUS_REPORT_REL * self.radius_sent:
             self.status(self.last_status or f"Horizon {radius / 1000:.0f} km")
         return radius, {"max_level": self.s.max_level, "disc": True, "horizon": cull}
+
+    # --- the build-ahead (buildahead.py) -----------------------------------------------------------------------
+    def _ahead_follow(self, px, py, vx, vy, cx, cy):
+        """buildahead.block_items' rule: the block centre the mod has after a frame at (px, py) moving (vx, vy) with
+        block (cx, cy) (None: none yet): the same one while the player (its fast-mode test point) is inside the prepare
+        box, else follow.lua's target there (predict_centre)."""
+        rule = self.s.follow
+        lead, reach, ahead = rule.mode(vx, vy)
+        if cx is not None and max(abs(px + vx * ahead - cx), abs(py + vy * ahead - cy)) <= rule.prepare:
+            return cx, cy
+        return predict_centre(px + vx * FRAME_S, py + vy * FRAME_S, vx, vy, lead, reach, rule.grid, rule.min_lead,
+                              rule.min_lead_v)
+
+    def ahead_plan(self):
+        """The cursor's plan from the car now (its anchor, place, velocity and block); the anchors it planned for the
+        mod sent (route_anchors). False before the first anchor."""
+        cur = self.ahead
+        a = self.s.anchors.get(self.active)
+        if cur is None or a is None:
+            return False
+        block = (float(self.block.cx), float(self.block.cy)) if self.block is not None else None
+        cur.plan((round(float(a.lat), 7), round(float(a.lon), 7)), a.frame, *self.focus, *self.vel, block)
+        if len(cur.planned) > self.ahead_sent and cur.pinned_rule:
+            self.ahead_sent = len(cur.planned)
+            self.send({"type": "route_anchors", "anchors": [list(p) for p in cur.planned],
+                       "pinM": round(buildaheadmod.pin_m(cur.rebase_m))})
+        log.info("build ahead: planned %d items in %d frames from %.1f km%s%s", len(cur.items), len(cur.anchors),
+                 cur.s_car / 1000, " along the route" if cur.route and not cur.off_route else " along the heading",
+                 f", anchors planned for the mod: {cur.planned}" if cur.planned else "")
+        return True
+
+    def _ahead_live(self, it):
+        """Whether the live path has the item (the tracker sent or is building the tile, the block is here or in
+        flight): nothing for the cursor to do."""
+        a = self.s.anchors.get(self.active)
+        if a is None or it.anchor != (round(float(a.lat), 7), round(float(a.lon), 7)):
+            return False
+        if it.kind == "roads":
+            return it.key in self.roads.sent or it.key in self.roads.building or it.key in self.roads.empty
+        return self.s.terrain_cached((a.id, it.key[0], it.key[1]))
+
+    def ahead_tick(self, aid):
+        """Per pose (TICK_S at most): the plan made (again) when stale, the items due within the horizon started."""
+        cur = self.ahead
+        now = time.monotonic()
+        if cur is None or now - cur.last_tick < buildaheadmod.TICK_S:
+            return
+        a = self.s.anchors.get(aid)
+        if a is None:
+            return
+        key = (round(float(a.lat), 7), round(float(a.lon), 7))
+        x, y = self.focus
+        vx, vy = self.vel
+        if cur.stale(key, a.frame, x, y, vx, vy) and not self.ahead_plan():
+            return
+        s_car = cur.car_s(a.frame, x, y)
+        for it in cur.tick(now, s_car, math.hypot(vx, vy), skip=self._ahead_live):
+            cur.started(it, now)
+            self.spawn(self._ahead_build(it))
+        if cur.should_log(now):
+            log.info("build ahead: %s", cur.status())
+
+    async def _ahead_build(self, it):
+        cur, s = self.ahead, self.s
+        how = "failed"
+        try:
+            anchor = s.phantom_anchor(*it.anchor)
+            loop = asyncio.get_running_loop()
+            if it.kind == "roads":
+                how = await loop.run_in_executor(s.ahead_pool, s.build_ahead_roads, anchor, *it.key)
+            else:
+                how = await loop.run_in_executor(s.hm_pool, s.build_ahead_block, anchor, *it.key)
+            log.debug("build ahead: %s %s of %s: %s", it.kind, it.key, it.anchor, how)
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            log.info("build ahead: %s %s of %s failed: %s: %s", it.kind, it.key, it.anchor, type(e).__name__, e)
+        finally:
+            if cur is not None:
+                cur.done_item(it, time.monotonic(), how)
 
     def maybe_prefetch(self):
         """Speculatively build the terrain the mod is about to ask for."""
@@ -5037,6 +5231,9 @@ async def main_async(args):
     AHEAD_ON = args.download_ahead == "on"
     ROUTE_AHEAD_ON = args.route_prefetch == "on" and args.route_prefetch_km > 0
     ROUTE_AHEAD_MAX_M = args.route_prefetch_km * 1000.0
+    BUILD_AHEAD_ON = args.build_ahead == "on"
+    BUILD_AHEAD_MAX_M = max(1000.0, args.ahead_km * 1000.0)
+    BUILD_AHEAD_JOBS = max(0, int(args.ahead_jobs))
     block_pools, far_pool = [], None
     plancachemod.start_run(args.cache_dir)      # (before the workers: they inherit the run's id)
     if args.block_process == "on":
@@ -5540,6 +5737,14 @@ def main():
     ap.add_argument("--route-prefetch", choices=("on", "off"), default="on",
                     help="prefetch a planned GPS route's corridor (elevation tiles and road/building map cells) up "
                          "to --route-prefetch-km ahead, at the same low priority as --download-ahead")
+    ap.add_argument("--build-ahead", choices=("on", "off"), default="on",
+                    help="build the terrain blocks and road tiles along the GPS route (or the heading) ahead of the "
+                         "car into the revisit cache, instead of a bake (buildahead.py)")
+    ap.add_argument("--ahead-km", type=float, default=BUILD_AHEAD_MAX_M / 1000.0,
+                    help="the build-ahead's horizon at most, km along the route (it grows with speed and the "
+                         f"measured build latency; default {BUILD_AHEAD_MAX_M / 1000:g})")
+    ap.add_argument("--ahead-jobs", type=int, default=BUILD_AHEAD_JOBS,
+                    help=f"road tiles the build-ahead builds at once (default {BUILD_AHEAD_JOBS})")
     ap.add_argument("--route-prefetch-km", type=float, default=ROUTE_AHEAD_MAX_M / 1000.0,
                     help="how far along a planned GPS route to prefetch (15-25 km is sane; 0 disables it)")
     ap.add_argument("--detail-ring", type=float, default=DETAIL_RING_M,

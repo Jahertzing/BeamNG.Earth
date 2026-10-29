@@ -123,6 +123,7 @@ START_S = 600.0             # the server's start (its caches cut back, the airpo
 FOLLOW_RETRY_S = 2.0        # after a terrain_error
 CAR_Z = 0.5                 # the car's position over the ground (the pose's z)
 SAMPLE_S = 1.0              # a samples.jsonl line this often
+AHEAD_STARVED_M = 500.0     # a wait with less than this ready ahead (load_progress "ahead") counts as the build-ahead behind
 LISTEN_RE = re.compile(r"earthd listening on 127\.0\.0\.1:(\d+)")
 MOD_VERSION = re.search(r"MOD_VERSION = '([^']+)'", (modsim.MOD_DIR / "core.lua").read_text()).group(1)
 # both modes: never the game's cores, no map tiles, and no AI road graph (navgraph: 1.2 s a block in the road processes,
@@ -241,7 +242,7 @@ def resolve_mode(mode, win=IS_WIN):
 
 
 def server_command(user_dir, port=0, cache_dir=None, win=IS_WIN, mode="game", workers=None, road_processes=None,
-                   profile=False):
+                   profile=False, ahead=True):
     """launcher.start_server's command for user_dir (its options and the mod settings' flags, the remembered cache
     folder), then this tool's: a free port, and by mode ("game" | "alone") the workers and priority (workers,
     road_processes: given, or THROTTLE's / alone_workers' for one job); profile: -v (the workers' CPU lines)."""
@@ -270,6 +271,8 @@ def server_command(user_dir, port=0, cache_dir=None, win=IS_WIN, mode="game", wo
         cmd += ["--nice", "0"] if win else ["--nice", "10"]
     if profile:
         cmd += ["-v"]
+    if not ahead:           # (--ahead off: the bake's own pace, nothing built ahead of the car: buildahead.py)
+        cmd += ["--build-ahead", "off"]
     return cmd
 
 
@@ -659,6 +662,7 @@ class Drive:
                       "discards": 0, "pinned": 0, "anchors": []}
         self.waits = []
         self.by = {k: 0.0 for k in CAUSES}      # seconds by cause: moving, or the first wait reason's (cause_of)
+        self.ahead = {"min_ready_m": None, "starved_s": 0.0, "last": None}   # the server's build-ahead (load_progress)
         self.pace = float(a.speed)              # m/s now: a.speed, rising towards a.fly while nothing is built (fly)
         self.fly_max = max(float(a.speed), float(getattr(a, "fly", 0.0) or 0.0))
 
@@ -699,6 +703,18 @@ class Drive:
             self.follow_retry = now + FOLLOW_RETRY_S
         elif t == "load_progress":
             st["progress"] = m
+            if isinstance(m.get("ahead"), list) and len(m["ahead"]) == 2:
+                self.ahead["last"] = m["ahead"]
+                r = self.ahead["min_ready_m"]
+                self.ahead["min_ready_m"] = m["ahead"][0] if r is None else min(r, m["ahead"][0])
+        elif t == "route_anchors":
+            # the server's build-ahead plans the anchors it builds in along the route: this drive re-centres on them
+            # (the pinned-anchor rule), as the mod does (routepins.set)
+            for a in m.get("anchors") or ():
+                k = (float(a[0]), float(a[1]))
+                if k not in self.anchors:
+                    self.anchors.append(k)
+            self.pin_m = max(self.pin_m, float(m.get("pinM") or 0.0))
         elif t == "far_tile" and m.get("slotSerial") is not None and isinstance(m.get("material"), str):
             # nothing is drawn here: the pooled name is let go at once (the mod reports it when the tile's object goes)
             try:
@@ -839,6 +855,9 @@ class Drive:
         ground_t0 = None        # since when the ground is not final
         lat0, lon0 = self.route.point(0.0)
         self.teleport(lat0, lon0, now)
+        if getattr(self.a, "ahead", "on") != "off":     # the leg as the GPS route: the server builds ahead along it
+            self.c.send({"type": "route", "id": self.rid(), "points": [[la, lo] for la, lo in self.route.pts],
+                         "pins": True, "rebaseM": self.distance})
         samples = open(os.path.join(self.out, "samples.jsonl"), "w", encoding="utf-8") if self.out else None
         try:
             while True:
@@ -877,6 +896,8 @@ class Drive:
                                  f"{'; '.join(why)}")
                     wait = None
                 flying = self.pace > FLYING_OVER * self.a.speed
+                if why and self.ahead["last"] is not None and self.ahead["last"][0] < AHEAD_STARVED_M:
+                    self.ahead["starved_s"] += dt      # (waiting with nothing ready ahead: the build-ahead behind)
                 self.by[cause_of(why) if why else ("flying" if flying else "moving")] += dt
                 if s >= self.route.length and (not why or gave_up):
                     break
@@ -890,7 +911,7 @@ class Drive:
                     sample_at = now + SAMPLE_S
                     pr = self.st.get("progress") or {}
                     row = {"t": round(now, 1), "km": round(s / 1000, 3), "anchor": self.aid, "why": why,
-                           "progress": {k: pr.get(k) for k in ("ground", "roads", "far")}}
+                           "progress": {k: pr.get(k) for k in ("ground", "roads", "far", "ahead")}}
                     if samples:
                         samples.write(json.dumps(row) + "\n")
                     if now - last >= 10.0:
@@ -914,6 +935,7 @@ class Drive:
         return {"seconds": round(seconds, 1), "km": round(s / 1000, 2), "route_km": round(self.route.length / 1000, 2),
                 "complete": s >= self.route.length - 1, **{k: v for k, v in self.stats.items()},
                 "speed": self.a.speed, "fly": self.fly_max, "seconds_by": {k: round(v, 1) for k, v in self.by.items()},
+                "ahead": {"min_ready_m": self.ahead["min_ready_m"], "starved_s": round(self.ahead["starved_s"], 1)},
                 "waits": {"count": len(self.waits), "seconds": round(sum(w["s"] for w in self.waits), 1),
                           "gave_up": sum(1 for w in self.waits if w["gave_up"]),
                           "longest": sorted(self.waits, key=lambda w: -w["s"])[:10]}}
@@ -1142,7 +1164,7 @@ def drive_legs(a, legs, lines, routes_file, anchors, pin_m, distance, out, mode,
             port = a.connect
         else:
             cmd = server_command(a.user_dir, 0, a.cache_dir, mode=mode, workers=workers, road_processes=road_processes,
-                                 profile=getattr(a, "profile", False))
+                                 profile=getattr(a, "profile", False), ahead=getattr(a, "ahead", "on") != "off")
             say("server: " + " ".join(cmd[1:]), flush=True)
             tag = ("-" + prefix.strip(": ")) if prefix else ""
             log_path = os.path.join(out, f"server{tag}.log")
@@ -1215,6 +1237,7 @@ def child_command(a, legs, out, mode, workers, road_processes):
     if getattr(a, "no_record_deps", False):
         cmd.append("--no-record-deps")
     cmd += ["--power", getattr(a, "power", None) or "normal", "--fly", str(getattr(a, "fly", FLY_SPEED))]
+    cmd += ["--ahead", getattr(a, "ahead", None) or "on"]
     return cmd
 
 
@@ -1292,6 +1315,10 @@ def main(argv=None):
     ap.add_argument("--profile", action="store_true",
                     help="the server at -v and its process tree's CPU sampled: profile.json and a summary line per "
                          "server (where the build time goes: the server process against its workers, by job kind)")
+    ap.add_argument("--ahead", choices=("on", "off"), default="on",
+                    help="the server's build-ahead (buildahead.py): each leg is sent as the GPS route, so the server "
+                         "builds its blocks and road tiles ahead of the car and the drive re-centres on the anchors it "
+                         "plans; off: the bake's pace alone (an A/B run)")
     ap.add_argument("--connect", type=int, default=None, help="drive a server already listening on this port")
     ap.add_argument("--cache-dir", default=None, help="the server's cache (default: the launcher's)")
     ap.add_argument("--world-dir", default=None, help="the world folder (default: the server's)")

@@ -118,7 +118,7 @@ class _State:
         return g
 
 
-ANCHORS_KEPT = 2
+ANCHORS_KEPT = 3                # (the car's anchor, the build-ahead's phantom one ahead, and one more)
 SIGNALS_MARGIN_M = 60.0         # m around a road tile its junctions' mapped traffic signals are taken from
 BARRIER_HOMES_MARGIN_M = 150.0  # m around a road tile its residential land use is taken from (barriers.py: noise walls)
 WATER_BED_M = 0.05           # ground carved deeper than this under the water gets the bed layer (MUD)
@@ -496,6 +496,16 @@ def terrain_patch(aid, lat, lon, zoom, box, path):
     return terrainpatch.build(frame, elev, box, path)
 
 
+def roads_key(lat, lon, zoom, tx, ty, sidewalks, lift, buildings, left_hand, mph, q, gas_stations, versions, buried,
+              lamp_region, country=None):
+    """The revisit cache's key of a road tile: the anchor's place, the tile and every setting that changes it (the
+    server's build_ahead_roads asks has() with it before building one ahead)."""
+    import revisit
+    return revisit.key("roads", round(float(lat), 7), round(float(lon), 7), zoom, tx, ty, bool(sidewalks), float(lift),
+                       bool(buildings), bool(left_hand), bool(mph), None if q is None else float(q), bool(gas_stations),
+                       versions, float(buried), lamp_region, country)
+
+
 def roads_tile(aid, lat, lon, zoom, tx, ty, out_dir, vfs_dir, sidewalks, lift, buildings=False, left_hand=False,
                mph=True, q=None, gas_stations=False, buried=0.0, lamp_region=None, country=None):
     """earthd.Server.build_roads_tile here (road-tile pool): the anchor's road tile (tx, ty) built and
@@ -554,10 +564,8 @@ def _stack_watch(what):
 
 def _roads_tile_cached(aid, lat, lon, zoom, tx, ty, out_dir, vfs_dir, sidewalks, lift, buildings, left_hand, mph, q,
                        gas_stations, buried, lamp_region, country=None):
-    import revisit
-    k = revisit.key("roads", round(float(lat), 7), round(float(lon), 7), zoom, tx, ty, bool(sidewalks), float(lift),
-                    bool(buildings), bool(left_hand), bool(mph), None if q is None else float(q), bool(gas_stations),
-                    _s.md.versions() if _s.md is not None else None, float(buried), lamp_region, country)
+    k = roads_key(lat, lon, zoom, tx, ty, sidewalks, lift, buildings, left_hand, mph, q, gas_stations,
+                  _s.md.versions() if _s.md is not None else None, buried, lamp_region, country)
     return _revisit_tile("roads", k, aid, tx, ty, out_dir, vfs_dir, f"roads_{aid}_{tx}_{ty}.json",
                          lambda: _roads_tile(aid, lat, lon, zoom, tx, ty, out_dir, vfs_dir, sidewalks, lift, buildings,
                                              left_hand, mph, q, gas_stations, buried, lamp_region, country),
