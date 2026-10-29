@@ -844,7 +844,8 @@ def plan(ring, attrs, neighbours=0, lat=None, lon=None, look=None, town=False, d
     if attrs.get("roof_look") in LOOKS:
         roof_mat = attrs["roof_look"]
     rc = parse_color(attrs.get("roof_color"))
-    if rc is not None and attrs.get("roof_look") not in LOOKS:      # (a landmark's look over the mapped colour)
+    if rc is not None and attrs.get("roof_look") not in LOOKS and not (curved and landmarks.look_of(attrs)):
+        # (a landmark's look over the mapped colour)
         roof_mat = custom_look(roof_mat.split("|")[0], rc)
     if (barn or shed) and not stone_hut and attrs.get("facade_look") not in LOOKS:    # plain walls tinted: barns the region's barn red or wood, sheds the siding colours
         tints = WALL_TINTS[SIDING]
@@ -2779,10 +2780,11 @@ def tile_buildings(frame, x0, y0, x1, y1, layers, elev, water=None, part_layers=
                         pmh = float(pat.get("min_height") if pat.get("min_height") is not None else pmh)
                     keep = pat["roof_shape"].lower() in landmarks.SHAPES or pat["roof_shape"].lower() == "pyramidal"
                     rings.append(r)
+                    p_rshape = str(pat.get("roof_shape") or "").lower() or "flat"     # (a part's own roof: PR #167)
                     p_fcol = pat.get("facade_color") or at.get("facade_color")
                     p_rcol = pat.get("roof_color") or at.get("roof_color")
                     attrs.append({"class": at["class"], "height": ph, "num_floors": None, "cover": cover_,
-                                  "roof_shape": pat["roof_shape"] if keep else "flat",
+                                  "roof_shape": pat["roof_shape"] if keep else p_rshape,
                                   "roof_height": pat.get("roof_height") if keep else None,
                                   "roof_look": pat.get("roof_look"),
                                   "facade_look": pat.get("facade_look") or at.get("facade_look"),

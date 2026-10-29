@@ -2151,7 +2151,8 @@ def deck_profile(lines, ground_fn, crossings=(), clear=None, grade=None, lift=No
     if not over and not stacks:
         zs = _merge_overlaps(lines, zs, widths, levels, pins=pins) if widths is not None else zs
         zs = _join_nodes(lines, zs, pins)
-        return _ease(lines, zs, ground_fn, lift) if bridge_profile_mode() == "curve" else zs
+        measured = observed is not None and any(o is not None for o in observed)     # (lidar decks: as measured)
+        return _ease(lines, zs, ground_fn, lift) if bridge_profile_mode() == "curve" and not measured else zs
     arcs = [np.r_[0.0, np.cumsum(np.hypot(*np.diff(ln[:, :2], axis=0).T))] for ln in lines]
     # curve mode: one round. Its grades carry a requirement along the line to the parts joined to it whatever their
     # level, so a ramp under the upper deck rose with it and lifted it again each round (the Morrison Bridge 21 ->
@@ -2175,7 +2176,8 @@ def deck_profile(lines, ground_fn, crossings=(), clear=None, grade=None, lift=No
         zs = new
     zs = _merge_overlaps(lines, zs, widths, levels, pins=pins) if widths is not None else zs
     zs = _join_nodes(lines, zs, pins)
-    return _ease(lines, zs, ground_fn, lift) if bridge_profile_mode() == "curve" else zs
+    measured = observed is not None and any(o is not None for o in observed)     # (lidar decks: as measured)
+    return _ease(lines, zs, ground_fn, lift) if bridge_profile_mode() == "curve" and not measured else zs
 
 
 JOIN_FADE_M = 25.0      # m (at most half a part) over which a part's end is brought to its joint's height (_join_nodes)
@@ -2367,7 +2369,9 @@ def deck_profile_once(lines, ground_fn, crossings=(), clear=None, grade=None, li
     lift = DECK_CLEAR if lift is None else lift
     # (curve mode for a deck that clears something; one over nothing but the ground keeps the ground envelope's rounded
     # crest: Lombard Street, Baltimore's deck over its embankment, test_no_step_onto_a_steep_abutment)
-    if curve and lines and bridge_profile_mode() == "curve" and len(crossings):
+    # (not a deck the lidar measured: decklidar's heights are the real ones, the curve would replace them)
+    measured = observed is not None and any(o is not None for o in observed)
+    if curve and lines and bridge_profile_mode() == "curve" and len(crossings) and not measured:
         got = deck_curve(lines, ground_fn, _curve_crossings(crossings, n_road, levels), (), clear, lift)
         if got is not None:
             g = _curve_grade(lines, got)
@@ -2375,7 +2379,8 @@ def deck_profile_once(lines, ground_fn, crossings=(), clear=None, grade=None, li
                 return got
             # (a curve steeper than that may not meet its ends: a "bridge" mapped along a hillside stepped 40 m at
             # its abutment, GitHub #382 near Tata. The ground envelope's profile when it is the gentler one)
-            old = deck_profile_once(lines, ground_fn, crossings, clear, grade, lift, n_road, levels, pins, False)
+            old = deck_profile_once(lines, ground_fn, crossings, clear, grade, lift, n_road, levels, pins,
+                                    observed, clear_of, curve=False)
             return got if not old or _end_step(lines, got) <= _end_step(lines, old) + 0.05 else old
     zs = deck_heights(lines, ground_fn, pins)
     if not zs:
@@ -3679,9 +3684,9 @@ def extras(spec, pts, lon, left_hand=False, wid=None, country=None, osm=None):
             if centre_colour(lon) == "line_white":
                 # outside the Americas one broken white line (the Gotthard road on Mapillary, 2026-10-18: ours had the
                 # Americas' double line in white)
-                out.append((LANE_LINE, LANE_LINE["w"], pts.copy() if wid is None else op(pts, 0.0)))
+                out.append(({**LANE_LINE, "kind": "centre"}, LANE_LINE["w"], pts.copy() if wid is None else op(pts, 0.0)))
             else:
-                look = {"m": centre_colour(lon), "tl": CENTRE["tl"], "p": CENTRE["p"]}
+                look = {"m": centre_colour(lon), "tl": CENTRE["tl"], "p": CENTRE["p"], "kind": "centre"}
                 for side in (1, -1):
                     out.append((look, CENTRE["w"], op(pts, side * CENTRE["gap"])))
         if kind == "paved" and cls in LANE_CLASSES and not tagged:
@@ -3693,13 +3698,13 @@ def extras(spec, pts, lon, left_hand=False, wid=None, country=None, osm=None):
             if spec.oneway and lanes >= 2:
                 lw = drive / lanes
                 for k in range(1, lanes):
-                    out.append((LANE_LINE, LANE_LINE["w"], op(pts, -drive / 2 + k * lw)))
+                    out.append(({**LANE_LINE, "kind": "lane"}, LANE_LINE["w"], op(pts, -drive / 2 + k * lw)))
             elif not spec.oneway and lanes >= 4:
                 n = lanes // 2
                 lw = drive / 2 / n
                 for side in (1, -1):
                     for k in range(1, n):
-                        out.append((LANE_LINE, LANE_LINE["w"], op(pts, side * k * lw)))
+                        out.append(({**LANE_LINE, "kind": "lane"}, LANE_LINE["w"], op(pts, side * k * lw)))
     else:
         # the driving width (a town street's parking lanes and a rural road's edge strips left out: three lanes on every
         # rural Interstate, GitHub #43) and its lanes (OpenStreetMap's count where known)

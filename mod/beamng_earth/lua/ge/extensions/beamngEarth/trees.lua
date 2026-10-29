@@ -1076,7 +1076,8 @@ function M.update(anchorId, player, view, frameMs)
         local r = f[b + F_RANK]
         local g = names[f[b + F_GROUP] + 1]
         local cap = g and M.GROUP_MAX_M[g]
-        if M.isBarrier(g) then
+        local isGuardrail = M.isBarrier(g)
+        if isGuardrail then
           -- Preserve continuous 3 m runs until a tile cap actually requires thinning.
           local rowCap
           for _, lim in ipairs(M.TILE_CAP) do

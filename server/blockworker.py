@@ -1028,7 +1028,8 @@ def far_geometry(aid, lat, lon, tile, zoom, q, ref_zoom, with_sink, layout):
 # hashes these alone, so a change to the roads, the grading or anything else keeps the baked far geometry (9.1 GB of
 # the Frederick route's 24 GB bake, 2026-10-28). Graded levels (<= 0, like the block) keep the whole code's key.
 FAR_GEOMETRY_MODULES = ("farfield", "dem", "geodesy", "heightmap", "fast",
-                        "dsmground", "polardem", "cog", "mapcells")     # (dem's own height sources and cell lookup)
+                        "dsmground", "polardem", "cog", "mapcells",     # (dem's own height sources and cell lookup)
+                        "hrdem", "lidarbc", "bcproj")                   # (upstream 1.7.1's Canadian ones)
 # Server modules the listed ones import that cannot change the geometry (tests/test_far_geometry_key.py walks the
 # imports and fails on any other): downloads, caches and file staging (cache, netfetch, rangeread, staging, xproc,
 # revisit, imagery_regional, pcnaip), and farfield's writers and texture helpers, used only after the Built is made
