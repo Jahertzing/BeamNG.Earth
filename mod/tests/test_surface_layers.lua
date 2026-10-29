@@ -237,6 +237,7 @@ do
   local before2, matBefore = longObj(), longObj().fields.material
   local nCopies = copies()
   T.check(gc.setTint({ 160, 100, 50 }) == true, 'the colour moves again')
+  gc.noteBlock(256, 0, 1280, 1024, { x = 600, y = 512 })     -- (the tint's rebuild forgot the block: recorded again)
   T.check(gc.noteBlock(384, 0, 1408, 1024, { x = 1280 - r + 10, y = 512 }) == true and gc.afterBlockChange(40) == true,
     'late again while driving')
   for _ = 1, #gc.DEFS do gc.update(40) end
