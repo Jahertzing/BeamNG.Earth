@@ -335,6 +335,38 @@ local function placeSpace(o, r)
   o:setScale(vec3(r[5], r[6], r[7]))
 end
 
+-- A space or point that goes is never deleted: it is stopped, moved far away and kept for the next one of its kind
+-- (2026-10-29, the Speer crash: driving south into a pinned anchor crashed the game 11 of 11 times, 4-40 s after the
+-- rebase, a main-thread call through a freed object; never with these spaces off. A rebase's ghost road tiles go then,
+-- with the bridge spaces around the car; deleting them even a second after moving them away still crashed.)
+-- M.parkSpaces = false: the old way, deleted at once (an A/B switch).
+M.parkSpaces = true
+M.PARK_Z = -100000
+local parked = {}       -- kind key ('s|' .. ambience, 'e|' .. event) -> { object ids } stopped and moved away
+M.spacesParked = 0
+
+local function park(s)
+  local o = scenetree.findObjectById(s.id)
+  if not o then return end
+  if not M.parkSpaces or not s.pk then o:delete(); return end
+  if s.pk:sub(1, 1) == 'e' then o:stop() end
+  o:setPosition(vec3(0, 0, M.PARK_Z))
+  local l = parked[s.pk] or {}
+  l[#l + 1] = s.id
+  parked[s.pk] = l
+  M.spacesParked = M.spacesParked + 1
+end
+
+local function unpark(pk)
+  local l = parked[pk]
+  while l and #l > 0 do
+    local id = table.remove(l)
+    M.spacesParked = M.spacesParked - 1
+    local o = scenetree.findObjectById(id)
+    if o then return o end
+  end
+end
+
 -- A road tile's sound spaces (roads.lua onTile: data.sound, its flat rows).
 function M.onSpaces(key, flat)
   M.dropSpaces(key)
@@ -343,23 +375,33 @@ function M.onSpaces(key, flat)
     local r = { flat[i], flat[i + 1], flat[i + 2], flat[i + 3], flat[i + 4], flat[i + 5], flat[i + 6], flat[i + 7] }
     local amb = M.SPACES[r[1]]
     local ev = M.POINTS[r[1]]
-    local o = (amb or ev) and Sim.upcast(createObject(ev and 'SFXEmitter' or 'SFXSpace'))
+    local pk = ev and ('e|' .. ev) or amb and ('s|' .. amb)
+    local o = pk and unpark(pk)
+    local made = false
+    if pk and not o then
+      o = Sim.upcast(createObject(ev and 'SFXEmitter' or 'SFXSpace'))
+      made = o ~= nil
+    end
     if o then
-      if ev then
-        o:setTransform(MatrixF(true))
-        o:setField('track', 0, ev)
-      else
-        o:setField('soundAmbience', 0, amb)
+      if made then
+        if ev then
+          o:setTransform(MatrixF(true))
+          o:setField('track', 0, ev)
+        else
+          o:setField('soundAmbience', 0, amb)
+        end
       end
       placeSpace(o, r)
-      o.canSave = false
-      o:registerObject('bngEarthSpace_' .. (M.spacesMade + 1))
+      if made then
+        o.canSave = false
+        o:registerObject('bngEarthSpace_' .. (M.spacesMade + 1))
+        M.spacesMade = M.spacesMade + 1
+      end
       if ev then
         o:play()
-        if M.POINT_VOLUME[r[1]] then o:setVolumePitchCT(M.POINT_VOLUME[r[1]], 1, 0, 0) end
+        o:setVolumePitchCT(M.POINT_VOLUME[r[1]] or 1, 1, 0, 0)
       end
-      list[#list + 1] = { id = o:getId(), row = r }
-      M.spacesMade = M.spacesMade + 1
+      list[#list + 1] = { id = o:getId(), row = r, pk = pk }
     end
   end
   spaces[key] = list
@@ -367,10 +409,7 @@ end
 
 -- The tile goes (roads.lua dropTile).
 function M.dropSpaces(key)
-  for _, s in ipairs(spaces[key] or {}) do
-    local o = scenetree.findObjectById(s.id)
-    if o then o:delete() end
-  end
+  for _, s in ipairs(spaces[key] or {}) do park(s) end
   spaces[key] = nil
 end
 
@@ -513,9 +552,10 @@ function M.clear()
   ribbonCache, boxes, cacheAnchor = {}, {}, nil
 end
 
--- The level goes.
+-- The level goes (and its objects with it).
 function M.reset()
   M.clear()
+  parked, M.spacesParked = {}, 0
 end
 
 function M.status()
@@ -524,6 +564,7 @@ function M.status()
   return { tiles = n, nodes = M.nodes, builds = M.builds, buildMs = M.buildMs, wind = current and current[1],
     roomtone = current and current[2], ribbons = M.ribbons,
     ribbonMs = M.ribbonMs, ribbonBuilds = M.ribbonBuilds, spacesMade = M.spacesMade, shoreRibbons = M.shoreRibbons,
+    spacesParked = M.spacesParked,
     rain = M.rainVol }
 end
 

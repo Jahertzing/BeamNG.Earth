@@ -39,6 +39,7 @@ local function patch(o)
   function o:setTransform(m) self.xf = m end
   function o:getId() return self.id end
   function o:play() self.playing = true end
+  function o:stop() self.playing = false end
   function o:setVolumePitchCT(v) self.vol = v end
   return o
 end
@@ -154,13 +155,25 @@ amb.transform({ apply = function(_, x, y, z) return -y, x, z end })     -- (a qu
 T.check(math.abs(sp[1].xf.pos.x + 20) < 1e-9 and math.abs(sp[1].xf.pos.y - 10) < 1e-9
   and math.abs(sp[1].xf.yaw + 0.5 + math.pi / 2) < 1e-9, 'a rebase turns and moves them')
 amb.dropSpaces('1:3_4')
-T.check(#S.liveOf('SFXSpace') == 0, 'the tile goes: its spaces with it')
+T.check(#S.liveOf('SFXSpace') == 2 and sp[1].pos.z == amb.PARK_Z and sp[2].pos.z == amb.PARK_Z
+  and amb.status().spacesParked == 3, 'the tile goes: its spaces (and its kind 7 point) parked far away, not deleted')
+local made = amb.spacesMade
+amb.onSpaces('1:9_9', { 1, 50, 60, 5, 20, 10, 6, 0 })
+T.check(#S.liveOf('SFXSpace') == 2 and amb.spacesMade == made and sp[2].xf.pos.x == 50
+  and amb.status().spacesParked == 2, 'a new space of a parked kind: that one, placed again')
+amb.parkSpaces = false
+amb.dropSpaces('1:9_9')
+T.check(#S.liveOf('SFXSpace') == 1, 'parkSpaces off: deleted at once (the old way)')
+amb.parkSpaces = true
 amb.onSpaces('1:5_5', { 4, 3, 4, 5, 0, 0, 0, 0 })
 local pe = nil
 for _, o in ipairs(S.liveOf('SFXEmitter')) do if o.fields.track == amb.PORTAL_EVENT then pe = o end end
 T.check(pe and pe.playing and pe.pos.x == 3 and pe.pos.z == 5, 'a portal: the stock portal event playing there')
 amb.dropSpaces('1:5_5')
-T.check(not scenetree.findObjectById(pe.id), 'and gone with its tile')
+T.check(not pe.playing and pe.pos.z == amb.PARK_Z, 'its tile goes: stopped, parked')
+amb.onSpaces('1:6_6', { 4, 7, 8, 5, 0, 0, 0, 0 })
+T.check(pe.playing and pe.pos.x == 7 and pe.vol == 1, 'the next portal: the same emitter, playing again')
+amb.dropSpaces('1:6_6')
 
 -- shores: a "Waves" ribbon along a shoreline near the listener, SHORE_W wide, with the rivers
 seaV.shores = function() return { S1 = { kind = 'sea', nodes = { { 0, -30, 0 }, { 40, -30, 0 } } } }, 3 end
@@ -194,5 +207,7 @@ T.check(rainEm() == nil, 'the rain stopped: the loop gone')
 beamngEarth_weather = nil
 
 amb.clear()
-T.check(#S.liveOf('SFXEmitter') == 0 and af.enabled == false, 'clear: the room tone goes')
+local live = 0
+for _, o in ipairs(S.liveOf('SFXEmitter')) do if not (o.pos and o.pos.z == amb.PARK_Z) then live = live + 1 end end
+T.check(live == 0 and af.enabled == false, 'clear: the room tone goes (the parked points stay parked)')
 T.done('test_ambience')
