@@ -423,10 +423,11 @@ def priority_class(mode, power="normal"):
     return subprocess.NORMAL_PRIORITY_CLASS if power == "max" else subprocess.BELOW_NORMAL_PRIORITY_CLASS
 
 
-def start_server(cmd, log_path, timeout=START_S, mode="game", profile=False, power="normal", deps_dir=None):
+def start_server(cmd, log_path, timeout=START_S, mode="game", profile=False, power="normal", deps_dir=None,
+                 env_extra=None):
     """(process, port): cmd started at idle priority (mode "alone": below normal; power "max": normal), its output
     to log_path, once it listens; profile: every worker logs its memory each minute (BNGE_TRACEMALLOC); power "cool":
-    the server tree pinned to cool_cpus() (its workers inherit the mask)."""
+    the server tree pinned to cool_cpus() (its workers inherit the mask); env_extra: more of its environment (cold_env)."""
     # (BNE_REVISIT_GENS=bake: builds what an older generation baked anew and marks the anchors it bakes, revisit.py
     # "Generations"; not in the code key. BNGE_BUDGET=bake: the per-process caches clamped (budget.py BAKE_*; a BNGE_
     # switch, not in the key either), unless the shell chose a profile.)
@@ -436,6 +437,7 @@ def start_server(cmd, log_path, timeout=START_S, mode="game", profile=False, pow
         env["BNGE_TRACEMALLOC"] = "1"
     if deps_dir:
         env["BNGE_BAKE_DEPS_DIR"] = deps_dir     # (the builds' dependencies recorded: bakedeps, tools/bake_deps.py)
+    env.update(env_extra or {})
     kw = {"cwd": ROOT, "env": env}
     if IS_WIN:
         kw["creationflags"] = priority_class(mode, power) | subprocess.CREATE_NEW_PROCESS_GROUP
@@ -466,6 +468,27 @@ def start_server(cmd, log_path, timeout=START_S, mode="game", profile=False, pow
     except BaseException:
         stop_server(proc)
         raise
+
+
+def cold_env(cache_dir, out, stamp=None):
+    """--cold: the server's environment for a build-cold, data-warm run (what a drive through a fresh area costs, with
+    the elevation, imagery and map data already on disk): its revisit cache in a throwaway subdir of cache_dir
+    (revisit.SUBDIR: BNE_REVISIT_SUBDIR) and an empty baked-route folder under out (revisit.PIN_DIR: no pinned items,
+    no planned anchors). -> (env, the subdir's path: cold_done removes it)."""
+    stamp = stamp or time.strftime("%Y%m%d-%H%M%S")
+    sub = f"revisit-cold-{stamp}"
+    pins = os.path.join(out, "cold-pins")
+    os.makedirs(pins, exist_ok=True)
+    return {"BNE_REVISIT_SUBDIR": sub, "BNE_REVISIT_PIN_DIR": pins}, os.path.join(cache_dir, sub)
+
+
+def cold_done(path, keep=False, say=print):
+    """The cold run's revisit subdir removed (kept with --keep-cold: a second run over it is a warm one)."""
+    if keep or not path:
+        say(f"cold cache kept: {path}", flush=True)
+        return
+    import shutil
+    shutil.rmtree(path, ignore_errors=True)
 
 
 def stop_server(proc):
@@ -1157,7 +1180,7 @@ def drive_legs(a, legs, lines, routes_file, anchors, pin_m, distance, out, mode,
     on_leg(record) after each. Returns (every leg complete, [records])."""
     say = saying(prefix)
     proc = c = sampler = None
-    log_path = None
+    log_path = cold = None
     ok, records = True, []
     try:
         if a.connect:
@@ -1168,8 +1191,13 @@ def drive_legs(a, legs, lines, routes_file, anchors, pin_m, distance, out, mode,
             say("server: " + " ".join(cmd[1:]), flush=True)
             tag = ("-" + prefix.strip(": ")) if prefix else ""
             log_path = os.path.join(out, f"server{tag}.log")
+            env_extra = None
+            if getattr(a, "cold", False):
+                env_extra, cold = cold_env(a.cache_dir or rb.default_cache_dir(), out)
+                say(f"cold: the server builds everything anew into {cold} (the data caches stay warm)", flush=True)
             proc, port = start_server(cmd, log_path, mode=mode, profile=getattr(a, "profile", False), power=power,
-                                      deps_dir=None if getattr(a, "no_record_deps", False) else os.path.join(out, "deps"))
+                                      deps_dir=None if getattr(a, "no_record_deps", False) else os.path.join(out, "deps"),
+                                      env_extra=env_extra)
             say(f"server listening on {port} (log {log_path})", flush=True)
             if getattr(a, "profile", False):
                 sampler = CpuSampler(proc.pid, os.path.join(out, f"cpu{tag}.jsonl"), say=say).start()
@@ -1217,6 +1245,8 @@ def drive_legs(a, legs, lines, routes_file, anchors, pin_m, distance, out, mode,
             rb.write_json(os.path.join(out, f"profile{tag}.json"), p)
             say(profile_text(p), flush=True)
         stop_server(proc)
+        if cold:
+            cold_done(cold, getattr(a, "keep_cold", False), say)
     return ok, records
 
 
@@ -1236,6 +1266,10 @@ def child_command(a, legs, out, mode, workers, road_processes):
         cmd += ["--near", a.near, "--km", str(a.km)]
     if getattr(a, "no_record_deps", False):
         cmd.append("--no-record-deps")
+    if getattr(a, "cold", False):
+        cmd.append("--cold")
+    if getattr(a, "keep_cold", False):
+        cmd.append("--keep-cold")
     cmd += ["--power", getattr(a, "power", None) or "normal", "--fly", str(getattr(a, "fly", FLY_SPEED))]
     cmd += ["--ahead", getattr(a, "ahead", None) or "on"]
     return cmd
@@ -1319,6 +1353,11 @@ def main(argv=None):
                     help="the server's build-ahead (buildahead.py): each leg is sent as the GPS route, so the server "
                          "builds its blocks and road tiles ahead of the car and the drive re-centres on the anchors it "
                          "plans; off: the bake's pace alone (an A/B run)")
+    ap.add_argument("--cold", action="store_true",
+                    help="a build-cold, data-warm benchmark: the server's revisit cache in a throwaway subdir, no "
+                         "baked items or planned anchors (the drive follows the anchors the build-ahead plans), the "
+                         "subdir removed after the run (what a drive through a fresh area costs)")
+    ap.add_argument("--keep-cold", action="store_true", help="--cold: keep the subdir (a second run is warm)")
     ap.add_argument("--connect", type=int, default=None, help="drive a server already listening on this port")
     ap.add_argument("--cache-dir", default=None, help="the server's cache (default: the launcher's)")
     ap.add_argument("--world-dir", default=None, help="the world folder (default: the server's)")
@@ -1352,6 +1391,11 @@ def main(argv=None):
               f"is {distance / 1000:g} km: plan again (route_bake.py plan)", file=sys.stderr)
     anchors = [tuple(map(float, x)) for x in data.get("anchors") or ()]
     pin_m = pin_metres(data, distance)
+    if a.cold:          # (the server knows no baked anchors: the drive follows the ones it plans, route_anchors)
+        anchors, pin_m = [], 0.0
+        if a.ahead == "off":
+            print("warning: --cold --ahead off: the drive re-centres on the grid like a mod without a plan",
+                  file=sys.stderr)
     mode = resolve_mode(a.mode)
     near = None
     if a.near:
