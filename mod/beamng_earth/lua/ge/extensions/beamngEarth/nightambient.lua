@@ -35,11 +35,18 @@ M.GONE_R = 3.0              -- ... and gone this many out
 M.BIG_R = 14000             -- (a place's weight: its glow radius over this, square-rooted: Denver 1, Boulder ~0.5)
 M.SHARE_STEP = 0.05
 -- the sky's light: urban (warm) and rural (cool) brightness and colour, mixed by the city share, times the setting
-M.SKYFILL = { height = 150, radius = 700, urban = 60, rural = 12, urbanColor = { 1.0, 0.74, 0.50 },
+M.SKYFILL = { height = 150, radius = 700, urban = 180, rural = 48, urbanColor = { 1.0, 0.74, 0.50 },
   ruralColor = { 0.62, 0.72, 1.0 } }
 -- the auto exposure at night (field = value; exposureBiasEV: added to the player's GraphicEVCompensation)
 M.NIGHT_EXPOSURE = { highlightProtectStrength = 0.2, darkPixelMaxLogLuminance = -8, darkPixelMinLogLuminance = -16 }
 M.NIGHT_BIAS_EV = 0.75
+-- ... and its properties at night (engine properties, read and written as o.name, not fields: targetLuminance,
+-- autoTargetLuminance, autoExposure, manualEV). The stock auto exposure aims a dark scene at a lower luminance
+-- (EV-driven target), so a suburb stays near black whatever the bias (the night slot, 2026-10-29: EV +1.5 changed
+-- nothing in Frederick). NIGHT_TARGET_X: the night's target luminance times the stock one, its auto target off (nil:
+-- the stock target). Both untuned: the night slot compares them.
+M.NIGHT_PROPS = {}
+M.NIGHT_TARGET_X = nil
 M.mode = 'normal'
 M.errors = 0
 
@@ -155,6 +162,40 @@ end
 
 -- The auto exposure's night values on (night) or the kept ones back; checked every CHECK_S (the graphics settings
 -- write the bias back when the player changes it).
+local dayProps = {}         -- the properties' own values, kept while ours are on
+local NONE = {}             -- (a property that read nil: nothing to put back)
+
+local function differs(a, b)
+  if type(a) == 'number' and type(b) == 'number' then return math.abs(a - b) > 1e-4 end
+  return a ~= b
+end
+
+-- The night's properties: NIGHT_PROPS, and the target luminance by NIGHT_TARGET_X (from the stock one, kept).
+local function nightProps(o)
+  local want = {}
+  for k, v in pairs(M.NIGHT_PROPS) do want[k] = v end
+  if M.NIGHT_TARGET_X then
+    for _, k in ipairs({ 'targetLuminance', 'autoTargetLuminance' }) do
+      if dayProps[k] == nil then local was = o[k]; if was == nil then was = NONE end; dayProps[k] = was end
+    end
+    local base = tonumber(dayProps.targetLuminance)
+    if base then
+      want.autoTargetLuminance = false
+      want.targetLuminance = base * M.NIGHT_TARGET_X
+    end
+  end
+  return want
+end
+
+local function restoreProps(o, keep)
+  for k, v in pairs(dayProps) do
+    if not (keep and keep[k] ~= nil) then
+      if v ~= NONE then o[k] = v end
+      dayProps[k] = nil
+    end
+  end
+end
+
 local function stepExposure(night)
   local o = exposureObj()
   if not o then return end
@@ -168,9 +209,16 @@ local function stepExposure(night)
     end
     local want = playerBias() + M.NIGHT_BIAS_EV
     if math.abs((tonumber(o.exposureBiasEV) or 0) - want) > 1e-3 then o.exposureBiasEV = want end
+    local props = nightProps(o)
+    restoreProps(o, props)           -- (a property no longer ours: its own value back)
+    for k, v in pairs(props) do
+      if dayProps[k] == nil then local was = o[k]; if was == nil then was = NONE end; dayProps[k] = was end
+      if differs(o[k], v) then o[k] = v end
+    end
   elseif dayExposure then
     for k, v in pairs(dayExposure) do if v ~= nil then o:setField(k, 0, tostring(v)) end end
     o.exposureBiasEV = playerBias()
+    restoreProps(o, nil)
     dayExposure = nil
   end
 end
@@ -227,8 +275,11 @@ function M.reset()
 end
 
 function M.status()
+  local o = exposureObj()
+  local ex = o and { bias = o.exposureBiasEV, target = o.targetLuminance, autoTarget = o.autoTargetLuminance,
+                     auto = o.autoExposure, manualEV = o.manualEV } or nil
   return { mode = M.mode, share = M.share, written = written, errors = M.errors, fill = fillLook,
-           nightExposure = dayExposure ~= nil }
+           nightExposure = dayExposure ~= nil, exposure = ex }
 end
 
 return M

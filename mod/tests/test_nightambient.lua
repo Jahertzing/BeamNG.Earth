@@ -86,6 +86,29 @@ na.update(anchor, 1, true)
 na.reset()
 T.check(fills() == 0 and #S.liveOf('PointLight') == 0, 'reset: the sky light gone')
 T.check(le:getField('highlightProtectStrength') == '0.75' and le.exposureBiasEV == 0.5, 'reset: the stock exposure back')
+
+-- the properties: the night's target luminance from the stock one, the auto target off; back by day, and when no
+-- longer asked for
+le.targetLuminance, le.autoTargetLuminance, le.autoExposure, le.manualEV = 0.2, true, true, 0
+na.NIGHT_TARGET_X = 3
+clock = clock + 3
+na.update(anchor, 1, true)
+T.check(math.abs(le.targetLuminance - 0.6) < 1e-9 and le.autoTargetLuminance == false, 'night: target x3, auto off')
+clock = clock + 3
+na.update(anchor, 1, true)
+T.check(math.abs(le.targetLuminance - 0.6) < 1e-9, '... from the stock target, not compounded')
+T.check(math.abs(na.status().exposure.target - 0.6) < 1e-9, 'status: the exposure')
+na.NIGHT_TARGET_X = nil
+na.NIGHT_PROPS = { manualEV = -3, autoExposure = false }
+clock = clock + 3
+na.update(anchor, 1, true)
+T.check(le.targetLuminance == 0.2 and le.autoTargetLuminance == true, 'target no longer asked for: the stock one back')
+T.check(le.manualEV == -3 and le.autoExposure == false, 'NIGHT_PROPS: manual exposure at night')
+clock = clock + 3
+na.update(anchor, 1, false)
+T.check(le.autoExposure == true and le.manualEV == 0, 'day: auto exposure back')
+na.NIGHT_PROPS = {}
+na.reset()
 camAt = vec3(0, 0, 1600)
 
 -- the lamps' fill: under the nearest street lamps (with an arm), toward the road

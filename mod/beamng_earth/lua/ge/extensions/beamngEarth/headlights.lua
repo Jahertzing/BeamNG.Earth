@@ -10,6 +10,7 @@ M.MODES = { stock = { 1, 1 }, bright = { 2, 1.5 }, brighter = { 4, 2 } }
 M.mode = 'bright'
 M.CHECK_S = 1.0
 M.errors = 0
+M.lastError = nil
 
 local applied = { vid = nil, vdata = nil, mode = nil, n = 0 }
 local lastCheck = -1e9
@@ -28,9 +29,16 @@ function M.vluaCommand(k)
     "p.bneBase=p.bneBase or p.lightBrightness p.lightBrightness=p.bneBase*k p.lastVal=math.huge end end end", k)
 end
 
--- (as the spawn does: meshs.lua)
-local function colorOf(c)
-  if c ~= nil then return parseColor(c) end
+-- Pure: a jbeam light colour ({ r, g, b, a } 0..255 or '#rrggbbaa') as a ColorF, as the spawn reads it (meshs.lua's own
+-- parseColor; the global parseColor gives a packed number, which setLightArgs refuses: "expect userdata, got number").
+function M.colorOf(c)
+  if type(c) == 'table' then
+    return ColorF((c.r or 0) / 255, (c.g or 0) / 255, (c.b or 0) / 255, (c.a or 255) / 255)
+  elseif type(c) == 'string' and #c > 7 and c:sub(1, 1) == '#' then
+    local h = c:gsub('#', '')
+    local function x(i) return (tonumber(h:sub(i, i + 1), 16) or 0) / 255 end
+    return ColorF(x(1), x(3), x(5), x(7))
+  end
   return ColorF(0, 0, 0, 0)
 end
 
@@ -47,7 +55,7 @@ local function scale(veh, props, k, r)
       if light then
         local att = p.lightAttenuation and vec3(p.lightAttenuation) or vec3(0, 1, 1)
         light:setLightArgs(p.lightInnerAngle or 40, p.lightOuterAngle or 45, p.bneBase.b * k, p.bneBase.r * r,
-          colorOf(p.lightColor), att, p.lightCastShadows or false)
+          M.colorOf(p.lightColor), att, p.lightCastShadows or false)
         n = n + 1
       end
     end
@@ -64,9 +72,12 @@ local function step()
   -- (a new car, a respawn (new jbeam data, new lights) or a new setting)
   if not vdata or (applied.vid == vid and applied.vdata == vdata and applied.mode == M.mode) then return end
   local m = M.MODES[M.mode] or M.MODES.stock
-  applied.n = vdata.props and scale(veh, vdata.props, m[1], m[2]) or 0
-  veh:queueLuaCommand(M.vluaCommand(m[1]))
+  -- (tried once per car and setting: a failure is kept for status, not retried every check)
   applied.vid, applied.vdata, applied.mode = vid, vdata, M.mode
+  local ok, n = pcall(scale, veh, vdata.props or {}, m[1], m[2])
+  if not ok then M.errors, M.lastError = M.errors + 1, tostring(n) end
+  applied.n = ok and n or 0
+  veh:queueLuaCommand(M.vluaCommand(m[1]))
 end
 
 -- Every frame (nightlights.update); the work every CHECK_S, and only when the car or the setting changed.
@@ -89,7 +100,7 @@ function M.reset()
 end
 
 function M.status()
-  return { mode = M.mode, lamps = applied.n, vid = applied.vid, errors = M.errors }
+  return { mode = M.mode, lamps = applied.n, vid = applied.vid, errors = M.errors, lastError = M.lastError }
 end
 
 return M
