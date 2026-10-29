@@ -200,16 +200,19 @@ def part_keys(frame, f, tile=None):
     return out
 
 
-def tile_items(frame, f, parts, elev, tx, ty, skip=None):
+def tile_items(frame, f, parts, elev, tx, ty, skip=None, road_layers=None):
     """[(Spec, gmin, gmax)] of the cell's owned buildings in the anchor's road tile (tx, ty) (rings relative to its
-    corner), simplified, their walls SKIRT_M deeper. skip: the ids left out (default: the ones not owned)."""
+    corner), simplified, their walls SKIRT_M deeper. skip: the ids left out (default: the ones not owned).
+    road_layers: the roads of the map cells under the tile (buildings.motorway_ways: none across a motorway)."""
     import roads
     x0, y0, x1, y1 = roads.tile_bbox(tx, ty)
     if skip is None:
         own = _owned_rows(f)
         skip = frozenset(str(i) for i in np.asarray(f.ids)[~own].tolist()) if (~own).any() else frozenset()
     items = buildings.tile_buildings(frame, x0, y0, x1, y1, [f], elev,
-                                     part_layers=[parts] if parts is not None else (), skip=skip)
+                                     part_layers=[parts] if parts is not None else (), skip=skip,
+                                     motorways=buildings.motorway_ways(frame, road_layers, x0, y0)
+                                     if road_layers else None)
     out = []
     for spec, gmin, gmax in items:
         spec.ring = simplify_ring(spec.ring)
@@ -267,7 +270,12 @@ def build_tile(frame, key, tier, md, elev, out_dir, vfs_dir, aid, kind="prefetch
     n = 0
     merged = []
     for tx, ty in sorted(part_keys(frame, f)):
-        items = tile_items(frame, f, parts, elev, tx, ty, skip)
+        # the near rings' guard (buildings.over_motorway) here too, from the z14 cells' roads under the tile (fetched
+        # with `kind` as the buildings were); not the towers' ring (50 m and more, 8 km and farther): a walkway over
+        # the lanes is never one of those, and their roads would be cells tens of km off
+        rl = None if tier == "towers" else [md.cell(k, layers=("roads",), kind=kind).layers.get("roads")
+                                            for k in roads.cells_of_tile(frame, tx, ty, margin=0.0)]
+        items = tile_items(frame, f, parts, elev, tx, ty, skip, rl)
         if not items:
             continue
         tm = mesh(items)

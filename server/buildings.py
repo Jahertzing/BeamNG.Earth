@@ -2556,6 +2556,102 @@ def road_across(ring, lines, max_w=ACROSS_W):
     return False
 
 
+# A footprint across a motorway is left out, in every tier (tile_buildings' motorways): we have no deck to put it on.
+# Jeff's drive 2026-10-29 ("big wall in road", 39.6009,-104.8882): DRCOG's 2024 roofprint oid794451, the Arapahoe at
+# Village Center station's walkway over I-25 with its stair towers (108 x 5 m, 19.2 m to the towers' roofs, no
+# min_height), stood as a 19 m wall across the six lanes. The I-25 corridor's cached cells, Frederick to Castle Rock
+# (2026-10-29): six such walkways (light rail stations' bridges, DRCOG) overlap the carriageways by 103-330 m², still
+# 71-216 m² with them 3 m narrower; the buildings that abut a shoulder overlap 11-45 m² with the mapped centre line's
+# own error, 0-15 m² 1.5 m in, none 3 m in. So a footprint goes when a carriageway's centre line runs through it (a
+# walkway over a two-lane trunk: little area), or when its overlap with the carriageways OVER_MOTORWAY_INSET_M narrower
+# each side is more than OVER_MOTORWAY_M2 or OVER_MOTORWAY_SHARE of the footprint (the share: four 5 m² DRCOG boxes,
+# 2.4 m tall, stood 2 m off I-25's centre line by Louisiana-Pearl). An elevated one (min_height) goes too: nothing
+# carries it over the lanes. The ways are the ground parts (no bridge or tunnel ranges: a building over a tunnel or
+# under a viaduct stays).
+OVER_MOTORWAY_CLASSES = ("motorway", "trunk")     # (their ramps too: Overture's subclass "link", the class theirs)
+OVER_MOTORWAY_INSET_M = 2.0
+OVER_MOTORWAY_M2 = 30.0
+OVER_MOTORWAY_SHARE = 0.25
+OVER_MOTORWAY_STEP_M = 1.0      # m between the footprint's sample points (motorway_overlap), and of a centre line
+                                # through it (over_motorway)
+
+
+def motorway_ways(frame, road_layers, x0, y0, margin=50.0, size=256.0):
+    """[(xy (k, 2) relative to (x0, y0), half width)] of the motorway, trunk and link carriageways on the ground near
+    the square [x0, x0 + size] x [y0, y0 + size] (for over_motorway): railways.motorways, each road at its widest copy
+    across the cells (a copy in a neighbour cell without its CDOT lanes is 11.8 m wide against I-25's 19 m drawn)."""
+    import railways
+    near = (x0 - margin, y0 - margin, x0 + size + margin, y0 + size + margin)
+    return [(np.asarray(xy, np.float64)[:, :2] - [x0, y0], float(hw))
+            for xy, hw in railways.motorways(frame, [f for f in road_layers if f is not None], near,
+                                             OVER_MOTORWAY_CLASSES)]
+
+
+_WAY_BOXES = {}                 # id(list of ways) -> (that list, its boxes (n, 5), its centre lines): line_boxes' memo
+
+
+def _way_boxes(ways):
+    """((n, 5) x0 y0 x1 y1 half-width, [centre line (k, 2)]) of motorway_ways' ways, made once per list (a tile tests
+    every footprint against the same list)."""
+    got = _WAY_BOXES.get(id(ways))
+    if got is not None and got[0] is ways:
+        return got[1], got[2]
+    b = np.array([(xy[:, 0].min(), xy[:, 1].min(), xy[:, 0].max(), xy[:, 1].max(), hw) for xy, hw in ways],
+                 np.float64).reshape(-1, 5)
+    if len(_WAY_BOXES) >= 16:
+        _WAY_BOXES.clear()
+    _WAY_BOXES[id(ways)] = (ways, b, [xy for xy, _ in ways])
+    return b, _WAY_BOXES[id(ways)][2]
+
+
+def over_motorway(ring, ways):
+    """Does footprint ring (k, 2) stand across one of the motorway carriageways ways (motorway_ways): its centre line
+    through it (a walkway over a two-lane trunk is on less than OVER_MOTORWAY_M2 of it once narrowed), or more than
+    OVER_MOTORWAY_M2 or OVER_MOTORWAY_SHARE of it on them OVER_MOTORWAY_INSET_M in from their edges? A building beside
+    the shoulder is neither: the mapped centre line is off by a metre or two, never by the half width."""
+    if not ways:
+        return False
+    if road_through(ring, _way_boxes(ways)[1]) >= OVER_MOTORWAY_STEP_M:
+        return True
+    ov = motorway_overlap(ring, ways, inset=OVER_MOTORWAY_INSET_M)
+    return ov > OVER_MOTORWAY_M2 or ov > OVER_MOTORWAY_SHARE * abs(_area2(np.asarray(ring, np.float64)[:, :2])) / 2
+
+
+def motorway_overlap(ring, ways, inset=0.0, step=OVER_MOTORWAY_STEP_M):
+    """m² of footprint ring (k, 2) on the carriageways ways [(xy (k, 2), half width)] narrowed by inset on each side,
+    from sample points every step m (on a grid fixed to the ring's own bounds: a pure function of the two)."""
+    ring = np.asarray(ring, np.float64)[:, :2]
+    lo, hi = ring.min(0), ring.max(0)
+    b = _way_boxes(ways)[0]
+    near = np.flatnonzero((b[:, 2] + b[:, 4] >= lo[0]) & (b[:, 0] - b[:, 4] <= hi[0])
+                          & (b[:, 3] + b[:, 4] >= lo[1]) & (b[:, 1] - b[:, 4] <= hi[1]) & (b[:, 4] > inset))
+    if not len(near):
+        return 0.0
+    cand = [(ways[k][0], ways[k][1] - inset) for k in near.tolist()]
+    area = abs(_area2(ring)) / 2
+    step = max(step, math.sqrt(area / 40000.0))     # (at most ~40k points: a mall's footprint)
+    nx, ny = max(1, int(math.ceil((hi[0] - lo[0]) / step))), max(1, int(math.ceil((hi[1] - lo[1]) / step)))
+    gx, gy = np.meshgrid(lo[0] + (np.arange(nx) + 0.5) * step, lo[1] + (np.arange(ny) + 0.5) * step)
+    pts = np.stack([gx.ravel(), gy.ravel()], 1)
+    on = np.zeros(len(pts), bool)
+    for xy, r in cand:
+        P, ab = xy[:-1], np.diff(xy, axis=0)
+        L2 = np.maximum((ab * ab).sum(1), 1e-12)
+        for j in range(len(P)):         # (segment by segment: a long motorway's hundreds of them against ~1k points)
+            s0, s1 = np.minimum(xy[j], xy[j + 1]) - r, np.maximum(xy[j], xy[j + 1]) + r
+            if s1[0] < lo[0] or s0[0] > hi[0] or s1[1] < lo[1] or s0[1] > hi[1]:
+                continue
+            q = pts - P[j]
+            t = np.clip((q @ ab[j]) / L2[j], 0.0, 1.0)
+            d = q - t[:, None] * ab[j]
+            on |= (d * d).sum(1) <= r * r
+    if not on.any():
+        return 0.0
+    from polygon import contains_points
+    inside = contains_points(ring, pts[on])
+    return float(inside.sum()) * step * step
+
+
 CENTRE_PREFILTER_M = 1.0       # m of slack for Features.outer_centres (cumulative sums: within ~1e-5 m of the exact mean)
 
 
@@ -2669,7 +2765,7 @@ class _PartsOf:
 
 def tile_buildings(frame, x0, y0, x1, y1, layers, elev, water=None, part_layers=(), west_town=False, roads_xy=None,
                    tunnels_xy=None, garages_xy=None, supports=None, bridges_xy=None, water_xy=None, decks=None,
-                   ml_roads_xy=None, ways_xy=None, skip=frozenset(), min_size=None):
+                   ml_roads_xy=None, ways_xy=None, skip=frozenset(), min_size=None, motorways=None):
     """[(Spec, gmin, gmax)] of the buildings whose footprint centroid is in the tile [x0, x1) x [y0, y1)
     (anchor frame), rings relative to (x0, y0). layers: mapgeom.Features of buildings (one per map cell; a
     building in two cells is taken once, by id); elev(lat, lon) the physics ground. part_layers: the
@@ -2681,7 +2777,8 @@ def tile_buildings(frame, x0, y0, x1, y1, layers, elev, water=None, part_layers=
     buildings) is a deck, a boat or a vehicle, left out (_ml_false). skip: ids of buildings left out (a gas station's
     canopy, drawn by the mod from the stock levels' props: gasstations.tile_sites). min_size (min height m, min
     footprint m²): only buildings at least that tall or that large (the skyline tiles: skyline_tile), tested before
-    any other work on a building."""
+    any other work on a building. motorways (motorway_ways): a footprint or part across one is left out
+    (over_motorway), whatever its source (Overture, DRCOG, a landmark's)."""
     parts_of = _PartsOf(frame, part_layers)     # building id -> [(ring in the anchor frame, (own height, bottom))]
     import landmarks
     lm_osm = landmarks.by_osm()                 # the landmark table (landmarks.json): by OSM id, by a point
@@ -2731,6 +2828,10 @@ def tile_buildings(frame, x0, y0, x1, y1, layers, elev, water=None, part_layers=
                     h_ = float(fl_) * 3.2 if fl_ is not None and np.isfinite(fl_) else 0.0
                 if h_ < min_size[0] and abs(float(np.dot(e[:-1], n[1:]) - np.dot(e[1:], n[:-1]))) / 2 < min_size[1]:
                     continue
+            if motorways and over_motorway(np.stack([e - x0, n - y0], 1), motorways):
+                if key is not None:
+                    seen.add(key)
+                continue                # (a walkway over the lanes drawn as a wall across them: OVER_MOTORWAY_CLASSES)
             at = {k: (a[k][i] if k in a else None) for k in
                   ("class", "height", "num_floors", "min_height", "roof_shape", "roof_height", "name",
                    "facade_material", "facade_color", "roof_material", "roof_color")}
@@ -2762,7 +2863,7 @@ def tile_buildings(frame, x0, y0, x1, y1, layers, elev, water=None, part_layers=
                     if ph + pmh < FLAT_FOOTPRINT_M:
                         continue        # (a part taking a flat area's height: FLAT_FOOTPRINT_M)
                     r = clean_ring(pring - np.array([x0, y0]))
-                    if r is None or _area2(r) / 2 < 4.0:
+                    if r is None or _area2(r) / 2 < 4.0 or (motorways and over_motorway(r, motorways)):
                         continue
                     # a part keeps its own curved roof (a dome on its drum: landmarks.py); the rest are flat
                     plm = lm_osm.get(landmarks.osm_key(pa.get("src_record"))) if lm_osm else None
@@ -3449,6 +3550,7 @@ def road_tile_items(frame, tx, ty, md, ground, decks=None, skip=frozenset()):
                           part_layers=[c.layers.get("building_parts") for c in cds],
                           west_town=district_town(frame, tx, ty, md),
                           roads_xy=road_lines(frame, [c.layers.get("roads") for c in cds], x0, y0),
+                          motorways=motorway_ways(frame, [c.layers.get("roads") for c in cds], x0, y0),
                           ways_xy=way_lines(frame, [c.layers.get("roads") for c in cds], x0, y0),
                           tunnels_xy=tunnel_lines(frame, [c.layers.get("roads") for c in cds], x0, y0),
                           garages_xy=garage_rings(frame, [c.layers.get("infrastructure") for c in cds], x0, y0),
@@ -3527,6 +3629,7 @@ def far_tile(frame, tx, ty, md, ground, out_dir, vfs_dir, aid, lamp_region=None)
                            bridges_xy=bridge_lines(frame, [c.layers.get("roads") for c in cds], x0, y0),
                            water_xy=water_rings(frame, [c.layers.get("water") for c in cds], x0, y0),
                            ml_roads_xy=road_lines(frame, [c.layers.get("roads") for c in cds], x0, y0),
+                           motorways=motorway_ways(frame, [c.layers.get("roads") for c in cds], x0, y0),
                            ways_xy=way_lines(frame, [c.layers.get("roads") for c in cds], x0, y0, size=x1 - x0))
     mesh = build(items, lite=True)
     import landmarks
@@ -3759,7 +3862,8 @@ def skyline_tile(frame, ux, uy, md, ground, out_dir, vfs_dir, aid, lamp_region=N
         return None
     cds = [md.cell(k, layers=("buildings", "roads"), kind="background") for k in keys]
     layers = [c.layers.get("buildings") for c in cds]
-    items = tile_buildings(frame, x0, y0, x1, y1, layers, ground, min_size=(1e9, SKY_MIN_AREA_M2))
+    items = tile_buildings(frame, x0, y0, x1, y1, layers, ground, min_size=(1e9, SKY_MIN_AREA_M2),
+                           motorways=motorway_ways(frame, [c.layers.get("roads") for c in cds], x0, y0, size=x1 - x0))
     lamps = far_lamps(frame, [c.layers.get("roads") for c in cds], x0, y0, x1 - x0,
                       built_squares(items, 0.0, 0.0, x1 - x0), ground, lamp_region)
     for spec, _gmin, _gmax in items:        # (the simplest shape: a box or a few corners, a flat roof, nothing on it)
