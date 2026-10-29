@@ -68,8 +68,8 @@ M.AHEAD_M = { 150, 350 }
 -- ... and starts at speed: gameplay_traffic.forceTeleport leaves a car standing (only the stock respawn gives it a
 -- speed, at most 14 m/s), so on I-25 each car put ahead was a standing car 150-350 m in front of a player at 75 mph,
 -- the traffic ran at 40-55 mph and the player's autodrive behind it averaged 46 (the traffic bench, 2026-10-28)
-M.AHEAD_PACE = 0.85     -- of the player's speed
-M.AHEAD_V_MAX = 31      -- m/s (70 mph)
+M.AHEAD_PACE = 0.95     -- of the player's speed (0.85 until 2026-10-29: "they dont drive as fast as they should")
+M.AHEAD_V_MAX = 36      -- m/s (80 mph: a 75 zone plus FLOW_MPH)
 -- ... over PUSH_S at most PUSH_ACCEL: the stock speed boost (gameplay_traffic's respawnSpeed) pushes the body to its
 -- speed in 0.25 s (thrusters.applyVelocity on the cluster without the wheels), 12 g at 70 mph: the tyres were dragged
 -- along, and on I-25 cars put ahead smoked, threw dust and slid sideways in front of the player (Jeff's drive
@@ -964,8 +964,28 @@ end
 -- the player's other cars. The stock subtraction counts every active vehicle that is not flagged parked, and parked
 -- cars still spawning are not flagged yet: at a dense spot on I-25 (16 of them) the amount was -9 and no traffic came
 -- (2026-10-28, a level started at the player's last spot).
+-- The game picks its traffic amount once, at install: physical cores, free memory, at most 8, less one for the player
+-- (ge_utils updateTrafficAmounts), 7 on a 12-core Ryzen 9 9900X3D. On I-25 that was a nearly empty motorway (Jeff's
+-- drive 2026-10-28: "not many cars on the highway"). A traffic car costs ~0.15 of a core and no frame rate (the traffic
+-- bench, 2026-10-28: busy's 11 cars at 85-89 fps), so the amount is at least CPU_FLOOR of the cores less CPU_SPARE.
+M.CPU_SPARE = 2
+M.CPU_FLOOR_MAX = 14
+
+-- Pure: the least traffic amount for a CPU of `cores` physical cores (nil: unknown, no floor).
+function M.cpuFloor(cores)
+  cores = tonumber(cores)
+  if not cores or cores < 1 then return 0 end
+  return math.max(0, math.min(M.CPU_FLOOR_MAX, math.floor(cores) - M.CPU_SPARE))
+end
+
+local function physicalCores()
+  local ok, info = pcall(function() return Engine.Platform.getCPUInfo() end)
+  return ok and type(info) == 'table' and tonumber(info.coresPhysical) or nil
+end
+
 local function ownAmount(gt)
   local okB, base = pcall(gt.getIdealSpawnAmount, nil, false)
+  if okB and tonumber(base) then base = math.max(tonumber(base), M.cpuFloor(physicalCores())) end
   local okV, vs = pcall(function() return require('beamngEarth/collisionfoci').vehicles() end)
   return M.autoAmount(okB and tonumber(base) or nil, okV and vs or {}, playerId())
 end
