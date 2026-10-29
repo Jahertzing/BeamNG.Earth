@@ -1,0 +1,4 @@
+# Developer tools (not needed to play; install.py does not install these): pip install -r server/requirements-dev.txt
+lupa>=2.5           # LuaJIT 2.1 inside Python: tools/lua_tests.py runs the mod's Lua tests, tools/lint.py compiles the mod
+ruff>=0.14,<0.15    # tools/lint.py (pyproject.toml [tool.ruff])
+psutil>=7           # tools/autodrive_perf.py, headless_bake --profile (process sampling on Windows)

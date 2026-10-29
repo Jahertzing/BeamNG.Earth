@@ -32,7 +32,7 @@ class _Rec:
 class HouseWindowTest(TR.RecessTest):
     SWITCHES = {"RECESS": True, "RECESS_SHOP": False, "FINS": False, "HOUSE_VARIETY": True}
     test_houses = test_sheet_buildings = test_whole_bay_shift = test_tall_sheet_capped = None
-    test_off_is_as_before = test_openings_table = test_deterministic = None
+    test_off_is_as_before = test_openings_table = None
 
     def specs(self, n=80):
         return [s for s in HF.houses(n) if s.wall and s.windows is not False]

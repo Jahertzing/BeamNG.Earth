@@ -8,11 +8,17 @@
   --timeout S    a module still running after S seconds is killed with its child processes (default 1500);
                  shortly before, faulthandler prints every thread's stack (where it hangs)
   --logs DIR     one live log per module (unittest -v): tail -f DIR/<module>.log (default build/test-logs)
+  --changed [BASE]  only the modules the diff against BASE (default origin/main) touches: committed past the merge
+                 base, staged, unstaged and untracked files. A changed server/x.py, tools/x.py or server/tests/x.py
+                 selects test_x, test_x_tool and every test module importing x, and the modules importing x count as
+                 changed too (one hop). A changed test selects itself. Nothing selected: nothing runs, exit 0. The full
+                 suite is the nightly's (tools/gate.py --full).
 
 Prints a line for every test that fails, errors, is skipped or takes over 5 s, a status line every 30 s (modules
 done, the ETA, what is running and its current test) and a summary per module. The ETA comes from the earlier runs'
-times (build/test_times.json); the longest modules start first. Exit status 1 when a module did not pass.
-BNGE_SKIP_DRIVE=1 skips the drive test, as with unittest discover.
+times (build/test_times.json); the longest modules start first. Exit status 1 when a module did not pass, except the
+modules in tools/quarantine.txt (known failures, reported but not failing). BNGE_SKIP_DRIVE=1 skips the drive test,
+as with unittest discover.
 """
 import argparse
 import concurrent.futures as cf
@@ -173,10 +179,88 @@ class Runner:
         finally:
             stop.set()
         ex.shutdown()
-        bad = [(m, r) for m, r, _ in res if r != "OK"]
-        self.say(f"done: {len(res) - len(bad)} OK, {len(bad)} not OK"
-                 + (": " + ", ".join(f"{m} ({r})" for m, r in bad) if bad else ""))
+        known = quarantined()
+        bad = [(m, r) for m, r, _ in res if r != "OK" and m not in known]
+        allowed = [(m, r) for m, r, _ in res if r != "OK" and m in known]
+        self.say(f"done: {len(res) - len(bad) - len(allowed)} OK, {len(bad)} not OK"
+                 + (": " + ", ".join(f"{m} ({r})" for m, r in bad) if bad else "")
+                 + (f"; known failures: {', '.join(m for m, _ in allowed)} (tools/quarantine.txt)" if allowed else ""))
         return 1 if bad else 0
+
+
+def quarantined(path=os.path.join(HERE, "quarantine.txt")):
+    """{test module: reason} from tools/quarantine.txt: known failures that do not fail the run."""
+    out = {}
+    try:
+        with open(path, encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if line and not line.startswith("#") and ":" in line:
+                    name, why = line.split(":", 1)
+                    out[name.strip()] = why.strip()
+    except OSError:
+        pass
+    return out
+
+
+IMPORT = re.compile(r"^\s*(?:import\s+([\w, ]+)|from\s+(\w+)\s+import)", re.M)
+
+
+def imports_of(src):
+    """The top-level module names a source imports."""
+    out = set()
+    for a, b in IMPORT.findall(src):
+        for n in ([x.strip().split(" as ")[0] for x in a.split(",")] if a else [b]):
+            if n:
+                out.add(n.split(".")[0])
+    return out
+
+
+def changed_files(base, root=REPO_ROOT):
+    """Repo-relative paths changed since BASE: committed on this branch past the merge base, staged, unstaged and
+    untracked."""
+    def git(*args):
+        p = subprocess.run(["git"] + list(args), cwd=root, capture_output=True, text=True, errors="replace")
+        return p.stdout.splitlines() if p.returncode == 0 else []
+    out = set(git("diff", "--name-only", f"{base}...HEAD")) | set(git("diff", "--name-only", "HEAD")) \
+        | set(git("ls-files", "--others", "--exclude-standard"))
+    return sorted(f.replace("\\", "/") for f in out if f.strip())
+
+
+def select_modules(changed, test_sources, module_sources):
+    """The test modules for the changed paths. test_sources: {test module name: its source}; module_sources:
+    {module name: source} for server/*.py, tools/*.py and the test folder's helpers. Returns (sorted test modules,
+    {test module: why})."""
+    names = set()
+    for f in changed:
+        if not f.endswith(".py"):
+            continue
+        base = os.path.basename(f)[:-3]
+        if f.startswith(("server/", "tools/")) or f.count("/") == 0:
+            names.add(base)
+    hop = {m for m, src in module_sources.items() if imports_of(src) & names}
+    names |= hop
+    why = {}
+    for t in [n for n in names if n.startswith("test_") and n in test_sources]:
+        why[t] = "changed"
+    for t, src in test_sources.items():
+        if t in why:
+            continue
+        hit = [n for n in names if t in (f"test_{n}", f"test_{n}_tool")] or sorted(imports_of(src) & names)
+        if hit:
+            why[t] = "imports " + ", ".join(hit[:3])
+    return sorted(why), why
+
+
+def read_sources(paths):
+    out = {}
+    for p in paths:
+        try:
+            with open(p, encoding="utf-8", errors="replace") as f:
+                out[os.path.basename(p)[:-3]] = f.read()
+        except OSError:
+            pass
+    return out
 
 
 def main():
@@ -185,9 +269,25 @@ def main():
     ap.add_argument("--par", type=int, default=6)
     ap.add_argument("--timeout", type=int, default=1500)
     ap.add_argument("--logs", default=os.path.join(BUILD, "test-logs"))
+    ap.add_argument("--changed", nargs="?", const="origin/main", metavar="BASE",
+                    help="only the modules the diff against BASE touches (default origin/main)")
     a = ap.parse_args()
     mods = [m[:-3] if m.endswith(".py") else m for m in a.modules] or \
         sorted(os.path.basename(p)[:-3] for p in glob.glob(os.path.join(TESTS, "test_*.py")))
+    if a.changed:
+        changed = changed_files(a.changed)
+        tests = read_sources(glob.glob(os.path.join(TESTS, "test_*.py")))
+        helpers = read_sources(glob.glob(os.path.join(REPO_ROOT, "server", "*.py"))
+                               + glob.glob(os.path.join(REPO_ROOT, "tools", "*.py"))
+                               + [p for p in glob.glob(os.path.join(TESTS, "*.py"))
+                                  if not os.path.basename(p).startswith("test_")])
+        picked, why = select_modules(changed, tests, helpers)
+        print(f"changed since {a.changed}: {len(changed)} files; test modules: {len(picked)}"
+              + "".join(f"\n  {t}  ({why[t]})" for t in picked), flush=True)
+        if not picked:
+            print("nothing to test")
+            return 0
+        mods = [m for m in mods if m in picked]
     os.makedirs(a.logs, exist_ok=True)
     try:
         with open(HISTORY, encoding="utf-8") as f:

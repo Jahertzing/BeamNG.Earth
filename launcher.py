@@ -218,6 +218,20 @@ def setting_flags(user_dir):
             "--lidar-heights", "on" if bmplaunch.mod_setting(user_dir, "lidarHeights", True) is not False else "off"]
 
 
+def rotate_log(path, keep=5):
+    """The last sessions' logs kept beside the new one, as the game keeps beamng.1.log: server.log -> server.1.log
+    -> ... -> server.<keep>.log (the oldest dropped). tools/perf_trend.py reads the drives of the last few sessions
+    from them; before this, each start overwrote the only copy."""
+    stem = path[:-4] if path.endswith(".log") else path
+    try:
+        for i in range(keep, 0, -1):
+            src = path if i == 1 else f"{stem}.{i - 1}.log"
+            if os.path.exists(src):
+                os.replace(src, f"{stem}.{i}.log")
+    except OSError:
+        pass            # (a log held open by a server still ending: the new log simply overwrites it)
+
+
 def start_server(user_dir, extra, log_path):
     cmd = [sys.executable] + ([] if FROZEN else [os.path.abspath(__file__)])
     cmd += ["--server", "--user-dir", user_dir] + RECOMMENDED + setting_flags(user_dir) + extra
@@ -231,6 +245,7 @@ def start_server(user_dir, extra, log_path):
     # its full log to a file; the console shows only its warnings and errors (echo_server_log): the INFO lines
     # buried the launcher's own (the user, 2026-10-17: 'easier to read')
     os.makedirs(os.path.dirname(log_path), exist_ok=True)
+    rotate_log(log_path)
     out = open(log_path, "w", encoding="utf-8")
     kw.update(stdout=out, stderr=subprocess.STDOUT)
     proc = subprocess.Popen(cmd, **kw)
