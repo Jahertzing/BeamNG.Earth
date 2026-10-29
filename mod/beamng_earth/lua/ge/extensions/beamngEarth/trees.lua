@@ -7,6 +7,7 @@
 -- hundred per frame (~19 us each, 2026-10-13 probe).
 local M = {}
 local vienna = require('beamngEarth/vienna_convention_speed_signs')
+local popin = require('beamngEarth/popin')
 
 M.PER_FRAME = 250       -- items made or removed per frame at most
 M.SLOW_TYPE_MS = 100     -- an item type's first making (its shape loaded) this slow: logged with its name
@@ -648,6 +649,25 @@ M.tileThreshold = tileThreshold
 -- M.suppress(group, x, y) -> true hides that item (set by navgraph.lua); M.refresh() re-runs every tile's rows
 -- after it changes.
 M.suppress = nil
+-- The detail distance (lod.lua, the detailDistance setting): RINGS', TILE_CAP's and GROUP_MAX_M's distances times
+-- `scale` from the values this module loaded with (rocks keep theirs: past the fine ground they float, see GROUP_MAX_M).
+M.SCALE_KEEP = { rock = true, desert_rock = true }
+local baseDist = nil
+function M.setDistanceScale(scale)
+  scale = tonumber(scale) or 1
+  if not baseDist then
+    baseDist = { rings = {}, caps = {}, groups = {} }
+    for i, r in ipairs(M.RINGS) do baseDist.rings[i] = r[1] end
+    for i, r in ipairs(M.TILE_CAP) do baseDist.caps[i] = r[1] end
+    for g, d in pairs(M.GROUP_MAX_M) do baseDist.groups[g] = d end
+  end
+  for i, r in ipairs(M.RINGS) do r[1] = baseDist.rings[i] * scale end
+  for i, r in ipairs(M.TILE_CAP) do r[1] = baseDist.caps[i] * scale end
+  for g, d in pairs(baseDist.groups) do M.GROUP_MAX_M[g] = M.SCALE_KEEP[g] and d or d * scale end
+  M.distanceScale = scale
+  M.refresh()
+end
+
 function M.refresh()
   for _, t in pairs(tiles) do t.pending, t.scan = true, nil end      -- (every row again: an interrupted pass too)
 end
@@ -857,7 +877,8 @@ function M.update(anchorId, player, view, frameMs)
           if allow(sh) then
             local d = data()
             if not d then stop(t, i, skipped, want, band, near); return end      -- (a new Forest: next frame)
-            if t.made[i] then removeItem(d, t.made[i], t.madeShape[i]); budget = budget - 1 end  -- solid <-> not
+            if t.made[i] then removeItem(d, t.made[i], t.madeShape[i]); budget = budget - 1  -- solid <-> not
+            else popin.notePoint(g, f[b + F_X], f[b + F_Y]) end                                -- (new: popin.lua)
             t.made[i] = makeItem(d, t, i, sh, sc, solid, g, t.variant)
             t.solid[i] = (t.made[i] and solid) or nil      -- true or nil
             t.madeShape[i] = t.made[i] and sh or nil

@@ -1840,6 +1840,7 @@ local function perfContext()
     st.terrainLatency and string.format(', last block %.1fs', st.terrainLatency) or '')
   local okC, nr = pcall(roads.reloads)
   if okC then c.reloads = nr end
+  c.popin = require('beamngEarth/popin').take     -- (the minute line only: it starts the counts again)
   return c
 end
 local machineSent = false       -- the machine's lines sent to this server connection
@@ -1893,6 +1894,8 @@ end
 local function onUpdate(dtReal, dtSim)
   dtReal = dtReal or 0
   local frameMs0 = frameTimer and frameTimer:stopAndReset() or dtReal * 1000
+  pcall(require('beamngEarth/lod').update, st.inOurLevel)    -- (the detail distance's engine LOD: our level only)
+  if not M.popinCamera then M.popinCamera = function() return st.cam end; require('beamngEarth/popin').camera = M.popinCamera end
   if not st.inOurLevel and not st.active then
     -- Other levels and the menus: nothing but the connection to the world server, kept open (on Linux the
     -- launcher's sign that the game still runs, launcher.game_connected; its messages only store what the
