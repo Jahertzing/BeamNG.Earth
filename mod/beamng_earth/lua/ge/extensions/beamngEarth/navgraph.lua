@@ -399,6 +399,8 @@ local function signalsSystem()
   return core_trafficSignals
 end
 
+local rulesText = nil    -- what M.RULES_FILE holds
+
 local function setRules()
   -- the country's rules (server navgraph.road_rules): driving side, turn on red, red+yellow before green
   local r = graph.rules
@@ -420,8 +422,18 @@ local function apply(b, pre, moved)
   stats.nodesMs = (os.clock() - tN) * 1000         -- (the parts of an apply's frame: the hitch hunt, 2026-10-23)
   local ts = signalsSystem()
   -- before the reset: its onNavgraphReloaded would place the old instances on the new graph (research §2.8)
+  local tS = os.clock()
   if ts then pcall(ts.resetSignals) end
-  writeFile(M.RULES_FILE, jsonEncode({ roadRules = M.rules }))
+  local tW = os.clock()
+  stats.signalResetMs = (tW - tS) * 1000
+  -- (written on every apply until 2026-10-30, the same bytes each time: bench14's 4.5 s apply was here or in the reset
+  -- above, not in the map, with two more frames of seconds with no Lua in them just after: a disk stall, it seems)
+  local text = jsonEncode({ roadRules = M.rules })
+  if text ~= rulesText then
+    writeFile(M.RULES_FILE, text)
+    rulesText = text
+  end
+  stats.rulesMs = (os.clock() - tW) * 1000
   local orig = path.getPathLevelInfo
   path.getPathLevelInfo = function() return M.RULES_FILE end
   -- the reset sends the whole map to the UI (NavigationMapChanged, research §2.3): only the big map uses it,
@@ -490,8 +502,9 @@ local function apply(b, pre, moved)
   stats.applyMs = (os.clock() - tN) * 1000
   stats.cuts = #cl
   if stats.applyMs >= M.SLOW_APPLY_MS then         -- (the hitch line says navgraph; this says which part)
-    log('I', 'beamngEarth', string.format('navgraph apply %.0f ms: %d nodes, %d edges; %s %.0f ms, gps %.0f ms%s',
-      stats.applyMs, nn, ne, how, stats.resetMs or 0, stats.gpsMs or 0,
+    log('I', 'beamngEarth', string.format('navgraph apply %.0f ms: %d nodes, %d edges; %s %.0f ms, gps %.0f ms, ' ..
+      'signals reset %.0f ms, rules %.0f ms%s',
+      stats.applyMs, nn, ne, how, stats.resetMs or 0, stats.gpsMs or 0, stats.signalResetMs or 0, stats.rulesMs or 0,
       pre and pre.job and string.format(' (built over %d frames, %.0f ms)', pre.frames or 0, pre.buildMs or 0) or ''))
   end
   return true
@@ -1485,6 +1498,7 @@ function M.reset()
   lastNodes, capped, lastMerge = nil, {}, -math.huge
   M.restoreChoice()
   stats = { applies = 0, lastMs = 0, nodes = 0, edges = 0 }
+  rulesText = nil
   prep, waited = nil, 0
 end
 
