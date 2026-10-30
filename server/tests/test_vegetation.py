@@ -239,6 +239,32 @@ class VegetationTest(unittest.TestCase):
         self.assertTrue(0 < some < none, "half way: some")
 
 
+    def test_grass_rocks_are_small_grey_and_out_of_town(self):
+        # a 2 m red Utah sandstone boulder in a Frederick junction's grass (the user's shots, 2026-10-30)
+        class TownGrass(Raster):
+            def __init__(self):
+                super().__init__(None, 0, 0, 1)
+                self.calls = 0
+
+            def sample(self, lon, lat):         # the items' own points grass, the guard's points around them built
+                self.calls += 1
+                return np.full(np.shape(lon), veg.WC["grass"] if self.calls == 1 else veg.WC["built"], np.uint8)
+
+        def rocks(cover):
+            md = FakeMapData()
+            md.cd.layers["landcover"] = cover
+            it = veg.Vegetation(md, None).cell(KEY)
+            return it.take(it.kind == veg.KIND_ROCK)
+        open_grass = rocks(Raster(None, 0, 0, 1))
+        self.assertGreater(len(open_grass), 10)
+        self.assertTrue((open_grass.group == veg.G_ROCK).all())
+        self.assertLessEqual(float(open_grass.height.max()), veg.GRASS_ROCK_MAX_M + 1e-6)
+        self.assertGreater(float(open_grass.height.max()), 0.8, "the sizes squeezed, not clipped")
+        self.assertEqual(len(rocks(TownGrass())), 0, "none in a town's grass")
+        self.assertEqual(veg.regional(np.array([veg.G_ROCK]), np.array([1.0]), np.array([40.088]),
+                                      np.array([-104.924]), np.array([veg.WC["bare"]]), np.array([0.5]))[0],
+                         veg.G_DESERT_ROCK, "bare ground of the dry West keeps its desert rocks")
+
     def test_no_canopy_trees_on_barren_ground(self):
         # the canopy map misread the Bonneville Salt Flats' bright salt as ~19k trees up to 21 m: on bare ground with no
         # vegetated land within BARREN_NEAR_M, its tops are dropped
@@ -310,11 +336,12 @@ class RockSinkTest(unittest.TestCase):
             x, _, _ = f.geodetic_to_enu(np.asarray(lat), np.asarray(lon), np.zeros(np.size(lat)))
             return np.asarray(x, np.float64)
         z = veg._sink_rocks(f, it, e, n, e.copy(), elev)
-        self.assertAlmostEqual(z[0], 10.0 - veg.ROCK_SINK * 2.0, delta=0.02)
-        self.assertAlmostEqual(z[1], 20.0 - veg.ROCK_SINK * 2.0, delta=0.02)
+        self.assertAlmostEqual(z[0], 10.0 - (veg.ROCK_SINK_FLAT + veg.ROCK_SINK) * 2.0, delta=0.02)
+        self.assertAlmostEqual(z[1], 20.0 - (veg.ROCK_SINK_FLAT + veg.ROCK_SINK) * 2.0, delta=0.02)
         self.assertEqual(z[2], 30.0)
         flat = veg._sink_rocks(f, it, e, n, np.zeros(3), lambda la, lo: np.zeros(np.size(la)))
-        self.assertTrue(np.allclose(flat, 0.0, atol=0.02), "no sinking on flat ground")
+        self.assertTrue(np.allclose(flat, [-veg.ROCK_SINK_FLAT * 2.0] * 2 + [0.0], atol=0.02),
+                        "on flat ground a little (its rounded underside), a tree not at all")
 
 
 class FlatTileTest(unittest.TestCase):

@@ -35,9 +35,9 @@ import staging
 
 log = logging.getLogger("earthd.vegetation")
 
-VERSION = 18          # (the cached cells hold their groups: 14 for the regional rules of GitHub #110; 16: the roads'
+VERSION = 19          # (the cached cells hold their groups: 14 for the regional rules of GitHub #110; 16: the roads'
                       # drawn widths and sidewalks kept clear; 17: BC's lidar canopy heights, mapdata's canopy layer 2;
-                      # 18: the rounded junction corners kept clear, roadcorners.py)
+                      # 18: the rounded junction corners kept clear, roadcorners.py; 19: grass rocks, GRASS_ROCK_MAX_M)
 TREE_MIN_M = 3.0
 CROWN_SPACING = 0.5          # tops kept this many crown radii apart (0.8 looked sparse: the user, 2026-10-13)
 BUSH_MIN_M = 1.0
@@ -61,6 +61,11 @@ SCATTER_CELL_M = 6.0        # the hashed scatter's grid (one candidate per cell)
 SCATTER_P = {10: (0.30, 0.0), 20: (0.10, 0.04), 30: (0.01, 0.003), 60: (0.0, 0.08), 100: (0.02, 0.02)}
 UNDERSTORY = 10
 BUILT_NEAR_M = 60.0         # bare ground with built-up land this far around gets no scatter (squares, lots)
+# Rocks in grassland are fieldstones, grey and small, and none in a town's grass (a 2 m red Utah sandstone boulder stood
+# in the grass strip at a Frederick, Colorado junction, the user's shots 2026-10-30: the dry West's desert rocks were on
+# every grass of the plains): on grass, no rock with built-up land at any of the 4 points BUILT_NEAR_M away, the rest
+# the generic grey rock group, at most GRASS_ROCK_MAX_M (the scatter's sizes squeezed into 0.4 m .. this).
+GRASS_ROCK_MAX_M = 1.0
 # Rocks on bare ground lie on slopes, outcrops and fans, not on flat playas, salt pans and dry lake beds (the
 # Bonneville Salt Flats had a rock every ~75 m2, the user 2026-10-20; photos: a bare white crust for miles). A bare
 # cell's rock is kept with the share of the ground's slope between these (the DEM ROCK_SLOPE_D m either side, at
@@ -497,6 +502,13 @@ class Vegetation:
                 near += lc.sample(lo2, la2) == WC["built"]
             free[bare[near >= 2]] = False
         rock = free & (u < pr)
+        grass_rock = np.flatnonzero(rock & (cls == WC["grass"]))
+        if len(grass_rock):
+            near = np.zeros(len(grass_rock), bool)
+            for dx, dy in ((BUILT_NEAR_M, 0.0), (-BUILT_NEAR_M, 0.0), (0.0, BUILT_NEAR_M), (0.0, -BUILT_NEAR_M)):
+                lo2, la2 = _to4326(px[grass_rock] + dx, py[grass_rock] + dy)
+                near |= lc.sample(lo2, la2) == WC["built"]
+            rock[grass_rock[near]] = False          # (a bush may still stand there: u < pr + pb)
         bare_rock = np.flatnonzero(rock & (cls == WC["bare"]))
         if len(bare_rock) and self.dem is not None:
             slope = self._slope(px[bare_rock], py[bare_rock])
@@ -509,10 +521,14 @@ class Vegetation:
         sel = rock | bush
         n = int(sel.sum())
         size = 0.4 + 1.6 * _hash01(GI[sel], GJ[sel], 14) ** 2
+        fieldstone = rock[sel] & (cls[sel] == WC["grass"])
+        size = np.where(fieldstone, 0.4 + (size - 0.4) * ((GRASS_ROCK_MAX_M - 0.4) / 1.6), size)
+        group = regional(np.where(rock[sel], G_ROCK, G_SHRUB), size, lat[sel], lon[sel], cls[sel],
+                         _hash01(GI[sel], GJ[sel], 18))
+        group[fieldstone] = G_ROCK
         return Items(lon[sel], lat[sel], size.astype(np.float32), (size * 0.6).astype(np.float32),
                      np.where(rock[sel], KIND_ROCK, KIND_BUSH).astype(np.uint8),
-                     regional(np.where(rock[sel], G_ROCK, G_SHRUB), size, lat[sel], lon[sel], cls[sel],
-                              _hash01(GI[sel], GJ[sel], 18)),
+                     group,
                      _hash01(GI[sel], GJ[sel], 15).astype(np.float32),
                      (_hash01(GI[sel], GJ[sel], 16) * 360.0).astype(np.float32),
                      (0.8 + 0.4 * _hash01(GI[sel], GJ[sel], 17)).astype(np.float32)) if n else _empty()
@@ -782,11 +798,13 @@ def geo_tile_items(gx, gy, veg, cell_ready, elev, sea=None, as_json=False):
 ROCK_SINK = 0.35            # a rock sinks this share of its height per unit of ground slope (1 = 45 degrees) ...
 ROCK_SINK_MAX = 0.6         # ... up to this share: on a steep slope its downhill side stood clear of the ground and
                             # its flat underside showed (Stelvio pass, the user's report 2026-10-17)
+ROCK_SINK_FLAT = 0.12       # and this share on flat ground too: a boulder's rounded underside stood on a narrow
+                            # contact patch, perched (Frederick's grass, the user's shots 2026-10-30)
 SLOPE_STEP_M = 1.5
 
 
 def _sink_rocks(frame, it, e, n, z, elev):
-    """z with the rocks lowered into sloping ground (ROCK_SINK)."""
+    """z with the rocks lowered into the ground (ROCK_SINK_FLAT), deeper into slopes (ROCK_SINK)."""
     rock = (it.group == G_ROCK) | (it.group == G_DESERT_ROCK)
     if not rock.any():
         return z
@@ -799,7 +817,7 @@ def _sink_rocks(frame, it, e, n, z, elev):
     zz = np.asarray(zz, np.float64).reshape(4, len(k))
     slope = np.hypot(zz[0] - zz[1], zz[2] - zz[3]) / (2 * d)
     z = z.copy()
-    z[k] -= np.minimum(ROCK_SINK * slope, ROCK_SINK_MAX) * it.height[k]
+    z[k] -= np.minimum(ROCK_SINK_FLAT + ROCK_SINK * slope, ROCK_SINK_MAX) * it.height[k]
     return z
 
 
