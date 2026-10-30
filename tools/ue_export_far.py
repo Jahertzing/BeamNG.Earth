@@ -63,7 +63,7 @@ def main():
     print(f"heights {u.min():.0f}..{u.max():.0f} m, {time.perf_counter() - t0:.0f} s", flush=True)
 
     X, Y = np.meshgrid(xs, ys)
-    block = float(ue_export.BLOCK)
+    block = float(manifest["ground"].get("half", ue_export.BLOCK))
     d = np.maximum(np.abs(X - cx), np.abs(Y - cy)) - block      # m outside the near ground's square
     u = u - SINK_M * np.clip(1.0 - d / SINK_REACH_M, 0.0, 1.0)
     P = np.stack([(X - cx).ravel(), (Y - cy).ravel(), u.ravel()], axis=1)

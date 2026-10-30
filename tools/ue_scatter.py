@@ -6,6 +6,7 @@ shows dark vegetation, so they stand where the real ones do. Writes scatter.json
     .venv\\Scripts\\python tools\\ue_scatter.py --out C:/beamng-earth/Earth.UE/export/slice01
 """
 import argparse
+import concurrent.futures
 import io
 import json
 import os
@@ -54,18 +55,12 @@ def mesh_arrays(path):
 GRASS_SCALE = (1.4, 2.4)    # the models are small tufts: this makes them read from a car
 
 
-def main():
-    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--out", default="C:/beamng-earth/Earth.UE/export/slice01")
-    ap.add_argument("--seed", type=int, default=7)
-    a = ap.parse_args()
-    rng = np.random.default_rng(a.seed)
-    with open(os.path.join(a.out, "manifest.json")) as f:
-        manifest = json.load(f)
-    entry = next(e for e in manifest["meshes"] if e["kind"] == "ground")
+def scatter_cell(job):
+    out_dir, entry, meshes, seed, budget = job
+    rng = np.random.default_rng(seed)
     x0, y0 = entry["origin"][:2]
 
-    j, b, base = glb(os.path.join(a.out, "ground.glb"))
+    j, b, base = glb(os.path.join(out_dir, entry["file"]))
     P = accessor(j, b, base, j["meshes"][0]["primitives"][0]["attributes"]["POSITION"], np.float32, 3)
     n = int(round(len(P) ** 0.5))
     U = P[:, 1].reshape(n, n).astype(np.float64)            # [gy, gx], gy north
@@ -78,10 +73,10 @@ def main():
     # what must stay clear, on the 2 m lattice
     clear = Image.new("L", (n, n), 0)
     draw = ImageDraw.Draw(clear)
-    for e in manifest["meshes"]:
+    for e in meshes:
         if e["kind"] not in CLEAR_KINDS:
             continue
-        Q, T = mesh_arrays(os.path.join(a.out, e["file"]))
+        Q, T = mesh_arrays(os.path.join(out_dir, e["file"]))
         gx = (Q[:, 0] + e["origin"][0] - x0) / 2.0
         gy = (Q[:, 1] + e["origin"][1] - y0) / 2.0
         for t in T:
@@ -151,13 +146,47 @@ def main():
     cover = np.clip((BRIGHT_SOIL - at(lum, x, y, ppm)) / (BRIGHT_SOIL - FULL_COVER), 0.0, 1.0)
     k = (rng.uniform(0, 1, len(x)) < cover) & ~at(keep_clear, x, y, 0.5)
     x, y = x[k], y[k]
+    if budget and len(x) > budget:          # the nearest the roads stay
+        order = np.argsort(at(road_dist, x, y, 0.5) + rng.uniform(0, 10, len(x)))[:budget]
+        x, y = x[order], y[order]
     pick = rng.choice(len(GRASS), len(x), p=GRASS_SHARE)
     for i, name in enumerate(GRASS):
         add(name, x[pick == i], y[pick == i], scale=rng.uniform(*GRASS_SCALE, (pick == i).sum()))
 
-    with open(os.path.join(a.out, "scatter.json"), "w") as f:
-        json.dump(out, f, separators=(",", ":"))
-    print({k: len(v) for k, v in out.items()}, "total", sum(len(v) for v in out.values()))
+    tail = entry["file"][len("ground"):-4]      # "_-2_-1" for a cell, "" for a single block
+    name = "scatter%s.f32" % tail
+    with open(os.path.join(out_dir, name), "wb") as f:
+        for plant, rows in out.items():
+            r = np.asarray(rows, np.float32).reshape(len(rows), -1)
+            if r.shape[1] == 5:                 # (x, y, z, yaw, scale, height m or 0)
+                r = np.column_stack([r, np.zeros(len(r), np.float32)])
+            label = plant.encode()
+            f.write(struct.pack("<II", len(label), len(r)) + label + r.astype(np.float32).tobytes())
+    return name, {k: len(v) for k, v in out.items()}
+
+
+def main():
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--out", default="C:/beamng-earth/Earth.UE/export/slice01")
+    ap.add_argument("--seed", type=int, default=7)
+    ap.add_argument("--jobs", type=int, default=4)
+    ap.add_argument("--budget", type=int, default=0, help="grass clumps at most, per cell (0: no limit)")
+    a = ap.parse_args()
+    with open(os.path.join(a.out, "manifest.json")) as f:
+        manifest = json.load(f)
+    jobs = []
+    for k, e in enumerate(m for m in manifest["meshes"] if m["kind"] == "ground"):
+        same = [m for m in manifest["meshes"] if m["origin"][:2] == e["origin"][:2] or m["file"].endswith(e["file"][6:])]
+        if e["file"] == "ground.glb":
+            same = manifest["meshes"]
+        jobs.append((a.out, e, same, a.seed + k, a.budget))
+    totals = {}
+    with concurrent.futures.ProcessPoolExecutor(a.jobs) as pool:
+        for k, (name, counts) in enumerate(pool.map(scatter_cell, jobs), 1):
+            for plant, c in counts.items():
+                totals[plant] = totals.get(plant, 0) + c
+            print(k, "of", len(jobs), name, sum(counts.values()), flush=True)
+    print(totals, "total", sum(totals.values()))
 
 
 if __name__ == "__main__":

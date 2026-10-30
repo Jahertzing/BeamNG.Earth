@@ -17,6 +17,7 @@ import sys
 import time
 
 os.environ.setdefault("BNE_REVISIT", "off")     # (a revisit hit would skip the cdae.write this tool catches)
+os.environ.setdefault("BNE_DRCOG", "1")         # surveyed roofprints: 2.6 x the building detail, about 19 s a cell
 os.environ.setdefault("BNGE_WORLD_DIR", "C:/beamng-earth/world")
 os.environ.setdefault("BNGE_WORLD_CACHE", os.path.abspath(os.path.expanduser("~/.cache/beamng-earth")))
 
