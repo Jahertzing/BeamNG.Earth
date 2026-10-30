@@ -366,9 +366,19 @@ local function wrapped(s)
   im.PopTextWrapPos()
 end
 
+-- Where this report's windows go: on the game's own window. Plain numbers are desktop coordinates, so with the game on a
+-- second display a window landed outside it and the engine gave it an OS window and a swap chain of its own (OptiScaler's
+-- dxgi.dll crashed the game right after that, twice on 2026-10-30).
+local function placeOnGame(x, y, cond)
+  local vp = im.GetMainViewport()
+  local ox, oy = vp and vp.Pos.x or 0, vp and vp.Pos.y or 0
+  im.SetNextWindowPos(im.ImVec2(ox + x, oy + y), cond)
+end
+
 local function drawSaved()
   if not saved then return end
   if now() > saved.untilT then saved = nil return end
+  placeOnGame(80, 120, im.Cond_Appearing)
   im.SetNextWindowSize(im.ImVec2(560, 0), im.Cond_FirstUseEver)
   if im.Begin('BeamNG.Earth report saved##bngeSaved', nil, im.WindowFlags_AlwaysAutoResize) then
     im.TextUnformatted(saved.kind .. ' report saved in:')
@@ -399,6 +409,7 @@ local function drawForm()
     f.titleBuf = im.ArrayChar(128, f.data.title or '')
     f.noteBuf = im.ArrayChar(4096, f.data.note or '')
   end
+  placeOnGame(80, 120, im.Cond_Appearing)
   im.SetNextWindowSize(im.ImVec2(560, 360), im.Cond_FirstUseEver)
   if im.Begin('BeamNG.Earth report##bngeNote', nil, 0) then
     im.TextUnformatted(string.format('%s  |  %s', f.data.time or '',
@@ -441,7 +452,7 @@ function M.onUpdate()
   im = im or rawget(_G, 'ui_imgui')
   if not im then return end
   if toast and now() < toastUntil then
-    im.SetNextWindowPos(im.ImVec2(20, 120), im.Cond_Always)
+    placeOnGame(20, 120, im.Cond_Always)
     if im.Begin('##bngeReportToast', nil, im.WindowFlags_NoDecoration + im.WindowFlags_AlwaysAutoResize
         + im.WindowFlags_NoInputs) then
       im.TextUnformatted(toast)
@@ -449,7 +460,7 @@ function M.onUpdate()
     im.End()
   end
   if prof then
-    im.SetNextWindowPos(im.ImVec2(20, 160), im.Cond_Always)
+    placeOnGame(20, 160, im.Cond_Always)
     if im.Begin('##bngeBench', nil, im.WindowFlags_NoDecoration + im.WindowFlags_AlwaysAutoResize
         + im.WindowFlags_NoInputs) then
       im.TextUnformatted(string.format('Performance profiler: %.0f / %d s', now() - prof.t0, prof.dur))

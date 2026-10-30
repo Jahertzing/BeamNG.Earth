@@ -149,8 +149,9 @@ M.SCHEMA = {
   -- (typed on the page since 2026-10-29, the user: "change the cache limit setting to be a text box"; 0: unlimited.
   -- The old choices '5' .. '50' read as numbers, 'unlimited' as 0: MIGRATE)
   cacheCapGb = { kind = 'number', default = 20, min = 0, max = 100000, label = 'Download cache size (GB, 0: unlimited)' },
-  -- even frame pacing (framepacer.lua): frames shorter than the recent ones wait, so the game's time runs steadily
-  framePacing = { kind = 'bool', default = true, label = 'Even frame pacing' },
+  -- even frame pacing (framepacer.lua): frames shorter than the recent ones wait, so the game's time runs steadily.
+  -- Off by default (2026-10-30): on a Denver lap it took 70.9 fps to 58.8 (every frame waits for the slower fifth).
+  framePacing = { kind = 'bool', default = false, label = 'Even frame pacing' },
   -- the GPS route's data fetched ahead (the server's route_download; sent with each route): none, the next 12 miles
   -- (20 km), or the whole route (up to 300 miles)
   routeDownload = { kind = 'enum', default = 'ahead', values = { 'off', 'ahead', 'route' },

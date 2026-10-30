@@ -167,8 +167,8 @@ You can help support development by reporting [issues](https://github.com/TecnaG
   BeamNG.Earth > Graphics; every settings page is listed down the side there), each fine-tunable; the first start
   picks Low, Medium or High for your hardware (Medium on a Steam Deck). **Extreme** puts every setting at its most,
   out to the real horizon, for the strongest PCs (it is never picked for you). The Graphics page's settings:
-  - **Even frame pacing** (on): keeps the time between frames steady so the game's speed doesn't pulse while the
-    world loads around you; costs up to about a tenth of the frame rate, and stays off below 30 fps.
+  - **Even frame pacing** (off): keeps the time between frames steady so the game's speed doesn't pulse while the
+    world loads around you; can cost a sixth of the frame rate in a city, and stays off below 30 fps.
   - **Terrain detail** (Low to Extreme): how far out each finer level of the distant land reaches (Extreme builds
     about twice as many distant ground pieces).
   - **Ground photo** (1024 / 2048 / 4096): the sharpness of the aerial photo and the painted roads on the

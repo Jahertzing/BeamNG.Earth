@@ -2865,7 +2865,7 @@ def tile_buildings(frame, x0, y0, x1, y1, layers, elev, water=None, part_layers=
                 top = max([fill] + [p[1][0] + p[1][1] for p in bparts if p[1] is not None])
                 for ppart, pa in zip(bparts, parts_of.attrs(str(key))):
                     pring, hh = ppart[0], ppart[1]
-                    own = ppart[2] if len(ppart) > 2 else {}
+                    part_own = ppart[2] if len(ppart) > 2 else {}
                     ph, pmh = hh if hh is not None else (fill, 0.0)
                     if ph + pmh < FLAT_FOOTPRINT_M:
                         continue        # (a part taking a flat area's height: FLAT_FOOTPRINT_M)
@@ -2876,10 +2876,10 @@ def tile_buildings(frame, x0, y0, x1, y1, layers, elev, water=None, part_layers=
                     plm = lm_osm.get(landmarks.osm_key(pa.get("src_record"))) if lm_osm else None
                     if plm is None and lm_pts:
                         plm = next((en for en, p in lm_pts if en.get("part") and _inside(r, p)), None)
-                    pat = {"roof_shape": str(pa.get("roof_shape") or own.get("roof_shape") or ""),
+                    pat = {"roof_shape": str(pa.get("roof_shape") or part_own.get("roof_shape") or ""),
                            "roof_height": pa.get("roof_height"),
-                           "roof_color": str(pa.get("roof_color") or own.get("roof_color") or ""),
-                           "facade_color": own.get("facade_color")}
+                           "roof_color": str(pa.get("roof_color") or part_own.get("roof_color") or ""),
+                           "facade_color": part_own.get("facade_color")}
                     if plm is not None:
                         if plm.get("drop"):
                             continue

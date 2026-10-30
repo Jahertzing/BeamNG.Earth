@@ -4,6 +4,11 @@ What changed in each release of BeamNG.Earth, newest first.
 
 ## Unreleased (fork)
 
+### Fixed
+- **Even frame pacing is off by default** (2026-10-30): every frame was held back to the slowest fifth of recent frames, 70.9 -> 58.8 fps on a Denver lap, and the world's budget is per frame so it loaded slower as well. It stays in Graphics for anyone who wants it.
+- **Road tiles with multi-part buildings build again** (2026-10-30): a variable clash from the 1.7.2 merge failed the whole tile (`'dict' object has no attribute 'owns'`), leaving its road and buildings out.
+- **The report windows stay on the game's window** on a second display, so they no longer open OS windows of their own (OptiScaler crashed right after those did).
+
 ### New
 - **Rain and snow you can feel** (2026-10-30): wet roads darken and gloss, puddles grow and reflect the sky and the
   street lights, snow settles on the ground and roofs and melts again, and thunderstorms flash and rumble. The ground
