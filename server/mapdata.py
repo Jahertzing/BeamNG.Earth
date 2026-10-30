@@ -52,6 +52,7 @@ import logging
 import os
 import sys
 import threading
+import weakref
 import time
 from collections import OrderedDict
 from concurrent.futures import ThreadPoolExecutor
@@ -273,6 +274,7 @@ class MapData:
         self._lock = threading.Lock()
         self.pool = ThreadPoolExecutor(LAYER_THREADS, thread_name_prefix="mapdata-layer")
         self._mem = OrderedDict()           # (cell, layer) -> (decoded layer, provenance, bytes): cell()'s LRU
+        self._live = weakref.WeakValueDictionary()  # (cell, layer) -> a decoded layer still held anywhere (_shared)
         self._mem_bytes = 0
         self._mem_lock = threading.Lock()
         self._warm_ex = None
@@ -740,12 +742,20 @@ class MapData:
             arrays, hit = self.layer_arrays(key, layer, kind)
             return arrays, hit, time.perf_counter() - t0
         mem = {}
+        again = []
         with self._mem_lock:
             for layer in layers:
                 got = self._mem.get((str(key), layer))
                 if got is not None:
                     self._mem.move_to_end((str(key), layer))
                     mem[layer] = got
+                    continue
+                got = self._shared((str(key), layer))
+                if got is not None:
+                    mem[layer] = got
+                    again.append(((str(key), layer), got))
+        for k, got in again:
+            self._remember(k, got)
         futs = [(layer, self.pool.submit(timed, layer)) for layer in layers if layer not in mem]
         results = {}
         err = None
@@ -790,6 +800,7 @@ class MapData:
                 else:
                     cd.layers[layer] = _raster_from(arrays)
                 self._remember((str(key), layer), (cd.layers[layer], prov, _nbytes(arrays)))
+                self._share((str(key), layer), (cd.layers[layer], prov, _nbytes(arrays)))
             if prov:
                 pid = prov["id"]
                 if pid in provs:            # roads + connectors: one transportation record
@@ -804,6 +815,30 @@ class MapData:
             cd.stats[layer] = {"s": dt, "hit": hit}
         cd.provenance = [provs[k] for k in sorted(provs)]
         return cd
+
+    def _share(self, k, entry):
+        """A decoded layer findable while anything holds it (_live: weakly): when the LRU has let it go but it is still
+        in use (gradesep.neighbours_hook's held neighbours, a road tile's own cells), cell() hands out that same
+        object, with what it has remembered (roads' level ranges, structure widths, gradesep's rows), instead of a new
+        decode that starts them all again. A cold Denver road tile asked ~100 cell()s per cell, and the LRU missed
+        half of them (the overnight profile, 2026-10-30)."""
+        layer, prov, n = entry
+        if layer is None:
+            return
+        try:
+            layer.__dict__["_bnge_mem"] = (prov, n)
+            with self._mem_lock:
+                self._live[k] = layer
+        except (TypeError, AttributeError):         # (not weakly referenceable, or no __dict__)
+            pass
+
+    def _shared(self, k):
+        """(layer, provenance, bytes) of a decoded layer still held somewhere (_share), or None. Under _mem_lock."""
+        layer = self._live.get(k)
+        if layer is None:
+            return None
+        prov, n = layer.__dict__.get("_bnge_mem", (None, 0))
+        return layer, prov, n
 
     def _remember(self, k, entry):
         """Keep a decoded layer for the next cell() of it (at most MEM_MB in all, least recently used out)."""

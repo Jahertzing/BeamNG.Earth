@@ -818,6 +818,27 @@ class CacheTest(Sources, SmallBlocks, unittest.TestCase):
         with self.assertRaises(netfetch.Offline):
             md3.cell(mapcells.cell_of(10.0, 10.0), ("landcover",))
 
+    def test_a_layer_still_held_is_handed_out_again(self):
+        # the LRU let the roads layer go, but something still holds it (gradesep's held neighbours, a tile's cells):
+        # cell() hands out that same object (its memos with it), not a new decode; once nothing holds it, a new one
+        import gc
+        md, _ = self.mapdata()
+        f = md.cell(mf.CELL, ("roads",)).layers["roads"]
+        f.__dict__["_memo_probe"] = 1
+        with md._mem_lock:
+            md._mem.clear()
+            md._mem_bytes = 0
+        g = md.cell(mf.CELL, ("roads",)).layers["roads"]
+        self.assertIs(g, f)
+        self.assertIn((str(mapdata._key(mf.CELL)), "roads"), md._mem, "back in the LRU")
+        del f, g
+        with md._mem_lock:
+            md._mem.clear()
+            md._mem_bytes = 0
+        gc.collect()
+        h = md.cell(mf.CELL, ("roads",)).layers["roads"]
+        self.assertNotIn("_memo_probe", h.__dict__)
+
     def test_warm_builds_ahead(self):
         # warm() builds the asked (cell, layer)s into the cache in the background; the cell() after it reads them back
         # without fetching, and what is cached or queued is not queued again

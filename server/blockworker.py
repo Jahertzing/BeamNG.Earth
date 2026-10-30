@@ -2139,7 +2139,7 @@ def _accounted(fn):
                           if g is not None and g.shared is not None]
                 log.debug("worker %d cpu: %s%s", os.getpid(),
                           ", ".join(f"{k} {v[0]} jobs {v[1]:.1f} s" for k, v in sorted(_cpu.items())),
-                          "; shared road plans " + ", ".join(f"{k} {sum(st[k] for st in shared):.0f}"
+                          "; shared road plans " + ", ".join(f"{k} {sum(st.get(k, 0) for st in shared):.0f}"
                                                              for k in ("read", "written", "waited", "wait_s"))
                           if shared else "")
     return run
