@@ -91,6 +91,27 @@ WORLD_DIR_S = 60.0                  # a world folder found missing is not looked
 WORLD_DIRS_MAX = 200000             # remembered folders (then forgotten all at once)
 
 
+ROOMY_FREE_GB = 150.0       # free on the home drive at least this: a desktop's disk, the mirrors' caps scaled (roomy)
+ROOMY_SCALE = 4
+
+
+def roomy(mb):
+    """mb, times ROOMY_SCALE on a machine with ROOMY_FREE_GB free on the home drive (where the cache and the world
+    folder live): the uncompressed mirrors' caps were set for a Steam Deck (dem 1 GB, map data 2 GB), and on Jeff's
+    desktop (400 GB free) two places of the drive evicted each other's map data mirror (14 s of rewrites on one cold
+    Denver tile, 2026-10-30). Asked once per process."""
+    if not _roomy:
+        try:
+            free = shutil.disk_usage(os.path.expanduser("~")).free / GB
+        except OSError:
+            free = 0.0
+        _roomy.append(ROOMY_SCALE if free >= ROOMY_FREE_GB else 1)
+    return mb * _roomy[0]
+
+
+_roomy = []
+
+
 def cap_bytes(gb):
     """A cap in GB (float, 0 = unlimited) as bytes; None / negative / not finite -> ValueError."""
     gb = float(gb)

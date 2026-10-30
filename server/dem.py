@@ -56,7 +56,7 @@ URGENT_WORKERS = 16         # Dem.urgent(): its own fetch threads (with the 16 s
 # pages shared, dropped instead of swapped under memory pressure. At most MIRROR_MB on disk (the oldest go first);
 # older than MIRROR_MAX_AGE_S it is made again (Mapterhorn adds lidar areas). DECODED_VERSION: raise it when what a
 # tile holds changes (the decoding, the ground filter).
-MIRROR_MB = 1024
+MIRROR_MB = cachemod.roomy(1024)
 MIRROR_PRUNE_S = 120.0  # the mirror pruned at most this often per process (each prune walks it all)
 MIRROR_MAX_AGE_S = 30 * 86400
 DECODED_VERSION = 4          # 2: tiles past the lidar's depth upsampled from its deepest tile, not z12; its holes
