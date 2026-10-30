@@ -363,6 +363,22 @@ class Builder:
         P, T, UV, M = self.col.arrays()
         return cdae.write(path, P, T, uvs=UV, material=MATERIALS[0], collision_only=True)
 
+    def write_collision_pieces(self, path, max_tris, max_pieces):
+        """write_collision in pieces (meshpieces.split): the files' names, the first at path, the others
+        <stem>_<i>.cdae; one file when the mesh is small enough."""
+        import os
+        import meshpieces
+        P, T, UV, M = self.col.arrays()
+        if len(T) <= max_tris:
+            self.write_collision(path)
+            return [os.path.basename(path)]
+        names = []
+        for i, ((lo, hi), ids, Ti) in enumerate(meshpieces.split(T, max_tris, max_pieces), 1):
+            p = meshpieces.piece_path(path, i)
+            cdae.write(p, P[ids], Ti, uvs=UV[ids], material=MATERIALS[0], collision_only=True)
+            names.append(os.path.basename(p))
+        return names
+
 
 def run_geometry(walk_line, side, w):
     """The curb line and outward vectors of a sidewalk run given its centreline (k, 3) and the side of

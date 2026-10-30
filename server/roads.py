@@ -7984,6 +7984,13 @@ TILE_STUCK_S = 90.0             # s a road tile's build may take before the log 
 TILE_FAILS_WARN = 5             # a tile's builds failed in a row before an expected kind of failure is logged as a warning
 _FAILS_SEEN = set()             # the kinds of road tile failures logged in full (Tracker._built)
 BLD_PARTS_MAX = 4               # building meshes per road tile ("bld", "bld2".."bld4": the mod's list)
+# The colliding meshes (decks, tunnels, railways, the lean building and sidewalk collision meshes) in pieces of at most
+# COLLIDER_PIECE_TRIS triangles (meshpieces.py), COLLIDER_PIECES_MAX at most ("deck", "deck2", ...: the mod's units):
+# the engine's collision set-up at registration is ~50 us a triangle on the game's main thread (2026-10-29: a deck of
+# ~1000 triangles 53 ms, a railway's 112 ms, a building collision mesh 1.3 s), so a piece stays under ~20 ms.
+COLLIDER_PIECE_TRIS = 400
+COLLIDER_PIECES_MAX = 12
+PIECE_KINDS = ("deck", "tunnel", "rail", "bldcol", "walkcol")
 
 
 def shape_files(aid, tx, ty):
@@ -7996,7 +8003,16 @@ def shape_files(aid, tx, ty):
            "sign": f"sign_{aid}_{tx}_{ty}.cdae", "signcol": f"signcol_{aid}_{tx}_{ty}.cdae"}
     for k in range(2, BLD_PARTS_MAX + 1):
         out[f"bld{k}"] = f"bld_{aid}_{tx}_{ty}_{k}.cdae"
+    for kind in PIECE_KINDS:
+        for k in range(2, COLLIDER_PIECES_MAX + 1):
+            out[f"{kind}{k}"] = f"{kind}_{aid}_{tx}_{ty}_{k}.cdae"
     return out
+
+
+def _pieces(data, kind, vfs_dir, names, pos):
+    """The tile's entries for a colliding mesh's pieces: data[kind], data[kind2], ... each {shape, pos}."""
+    for k, name in enumerate(names, 1):
+        data[kind if k == 1 else f"{kind}{k}"] = {"shape": f"{vfs_dir}/{name}", "pos": pos}
 
 
 # Sound spaces (the mod's ambience.lua makes them SFXSpaces: the stock maps' tunnel reverb in a tube, the one under a
@@ -8089,16 +8105,16 @@ def write_tile(out_dir, vfs_dir, aid, tx, ty, chunks, walks=None, road_mesh=None
         shape = f"road_{aid}_{tx}_{ty}.cdae"
         roadmesh.write(os.path.join(out_dir, shape), road_mesh)
         data["road"] = {"shape": f"{vfs_dir}/{shape}", "pos": [x0, y0, 0.0]}
-    if deck_mesh is not None:
+    if deck_mesh is not None:       # (colliding: in pieces the governor spreads, COLLIDER_PIECE_TRIS)
         x0, y0, _, _ = tile_bbox(tx, ty)
         shape = f"deck_{aid}_{tx}_{ty}.cdae"
-        roadmesh.write(os.path.join(out_dir, shape), deck_mesh)
-        data["deck"] = {"shape": f"{vfs_dir}/{shape}", "pos": [x0, y0, 0.0]}
+        names = roadmesh.write_pieces(os.path.join(out_dir, shape), deck_mesh, COLLIDER_PIECE_TRIS, COLLIDER_PIECES_MAX)
+        _pieces(data, "deck", vfs_dir, names, [x0, y0, 0.0])
     if tunnel_mesh is not None:     # roadmesh.tunnel: the tubes and portals (colliding)
         x0, y0, _, _ = tile_bbox(tx, ty)
         shape = f"tunnel_{aid}_{tx}_{ty}.cdae"
-        roadmesh.write(os.path.join(out_dir, shape), tunnel_mesh)
-        data["tunnel"] = {"shape": f"{vfs_dir}/{shape}", "pos": [x0, y0, 0.0]}
+        names = roadmesh.write_pieces(os.path.join(out_dir, shape), tunnel_mesh, COLLIDER_PIECE_TRIS, COLLIDER_PIECES_MAX)
+        _pieces(data, "tunnel", vfs_dir, names, [x0, y0, 0.0])
     if guardrail_rows:              # mapped guard rails and the median barriers (guardrails / medians): Forest rows
         import guardrails
         data["guardrails"] = {"items": guardrail_rows, "groups": list(guardrails.GROUPS)}
@@ -8132,8 +8148,8 @@ def write_tile(out_dir, vfs_dir, aid, tx, ty, chunks, walks=None, road_mesh=None
             b.write(os.path.join(out_dir, shape))
             data["walk"] = {"shape": f"{vfs_dir}/{shape}", "pos": [x0, y0, 0.0]}
             shape = f"walkcol_{aid}_{tx}_{ty}.cdae"     # the lean physics-only mesh (the drawn one then only renders)
-            b.write_collision(os.path.join(out_dir, shape))
-            data["walkcol"] = {"shape": f"{vfs_dir}/{shape}", "pos": [x0, y0, 0.0]}
+            names = b.write_collision_pieces(os.path.join(out_dir, shape), COLLIDER_PIECE_TRIS, COLLIDER_PIECES_MAX)
+            _pieces(data, "walkcol", vfs_dir, names, [x0, y0, 0.0])
     boxes = collider_boxes(walks if data.get("walk") else None, chunks if data.get("deck") else None)
     if "walk" in boxes and data.get("walkcol"):
         boxes["walkcol"] = boxes["walk"]
@@ -8149,8 +8165,9 @@ def write_tile(out_dir, vfs_dir, aid, tx, ty, chunks, walks=None, road_mesh=None
             boxes[what] = bld[1]
         if len(bld) > 2 and bld[2] is not None:     # the lean physics-only mesh (the drawn ones then only render)
             shape = f"bldcol_{aid}_{tx}_{ty}.cdae"
-            buildings.write(os.path.join(out_dir, shape), bld[2], collision_only=True)
-            data["bldcol"] = {"shape": f"{vfs_dir}/{shape}", "pos": [x0, y0, 0.0]}
+            names = buildings.write_collision_pieces(os.path.join(out_dir, shape), bld[2], COLLIDER_PIECE_TRIS,
+                                                     COLLIDER_PIECES_MAX)
+            _pieces(data, "bldcol", vfs_dir, names, [x0, y0, 0.0])
             boxes["bldcol"] = bld[1]
     if boxes:
         data["colliders"] = boxes

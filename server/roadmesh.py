@@ -1362,3 +1362,22 @@ def write(path, mesh):
         new = np.cumsum(~bad) - 1                   # the finite vertices only, renumbered
         P, UV, T = P[~bad], np.asarray(UV)[~bad], new[T]
     return cdae.write(path, P, T, uvs=UV, material=mats, tri_materials=M, object_name="road")
+
+
+def write_pieces(path, mesh, max_tris, max_pieces):
+    """write() in pieces (meshpieces.split: at most max_tris triangles each, max_pieces at most, each with only the
+    vertices it uses): the files' names, the first at path, the others <stem>_<i>.cdae. One file when the mesh is
+    small enough. For the colliding meshes (decks, tunnels, railways): the mod makes each piece a unit of its own."""
+    import meshpieces
+    P, T, UV, mats, M = mesh
+    T = np.asarray(T)
+    if len(T) <= max_tris:
+        write(path, mesh)
+        return [os.path.basename(path)]
+    P, UV, M = np.asarray(P), np.asarray(UV), np.asarray(M)
+    names = []
+    for i, ((lo, hi), ids, Ti) in enumerate(meshpieces.split(T, max_tris, max_pieces), 1):
+        p = meshpieces.piece_path(path, i)
+        write(p, (P[ids], Ti, UV[ids], mats, M[lo:hi]))
+        names.append(os.path.basename(p))
+    return names

@@ -50,8 +50,8 @@ local function now() return wallMs() / 1000 end
 M.BUDGET_MS = nil
 local function budgetMs()
   if M.BUDGET_MS then return M.BUDGET_MS end
-  local okR, hz = pcall(require('beamngEarth/perflog').gameRefresh)
-  M.BUDGET_MS = 1000 / ((okR and hz) or 60)
+  local okB, ms = pcall(require('beamngEarth/perflog').gameBudgetMs)
+  M.BUDGET_MS = (okB and ms) or 1000 / 60
   return M.BUDGET_MS
 end
 
