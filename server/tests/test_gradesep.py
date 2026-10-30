@@ -199,3 +199,53 @@ class JoinedTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class _Layer:
+    """A decoded roads layer stand-in: an array, weak-referenceable."""
+
+    def __init__(self, mb=1.0):
+        self.lonlat = np.zeros(int(mb * 1e6 / 8))
+        self.attrs = {}
+
+
+class _LoadingMd:
+    """MapData stand-in that keeps nothing: every cell() is a fresh layer (as one the layer cache let go)."""
+
+    def __init__(self, mb=1.0):
+        self.calls, self.mb = 0, mb
+
+    def cell(self, key, layers=("roads",), kind="demand"):
+        self.calls += 1
+        return SimpleNamespace(layers={"roads": _Layer(self.mb)})
+
+
+class NeighboursHookTest(unittest.TestCase):
+    """neighbours_hook: asked again, the eight neighbours come from the LRU, not loaded again (a cold tile's ~40 cells
+    loaded 24,009 times in 180 s with weak references alone); the LRU is bounded, and no layer keeps others alive."""
+
+    def setUp(self):
+        gradesep._held.clear()
+        gradesep._held_mb[0] = 0.0
+
+    def test_asked_again_not_loaded_again(self):
+        md = _LoadingMd()
+        _, get = gradesep.neighbours_hook(md, mapcells.CellKey(14, 3400, 6200))
+        first = get()
+        self.assertEqual(md.calls, 8)
+        del first
+        for _ in range(5):
+            self.assertEqual(len(get()), 8)
+        self.assertEqual(md.calls, 8, "the neighbours held, not loaded again")
+
+    def test_bounded(self):
+        md = _LoadingMd(mb=1.0)
+        old = gradesep.HELD_CELLS, gradesep.HELD_MB
+        gradesep.HELD_CELLS, gradesep.HELD_MB = 20, 12.0
+        try:
+            for x in range(10):
+                gradesep.neighbours_hook(md, mapcells.CellKey(14, 3400 + 3 * x, 6200))[1]()
+            self.assertLessEqual(len(gradesep._held), 12)
+            self.assertLessEqual(gradesep._held_mb[0], 12.0 + 1e-6)
+        finally:
+            gradesep.HELD_CELLS, gradesep.HELD_MB = old
