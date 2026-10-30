@@ -56,7 +56,7 @@ URGENT_WORKERS = 16         # Dem.urgent(): its own fetch threads (with the 16 s
 # pages shared, dropped instead of swapped under memory pressure. At most MIRROR_MB on disk (the oldest go first);
 # older than MIRROR_MAX_AGE_S it is made again (Mapterhorn adds lidar areas). DECODED_VERSION: raise it when what a
 # tile holds changes (the decoding, the ground filter).
-MIRROR_MB = 1024
+MIRROR_MB = cachemod.roomy(1024)
 MIRROR_PRUNE_S = 120.0  # the mirror pruned at most this often per process (each prune walks it all)
 MIRROR_MAX_AGE_S = 30 * 86400
 DECODED_VERSION = 4          # 2: tiles past the lidar's depth upsampled from its deepest tile, not z12; its holes
@@ -855,7 +855,7 @@ class Dem:
     def _plausible(self, z, x, y, a):
         """Lidar tile (z, x, y) (elevations a, holes filled) made plausible ground (plausible.py), filtered with
         plausible.MARGIN_PX of its 8 neighbours (as decoded, holes filled: never filtered themselves) so tiles agree
-        at their seams; a neighbour not to be had: the tile's edge repeated."""
+        at their seams; a neighbour not on disk: the tile's edge repeated (a few cm off at that seam at most)."""
         m = plausible.MARGIN_PX
         n = 2 ** z
         big = np.empty((TILE + 2 * m, TILE + 2 * m), np.float32)
@@ -864,14 +864,7 @@ class Dem:
             for dx in (-1, 0, 1):
                 if dx == 0 and dy == 0:
                     continue
-                nb = None
-                if 0 <= y + dy < n:
-                    try:
-                        data = self._download(MAPTERHORN, z, (x + dx) % n, y + dy)
-                        if data is not None:
-                            nb = fill_holes(self._decode(MAPTERHORN, z, (x + dx) % n, y + dy, data), hole_px(z, y + dy))
-                    except netfetch.FetchError:
-                        self._partial()
+                nb = self._raw_neighbour(z, (x + dx) % n, y + dy) if 0 <= y + dy < n else None
                 r0, r1 = (0, m) if dy < 0 else (m + TILE, 2 * m + TILE) if dy > 0 else (m, m + TILE)
                 c0, c1 = (0, m) if dx < 0 else (m + TILE, 2 * m + TILE) if dx > 0 else (m, m + TILE)
                 if nb is None:
@@ -886,6 +879,33 @@ class Dem:
         px = 40075016.686 * math.cos(math.radians(lat)) / n / TILE
         self._count("dem:plausible")
         return np.ascontiguousarray(plausible.plausible(big, px)[m:m + TILE, m:m + TILE])
+
+    RAW_KEEP = 48       # neighbours' raw decodes kept per process (a tile's 8 are its neighbours' too)
+
+    def _raw_neighbour(self, z, x, y):
+        """Mapterhorn tile (z, x, y) decoded and hole-filled as on disk, or None (not cached, undecodable). Never
+        fetched: a neighbour's download, or its failure (which faults every build running then: revisit.fault), is
+        not worth a seam margin. After plausible went in, Frederick's first cold block took 162 s with base photos
+        "not kept" (2026-10-30): each tile asked its 8 neighbours at demand priority and decoded each again."""
+        k = (z, x, y)
+        with self._lock:
+            memo = self.__dict__.setdefault("_raw_memo", OrderedDict())
+            got = memo.get(k)
+            if got is not None:
+                memo.move_to_end(k)
+                return got
+        data = self.disk.read(self._path(MAPTERHORN, z, x, y))
+        if data is None:
+            return None
+        try:
+            got = fill_holes(decode_terrarium(data, MAPTERHORN["size"]), hole_px(z, y))
+        except (OSError, ValueError):
+            return None
+        with self._lock:
+            memo[k] = got
+            while len(memo) > self.RAW_KEEP:
+                memo.popitem(last=False)
+        return got
 
     def _deepest_lidar(self, z, x, y):
         """The deepest zoom between GLOBAL_ZOOM + 1 and z - 1 at which Mapterhorn has the ancestor of tile (z, x, y)

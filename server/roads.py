@@ -1048,8 +1048,8 @@ def _lidar_answers(feats):
                     owners = sorted({mapcells.cell_of(float(c[1][0, 1]), float(c[1][0, 0])) for c in cands}, key=str)
                     fids = {c[0] for c in cands}
                     for _key, gaps in prov.gap_answers(owners).items():
-                        if gaps is None:
-                            st["_lidar_rule"] = True
+                        if gaps is None:        # (when: mapdata.cell decodes the layer again RULE_RETRY_S on)
+                            st["_lidar_rule"] = time.monotonic()
                         for fid, a, b in gaps or ():
                             if fid in fids:
                                 got.setdefault(fid, []).append((tuple(a), tuple(b)))
