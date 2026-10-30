@@ -17,6 +17,7 @@ import ue_export  # noqa: E402
 
 import numpy as np  # noqa: E402
 from scipy import ndimage  # noqa: E402
+from scipy.spatial import cKDTree  # noqa: E402
 
 import geodesy  # noqa: E402
 import ue_fit  # noqa: E402
@@ -28,11 +29,18 @@ CELL_M = 2048.0
 MARGIN_M = 48.0
 NONE_COST = {"service": 0.8, "track": 0.5, "unknown": 1.0}      # the "no pavement measured here" state, by class
 NONE_DEFAULT = 2.5
-WIDTH_COST_CAP = 0.6            # a pavement around the line is never dearer than this for its width
+WIDTH_COST_CAP = 0.6            # a service road's pavement around the line is never dearer than this for its width ...
+SERVICE_MAX_W = 16.0            # ... up to this wide
+ROAD_COST_CAP = 1.5             # the same for a road
+ROAD_MAX_W = 30.0
+SERVICE_LIKE = {"service", "unknown"}
 HALF_COST = 2.0                 # a pavement with one surveyed side, its width the spec's
 MIN_W, MAX_W = 2.5, 42.0        # m a pavement between two lines
 FILL_M = 72.0                   # m a gap (a junction's mouth, under a deck) is bridged from its two sides
 REACH_M = 34.0
+SIBLING_M = 42.0                # m: a divided road's other carriageway looked for this far
+PAINTED_MEDIAN_M = 5.0          # m: a gap this narrow between carriageways with no curb in it is paved
+NO_SIBLING = {"service", "track", "unknown", "raceway"}
 
 
 def stations(xy, step=STATION_M):
@@ -75,6 +83,60 @@ def candidates(ts, hits, w0):
     return out
 
 
+def siblings(pieces):
+    """{(piece, station): lateral m} the other carriageway of a divided road beside each station: the nearest one-way road
+    running the other way within SIBLING_M, left of the normal when positive. With no surveyed median between them both
+    carriageways see one pavement, and both would be moved onto its middle."""
+    P, T, O, K = [], [], [], []
+    for k, p in enumerate(pieces):
+        sp = p["spec"]
+        if sp["oneway"] and not sp["link"] and sp["cls"] not in NO_SIBLING and len(p["st"]) and p["kind"] != "tunnel":
+            d = float(sp["dir"] or 1)
+            P.append(p["st"])
+            T.append(np.c_[p["nrm"][:, 1], -p["nrm"][:, 0]] * d)
+            O.append(np.full(len(p["st"]), k))
+            K.append(np.arange(len(p["st"])))
+    if not P:
+        return {}
+    P, T, O, K = np.concatenate(P), np.concatenate(T), np.concatenate(O), np.concatenate(K)
+    near = cKDTree(P).query_ball_point(P, SIBLING_M)
+    out = {}
+    for i, got in enumerate(near):
+        got = np.array(got)
+        got = got[O[got] != O[i]]
+        if not len(got):
+            continue
+        got = got[(T[got] @ T[i]) < -0.9]
+        if not len(got):
+            continue
+        p = pieces[int(O[i])]
+        lat = (P[got] - P[i]) @ p["nrm"][K[i]]
+        lat = lat[np.abs(lat) >= 2.0]
+        if len(lat):
+            out[(int(O[i]), int(K[i]))] = float(lat[np.abs(lat).argmin()])
+    return out
+
+
+def split_median(cands, ts, w0):
+    """Candidates at a station with the other carriageway at lateral ts: a pavement holding both is cut to this one's: at
+    the middle where what lies between them is narrow enough to be a painted median, else the spec's width from the outer
+    curb (a median the survey does not have)."""
+    out = []
+    for a, b, half in cands:
+        if a < ts < b:
+            mid = (a + b) / 2
+            gap = (b - a) - 2 * w0
+            if gap <= PAINTED_MEDIAN_M:
+                inner = mid
+            else:
+                inner = a + w0 if ts > 0 else b - w0
+            a, b = (a, inner) if ts > 0 else (inner, b)
+            if b - a < MIN_W:
+                continue
+        out.append((a, b, half))
+    return out
+
+
 def fit_piece(cands, spec):
     """The pavement (a, b) along a piece's stations (Viterbi: near the centreline, near the spec's width, steady along the
     road), (n, 2) nan where it is not measured, and whether each is two surveyed lines."""
@@ -88,8 +150,16 @@ def fit_piece(cands, spec):
         B = np.array([s[1] for s in states])
         half = np.array([s[2] for s in states])
         d0 = np.maximum(np.maximum(A, -B), 0.0)
-        # (a street mapped as a service road is 12 m of curbed pavement: a width off the spec's is capped, the survey wins)
-        cost = d0 + np.minimum(0.25 * np.abs(B - A - w0), WIDTH_COST_CAP) + HALF_COST * (half == 1)
+        # (a street mapped as a service road is 12 m of curbed pavement: a width off the spec is capped, the survey wins; a
+        # ramp is never capped: its spec is close, and round it the lines close on the junction's whole channel)
+        wcost = 0.25 * np.abs(B - A - w0)
+        if spec["link"]:
+            pass
+        elif spec["cls"] in SERVICE_LIKE:
+            wcost = np.where(B - A <= SERVICE_MAX_W, np.minimum(wcost, WIDTH_COST_CAP), wcost)
+        else:
+            wcost = np.where(B - A <= ROAD_MAX_W, np.minimum(wcost, ROAD_COST_CAP), wcost)
+        cost = d0 + wcost + HALF_COST * (half == 1)
         cost[0] = none
         if prev is None:
             total, bp = cost, np.zeros(len(states), np.int64)
@@ -156,6 +226,8 @@ def main():
     P, N, O = np.concatenate(all_p), np.concatenate(all_n), np.concatenate(owner)
     ts = np.arange(-int(REACH_M / STEP_M), int(REACH_M / STEP_M) + 1) * STEP_M
     W0 = np.array([float(p["spec"]["width"] or 8.0) for p in pieces])[O]
+    sib = siblings(pieces)
+    print(f"{len(sib)} stations beside another carriageway, {time.perf_counter() - t0:.0f} s", flush=True)
     cands = [None] * len(P)
     c = np.floor(P / CELL_M).astype(np.int64)
     code = c[:, 0] * 100000 + c[:, 1]
@@ -172,10 +244,15 @@ def main():
                 cands[q] = candidates(ts, h, W0[q]) if h.any() else []
     print(f"rays done, {time.perf_counter() - t0:.0f} s", flush=True)
     off = 0
-    for p, q in zip(pieces, all_p):
+    for k, (p, q) in enumerate(zip(pieces, all_p)):
         n = len(q)
         if n:
-            ab, two = fit_piece(cands[off:off + n], p["spec"])
+            here = cands[off:off + n]
+            for i in range(n):
+                ts = sib.get((k, i))
+                if ts is not None:
+                    here[i] = split_median(here[i], ts, float(p["spec"]["width"] or 8.0))
+            ab, two = fit_piece(here, p["spec"])
             p["two"] = two
             p["ab"] = smooth_fill(ab, p["t"])
         else:
