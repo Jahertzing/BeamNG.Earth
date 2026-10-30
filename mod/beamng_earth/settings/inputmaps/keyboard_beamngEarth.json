@@ -26,6 +26,18 @@
     {"control":"ctrl alt pageup", "action":"beamngEarth_timeForward"},
     {"control":"ctrl alt pagedown", "action":"beamngEarth_timeBack"},
     {"control":"ctrl alt shift pageup", "action":"beamngEarth_timeForward15"},
-    {"control":"ctrl alt shift pagedown", "action":"beamngEarth_timeBack15"}
+    {"control":"ctrl alt shift pagedown", "action":"beamngEarth_timeBack15"},
+    {"control":"ctrl alt e", "action":"beamngEarth_weatherNext"},
+    {"control":"ctrl alt shift e", "action":"beamngEarth_weatherPrev"},
+    {"control":"ctrl alt shift w", "action":"beamngEarth_weatherReal"},
+    {"control":"ctrl alt shift 1", "action":"beamngEarth_weatherClear"},
+    {"control":"ctrl alt shift 2", "action":"beamngEarth_weatherCloudy"},
+    {"control":"ctrl alt shift 3", "action":"beamngEarth_weatherDrizzle"},
+    {"control":"ctrl alt shift 4", "action":"beamngEarth_weatherRain"},
+    {"control":"ctrl alt shift 5", "action":"beamngEarth_weatherStorm"},
+    {"control":"ctrl alt shift 6", "action":"beamngEarth_weatherSnow"},
+    {"control":"ctrl alt shift 7", "action":"beamngEarth_weatherBlizzard"},
+    {"control":"ctrl alt shift 8", "action":"beamngEarth_weatherFog"},
+    {"control":"ctrl alt shift 9", "action":"beamngEarth_weatherDry"}
   ]
 }

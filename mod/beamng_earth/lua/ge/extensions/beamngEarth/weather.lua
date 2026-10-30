@@ -34,12 +34,17 @@
 -- setting (beamngEarth_settings, so the settings page shows it); choosing Real again goes back.
 -- 'auto' (the old default: real unless BWM_Weather was changing the weather) means 'real'.
 -- Missions and the big map pause it (they set and restore their own weather).
--- Console: beamngEarth_weather.setMode('real'|'manual')   .status()   .setGravityEnabled(bool)
+-- A chosen weather (M.force: the keys Ctrl+Alt+E / Ctrl+Alt+Shift+E / Ctrl+Alt+Shift+1..7, weatherfx.lua) takes the real
+-- weather's place, reached in FORCE_LERP_S instead of LERP_S, until real weather is chosen again (Ctrl+Alt+Shift+W).
+-- What the weather does to the ground (wet roads, snow, grip, lightning) is weatherfx.lua's, updated from here.
+-- Console: beamngEarth_weather.setMode('real'|'manual')   .force('rain'|nil)   .status()   .setGravityEnabled(bool)
 
 local M = {}
 
 M.LEVEL_ID = 'beamng_earth'
 M.LERP_S = 60              -- a new target is 95 % reached after this long
+M.FORCE_LERP_S = 15        -- ... and a chosen weather's (the keys) after this long
+M.LAPSE = 0.0065           -- K/m: a preset's ground temperature carried to sea level (server/weather.py LAPSE)
 M.APPLY_S = 0.5            -- writes at 2 Hz, only of values that changed
 M.WIND_APPLY_S = 0.25      -- setGroundWind queues Lua into every vehicle: 4 Hz (a gust rises in 1-3 s),
                            -- and only when the wind moved by WIND_EPS_MS
@@ -87,7 +92,7 @@ M.CLOUD_ABOVE_MIN_KM, M.CLOUD_ABOVE_MAX_KM = 0.3, 6
 M.RAIN_FULL_MMH, M.SNOW_FULL_CMH, M.PRECIP_MIN = 8, 2, 0.08
 M.RAIN_NAME = 'bngEarthRain'      -- level objects (tools/make_level_assets.py)
 M.SNOW_NAME = 'bngEarthSnow'
-M.RAIN_POOL, M.SNOW_POOL = 4000, 3000                       -- drops (probe: 9000 cost +0.2 ms)
+M.RAIN_POOL, M.SNOW_POOL = 7000, 6000                       -- drops (probe: 9000 cost +0.2 ms); the share sets how many fall
 M.GUSTS = true
 M.GUST_TAU_S, M.GUST_STD = 4, 0.4
 -- The gust signal u (-1..1): above 0 the speed rises towards the gust speed, below 0 it falls to a
@@ -358,30 +363,50 @@ function M.describe(code)
   return '?'
 end
 
--- A BeamMP server's weather (its plugin's G.WEATHER, through mpsession): every player gets the same, as a weather
--- message like the world server's real one (WMO code, cloud cover %, wind m/s, visibility m, rain mm/h, snow cm/h).
+-- A BeamMP server's weather (its plugin's G.WEATHER, through mpsession) and the weathers the keys choose (M.force): a
+-- weather message like the world server's real one (WMO code, cloud cover %, wind m/s, visibility m, rain mm/h, snow
+-- cm/h). groundTempC is the air at the player's height (carried to sea level with the player's z, presetMsg); slTempC
+-- is used without one.
 M.PRESETS = {
   clear = { code = 0, cover = { low = 0, mid = 0, high = 5 }, wind = { ms = 2, fromDeg = 270 }, visM = 40000,
-    slTempC = 20 },
+    slTempC = 20, groundTempC = 18 },
   cloudy = { code = 3, cover = { low = 85, mid = 70, high = 40 }, wind = { ms = 4, fromDeg = 250 }, visM = 20000,
-    slTempC = 14 },
+    slTempC = 14, groundTempC = 12 },
+  drizzle = { code = 53, cover = { low = 100, mid = 70, high = 30 }, wind = { ms = 3, gustMs = 5, fromDeg = 200 },
+    visM = 9000, rainMmH = 0.6, slTempC = 12, groundTempC = 10 },
   rain = { code = 63, cover = { low = 100, mid = 90, high = 60 }, wind = { ms = 6, gustMs = 10, fromDeg = 230 },
-    visM = 8000, rainMmH = 4, slTempC = 11 },
+    visM = 8000, rainMmH = 4, slTempC = 11, groundTempC = 9 },
   storm = { code = 95, cover = { low = 100, mid = 100, high = 80 }, wind = { ms = 13, gustMs = 22, fromDeg = 220 },
-    visM = 3000, rainMmH = 15, slTempC = 17 },
+    visM = 3000, rainMmH = 15, slTempC = 17, groundTempC = 16 },
   snow = { code = 73, cover = { low = 100, mid = 90, high = 60 }, wind = { ms = 5, gustMs = 8, fromDeg = 340 },
-    visM = 4000, snowCmH = 1.5, slTempC = -4 },
+    visM = 4000, snowCmH = 1.5, slTempC = -4, groundTempC = -4 },
+  blizzard = { code = 75, cover = { low = 100, mid = 100, high = 90 }, wind = { ms = 14, gustMs = 22, fromDeg = 330 },
+    visM = 700, snowCmH = 4, slTempC = -9, groundTempC = -10 },
   fog = { code = 45, cover = { low = 100, mid = 20, high = 0 }, wind = { ms = 1, fromDeg = 180 }, visM = 300,
-    fog = true, slTempC = 8 },
+    fog = true, slTempC = 8, groundTempC = 6 },
 }
+-- The keys' round (Ctrl+Alt+E next, Ctrl+Alt+Shift+E back): real weather, then these.
+M.CYCLE = { 'clear', 'cloudy', 'drizzle', 'rain', 'storm', 'snow', 'blizzard', 'fog' }
 
--- Pure: the weather message of preset name (nil: not one).
-function M.presetMsg(name)
+-- Pure: the weather message of preset name (nil: not one). z: the player's height (m), for groundTempC.
+function M.presetMsg(name, z)
   local p = M.PRESETS[tostring(name or ''):lower()]
   if not p then return nil end
   local m = { preset = tostring(name):lower() }
   for k, v in pairs(p) do m[k] = v end
+  if p.groundTempC and tonumber(z) then m.slTempC = p.groundTempC + M.LAPSE * math.max(0, tonumber(z)) end
+  m.tempC = p.groundTempC or p.slTempC
   return m
+end
+
+-- Pure: the weather after (dir 1) or before (dir -1) name in the round (nil = real weather, which comes before the first).
+function M.cycleNext(name, dir)
+  local list = M.CYCLE
+  local i = 0
+  for k, v in ipairs(list) do if v == name then i = k end end
+  i = i + (dir or 1)
+  if i < 0 then i = #list elseif i > #list then i = 0 end
+  return list[i]
 end
 
 function M.compass(deg)
@@ -394,7 +419,9 @@ end
 
 local mode = 'real'
 local lastMsg = nil                     -- the latest message, kept across level loads
+local realMsg = nil                     -- the latest real one (the server's), for going back from a chosen weather
 local preset = nil                      -- a BeamMP server's weather (setPreset): its message, in place of the real one
+local forced = nil                      -- a weather the player chose (M.force): its message, in place of both
 local lastGravity = nil                 -- the latest 'gravity' message (server), kept the same way
 local applying = false                  -- our own core_environment calls (their hook is not a change)
 local S
@@ -546,7 +573,8 @@ local function applyPrecip(e, c)
   local alt = e.getCloudAltitudeKm and tonumber(e.getCloudAltitudeKm())
   local cz = cameraZ()
   if alt and cz and cz > alt * 1000 then rain, snow = 0, 0 end
-  M.rainNow = rain                          -- (its sound: ambience.lua)
+  M.rainNow = rain                          -- (its sound: ambience.lua; wet roads: weatherfx.lua)
+  M.snowNow = snow
   drivePrecip(M.RAIN_NAME, rain, M.RAIN_POOL)
   drivePrecip(M.SNOW_NAME, snow, M.SNOW_POOL)
 end
@@ -662,7 +690,7 @@ end
 
 local function hidePrecip()
   for name in pairs(S.precip) do pcall(drivePrecip, name, 0, 0) end
-  M.rainNow = 0
+  M.rainNow, M.snowNow = 0, 0
   pcall(restoreSun)
 end
 
@@ -720,7 +748,7 @@ local function update(dt)
   if S.gravTimer >= M.GRAVITY_CHECK_S then S.gravTimer = 0; applyGravity(e) end
   if mode ~= 'real' or not S.tgt or S.clock < S.quietUntil or bigMapBusy() then return end
   if not S.cur then S.cur = readEngine(e, S.tgt) end
-  M.step(S.cur, S.tgt, dt, M.LERP_S)
+  M.step(S.cur, S.tgt, dt, forced and M.FORCE_LERP_S or M.LERP_S)
   S.applyTimer = S.applyTimer + dt
   if S.applyTimer >= M.APPLY_S then S.applyTimer = 0; apply(e) end
   S.windTimer = S.windTimer + dt
@@ -732,7 +760,8 @@ end
 
 function M.onWeather(msg)
   if type(msg) ~= 'table' then return end
-  if not preset then
+  realMsg = msg
+  if not preset and not forced then
     lastMsg = msg
     S.tgt = M.targets(msg)
   end
@@ -771,6 +800,11 @@ function M.onUpdate(dtReal)
   end
   local ok, err = pcall(update, dtReal)
   if not ok then log('W', 'beamngEarth', 'weather: ' .. tostring(err)) end
+  local fx = package.loaded['beamngEarth/weatherfx'] or (S.inOurLevel and require('beamngEarth/weatherfx'))
+  if fx then
+    ok, err = pcall(fx.update, dtReal, S.inOurLevel and scenetree.MissionGroup ~= nil and not S.mission)
+    if not ok then log('W', 'beamngEarth', 'weatherfx: ' .. tostring(err)) end
+  end
 end
 
 -- core_environment's hook, fired before a change is applied (setState: the whole table its caller
@@ -824,6 +858,8 @@ end
 
 local function onLevel()
   resetState()
+  local fx = package.loaded['beamngEarth/weatherfx']
+  if fx and fx.onLevel then pcall(fx.onLevel) end
   S.inOurLevel = getCurrentLevelIdentifier and getCurrentLevelIdentifier() == M.LEVEL_ID
   local sk = sky()
   if sk and sk.setCloudFollow then sk.setCloudFollow(true) end
@@ -860,13 +896,68 @@ function M.getMode() return mode end
 
 -- A BeamMP server's weather preset (M.PRESETS; nil or 'real': the real weather again, from the next real message).
 function M.setPreset(name)
-  local m = M.presetMsg(name)
+  local p = playerPos()
+  local m = M.presetMsg(name, p and p.z)
   preset = m
-  if m then
+  if m and not forced then
     lastMsg = m
     if S then S.tgt = M.targets(m) end
   end
   return m ~= nil
+end
+
+-- The player's choice of weather (the keys): a preset name in place of the real (or the server's) weather, or nil for it
+-- again. Switches the mode to real (a chosen weather is ours to drive). Returns the name in force (nil: real weather).
+function M.force(name)
+  local p = playerPos()
+  local m = name and M.presetMsg(name, p and p.z) or nil
+  if name and not m then return forced and forced.preset or nil end
+  forced = m
+  if mode ~= 'real' then
+    M.setMode('real')
+    local st = rawget(_G, 'beamngEarth_settings')
+    if st and st.set then pcall(st.set, 'weatherMode', 'real') end
+  end
+  local back = forced or preset or realMsg
+  if back then
+    lastMsg = back
+    if S then S.tgt = M.targets(back); S.quietUntil = 0 end
+  end
+  return forced and forced.preset or nil
+end
+function M.forced() return forced and forced.preset or nil end
+
+-- The air temperature at the player now (C): the sea-level value the weather is at, less the lapse to the player's height.
+function M.airTempC()
+  local c = S and (S.cur or S.tgt)
+  local sl = c and tonumber(c.tempC)
+  if not sl then
+    local m = lastMsg
+    sl = m and (tonumber(m.slTempC) or tonumber(m.tempC))
+  end
+  if not sl then return nil end
+  local p = playerPos()
+  return sl - M.LAPSE * math.max(0, p and tonumber(p.z) or 0)
+end
+
+-- The rain and snow shares the weather is heading for (0..1 each; nil before any weather arrived): what a level that
+-- starts in it begins with on the ground (weatherfx.seedSurface), before the falling drops have faded in.
+function M.targetPrecip()
+  local t = S and S.tgt
+  if not t then return nil end
+  return tonumber(t.rainPct) or 0, tonumber(t.snowPct) or 0
+end
+
+-- Is a thunderstorm on (WMO 95-99 in the weather in use)?
+function M.stormNow()
+  local m = lastMsg
+  return m ~= nil and (tonumber(m.code) or 0) >= 95
+end
+
+-- The weather message in use (real, the server's or the chosen one) and the real one's snow depth (m), if it had one.
+function M.snowDepthM()
+  local m = forced and nil or realMsg
+  return m and tonumber(m.snowDepthM) or nil
 end
 
 function M.preset() return preset and preset.preset or nil end
@@ -880,7 +971,8 @@ end
 -- One line for the BeamNG.Earth window.
 function M.statusLine()
   local m = lastMsg
-  local head = 'Weather (' .. ((preset and mode == 'real') and ('server: ' .. preset.preset) or mode)
+  local head = 'Weather (' .. ((forced and mode == 'real') and ('chosen: ' .. forced.preset)
+    or (preset and mode == 'real') and ('server: ' .. preset.preset) or mode)
     .. ((mode == 'manual' and S.switched) and ', changed in the game' or '') .. ')'
   if not m then return head .. ': no data yet' end
   local w = m.wind or {}
@@ -894,7 +986,7 @@ end
 function M.current() return lastMsg end
 
 function M.status()
-  return dumps({ mode = mode, pending = S.pending, switched = S.switched, bwmFighting = bwmNow(),
+  return dumps({ mode = mode, forced = forced and forced.preset, pending = S.pending, switched = S.switched, bwmFighting = bwmNow(),
     gravityOverride = S.gravityOverride ~= nil, bigMap = bigMapBusy(), inOurLevel = S.inOurLevel, grace = math.max(0, S.graceUntil - S.clock), mission = S.mission,
     groundZ = S.groundZ, gravity = S.gravity, gravityMsg = lastGravity, temperatureCurve = S.temp.method, tempC = S.temp.value,
     msg = lastMsg, target = S.tgt, current = S.cur, line = M.statusLine() })

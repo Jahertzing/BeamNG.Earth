@@ -263,7 +263,8 @@ SERVER_TO_MOD = {
                 "cover": F(dict), "baseM": F(NUM), "baseAglM": F(NUM), "rainMmH": F(NUM), "snowCmH": F(NUM),
                 "visM": F(NUM, NULL), "fog": F(bool), "thunder": F(bool), "wind": F(dict),
                 "aloft": F(dict, OPT), "tempC": F(NUM), "dewC": F(NUM), "elevM": F(NUM), "slTempC": F(NUM),
-                "pressureHpa": F(NUM), "utcOffsetS": F(int, OPT), "tz": F(str, OPT), "credit": F(str)},
+                "pressureHpa": F(NUM), "snowDepthM": F(NUM, OPT), "utcOffsetS": F(int, OPT), "tz": F(str, OPT),
+                "credit": F(str)},
     # real gravity at the player (gravity.py; additive, protocol 4): |g| in m/s^2 at (lat, lon, h m MSL)
     "gravity": {"v": F(int), "g": F(NUM), "lat": F(NUM), "lon": F(NUM), "h": F(NUM), "source": F(str)},
     # detail mode: a block's base photo rendered again once its NAIP tiles arrived (earthd base_refresh)

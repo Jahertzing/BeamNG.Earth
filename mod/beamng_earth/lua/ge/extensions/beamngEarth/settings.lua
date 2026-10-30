@@ -84,6 +84,9 @@ M.SCHEMA = {
   clouds = { kind = 'bool', default = true, label = 'Clouds' },
   weatherMode = { kind = 'enum', default = 'real', values = { 'real', 'manual' }, label = 'Weather' },
   realGravity = { kind = 'bool', default = true, label = 'Real gravity' },
+  -- what the weather does to the ground (weatherfx.lua): slippery wet / snowy / icy roads, and how they look
+  weatherGrip = { kind = 'bool', default = true, label = 'Slippery wet and snowy roads' },
+  weatherSurfaces = { kind = 'bool', default = true, label = 'Wet roads, snow on the ground, lightning' },
   -- grass and shrubs on the surface layers (groundcover.lua; needs the server's --surface on)
   groundCover = { kind = 'bool', default = true, label = 'Grass and shrubs' },
   groundCoverDensity = { kind = 'enum', default = 'normal', values = { 'low', 'normal', 'high' }, label = 'Grass density' },
@@ -161,7 +164,8 @@ M.SCHEMA = {
 }
 M.ORDER = { 'theDriveTime', 'theDriveAutodrive', 'quality', 'framePacing', 'terrainDetail', 'groundPhoto', 'trees', 'treeDistance',
   'buildingDistance', 'objectDetail', 'nightLights', 'rebaseDistance', 'viewDistanceMode', 'viewDistanceKm', 'hazeStrength',
-  'colorGrade', 'skyMode', 'clouds', 'weatherMode', 'realGravity', 'groundCover', 'groundCoverDensity', 'groundCoverDistance',
+  'colorGrade', 'skyMode', 'clouds', 'weatherMode', 'weatherGrip', 'weatherSurfaces', 'realGravity',
+  'groundCover', 'groundCoverDensity', 'groundCoverDistance',
   'detailDistance', 'groundGrass', 'grassTint', 'grassCards', 'rocks', 'roads', 'highwaySigns', 'cityGlow', 'nightAmbient',
   'headlights', 'aiTraffic', 'trafficPopulation', 'parkedCars', 'streetLife', 'staticCars', 'drcog', 'lidarHeights',
   'dashboardSatellite', 'hudVisible', 'statusBar',
@@ -477,6 +481,8 @@ M.APPLY = {
     local w = ext('beamngEarth_weather')
     if w and w.setMode and not (v == 'manual' and w.getMode and w.getMode() == v) then w.setMode(v) end
   end,
+  weatherGrip = function(v) require('beamngEarth/weatherfx').setGrip(v) end,
+  weatherSurfaces = function(v) require('beamngEarth/weatherfx').setSurfaces(v) end,
   realGravity = function(v)
     local w = ext('beamngEarth_weather')
     if w and w.setGravityEnabled and w.GRAVITY_ENABLED ~= v then w.setGravityEnabled(v) end

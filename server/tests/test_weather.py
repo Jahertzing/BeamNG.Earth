@@ -124,6 +124,11 @@ class DeriveTest(unittest.TestCase):
         self.assertEqual(m["rainMmH"], 0)
         self.assertEqual(weather.derive(synthetic(85))["snowCmH"], 0.5)
 
+    def test_snow_depth(self):
+        """Open-Meteo's snow_depth (m) is passed on for the mod's snow on the ground; none reported is none."""
+        self.assertEqual(weather.derive(synthetic(73, snow_depth=0.12))["snowDepthM"], 0.12)
+        self.assertEqual(weather.derive(synthetic(0))["snowDepthM"], 0)
+
     def test_thunder(self):
         m = weather.derive(synthetic(95, rain=0.2))
         self.assertTrue(m["thunder"])
@@ -154,9 +159,9 @@ class RequestTest(unittest.TestCase):
         self.assertEqual(q["wind_speed_unit"], ["ms"])
         self.assertEqual(q["timeformat"], ["unixtime"])
         self.assertNotIn("apikey", q)
-        # the recorded fixtures were fetched with this query
+        # the recorded fixtures were fetched with this query (snow_depth added after they were recorded)
         for name in ("baltimore", "whitney"):
-            self.assertEqual(set(fixture(name)["current"]) - {"time", "interval"}, set(weather.CURRENT))
+            self.assertEqual(set(fixture(name)["current"]) - {"time", "interval"}, set(weather.CURRENT) - {"snow_depth"})
 
     def test_project_user_agent(self):
         """fetch() goes through netfetch as a background request with the project's User-Agent."""
