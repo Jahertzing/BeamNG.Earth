@@ -1436,6 +1436,9 @@ function M.onFarGeo(msg, currentAnchor, kind)
     table.sort(list, function(a, b) return tostring(a[1]) < tostring(b[1]) end)
   elseif type(data.shape) == 'string' then
     list[1] = { 'shape', { shape = data.shape, pos = data.pos, pivot = data.pivot } }
+    -- (a big mesh in pieces, each a unit of its own: server blockworker.far_mesh_pieces; a 1.2 MB far buildings
+    -- tile made in one took a 600 ms frame, 2026-10-30)
+    for i, e in ipairs(type(data.pieces) == 'table' and data.pieces or {}) do list[#list + 1] = { 'shape' .. (i + 1), e } end
   end
   local used = {}
   for _, it in ipairs(list) do
