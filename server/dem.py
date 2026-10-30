@@ -36,6 +36,7 @@ from PIL import Image
 
 import cache as cachemod
 import dsmground
+import plausible
 import fast
 import hrdem as hrdemmod
 import lidarbc as lidarbcmod
@@ -616,8 +617,8 @@ class Dem:
     # --- the decoded mirror (MIRROR_MB) ----------------------------------------------------------
     def _mirror_path(self, key):
         z, x, y = key
-        return os.path.join(self.cache_dir, "decoded", f"v{DECODED_VERSION}", f"g{int(self.ground_filter)}", str(z),
-                            str(x), f"{y}.npy")
+        p = f"g{int(self.ground_filter)}" + (f"p{plausible.VERSION}" if plausible.ON else "")
+        return os.path.join(self.cache_dir, "decoded", f"v{DECODED_VERSION}", p, str(z), str(x), f"{y}.npy")
 
     def _mirror_get(self, key):
         """A tile from the decoded mirror (a read-only view of its memory map), or None."""
@@ -752,6 +753,8 @@ class Dem:
                     a = fill_holes(a, hole_px(z, y)) if lidar else self._ground12(x, y, a)
                 elif z > GLOBAL_ZOOM:
                     a = fill_holes(a, hole_px(z, y))        # lidar: no ground under buildings
+                    if plausible.ON and z >= plausible.MIN_ZOOM:    # (the ground a car could meet: plausible.py)
+                        a = self._plausible(z, x, y, a)
                 else:
                     d = GLOBAL_ZOOM - z                     # a coarse tile over lidar: its holes too
                     if self._lidar((x << d) + (1 << d) // 2, (y << d) + (1 << d) // 2):
@@ -839,6 +842,41 @@ class Dem:
         g = dsmground.ground(big, px)
         self._count("dem:ground12")
         return np.ascontiguousarray(g[m:m + TILE, m:m + TILE])
+
+    def _plausible(self, z, x, y, a):
+        """Lidar tile (z, x, y) (elevations a, holes filled) made plausible ground (plausible.py), filtered with
+        plausible.MARGIN_PX of its 8 neighbours (as decoded, holes filled: never filtered themselves) so tiles agree
+        at their seams; a neighbour not to be had: the tile's edge repeated."""
+        m = plausible.MARGIN_PX
+        n = 2 ** z
+        big = np.empty((TILE + 2 * m, TILE + 2 * m), np.float32)
+        big[m:m + TILE, m:m + TILE] = a
+        for dy in (-1, 0, 1):
+            for dx in (-1, 0, 1):
+                if dx == 0 and dy == 0:
+                    continue
+                nb = None
+                if 0 <= y + dy < n:
+                    try:
+                        data = self._download(MAPTERHORN, z, (x + dx) % n, y + dy)
+                        if data is not None:
+                            nb = fill_holes(self._decode(MAPTERHORN, z, (x + dx) % n, y + dy, data), hole_px(z, y + dy))
+                    except netfetch.FetchError:
+                        self._partial()
+                r0, r1 = (0, m) if dy < 0 else (m + TILE, 2 * m + TILE) if dy > 0 else (m, m + TILE)
+                c0, c1 = (0, m) if dx < 0 else (m + TILE, 2 * m + TILE) if dx > 0 else (m, m + TILE)
+                if nb is None:
+                    rr = np.clip(np.arange(r0, r1) - m, 0, TILE - 1)
+                    cc = np.clip(np.arange(c0, c1) - m, 0, TILE - 1)
+                    big[r0:r1, c0:c1] = a[np.ix_(rr, cc)]
+                else:
+                    sr = slice(TILE - m, TILE) if dy < 0 else slice(0, m) if dy > 0 else slice(0, TILE)
+                    sc = slice(TILE - m, TILE) if dx < 0 else slice(0, m) if dx > 0 else slice(0, TILE)
+                    big[r0:r1, c0:c1] = nb[sr, sc]
+        lat = math.degrees(math.atan(math.sinh(math.pi * (1 - 2 * (y + 0.5) / n))))
+        px = 40075016.686 * math.cos(math.radians(lat)) / n / TILE
+        self._count("dem:plausible")
+        return np.ascontiguousarray(plausible.plausible(big, px)[m:m + TILE, m:m + TILE])
 
     def _deepest_lidar(self, z, x, y):
         """The deepest zoom between GLOBAL_ZOOM + 1 and z - 1 at which Mapterhorn has the ancestor of tile (z, x, y)

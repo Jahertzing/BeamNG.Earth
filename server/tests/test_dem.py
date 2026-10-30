@@ -10,6 +10,7 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import dem as demmod  # noqa: E402
+import plausible  # noqa: E402
 
 
 class FlakyDem(demmod.Dem):
@@ -110,6 +111,13 @@ class MirrorTest(unittest.TestCase):
     """The decoded mirror: a tile decoded once is read by another process memory-mapped, the same numbers; a tile
     made from a stand-in (Mapterhorn failing: AWS) is not kept."""
 
+    def setUp(self):
+        # (the stand-in's tiles are flat with 1 m steps between them: plausible.py would round those; PlausibleDemTest)
+        self._plausible, plausible.ON = plausible.ON, False
+
+    def tearDown(self):
+        plausible.ON = self._plausible
+
     def test_mirror(self):
         with tempfile.TemporaryDirectory() as d:
             f = TerrariumFetcher()
@@ -136,6 +144,52 @@ class MirrorTest(unittest.TestCase):
             self.assertFalse(Path(down._mirror_path(k2)).exists(), "a failover tile is not kept")
             del a, b, other, down
             gc.collect()  # the mirror's mappings closed: Windows deletes no mapped file
+
+
+class SpikeFetcher(TerrariumFetcher):
+    """Mapterhorn tiles at 1600 m, flat across their seams, one 3 m spike in the middle of x 9300."""
+
+    def get(self, url, *, kind="demand", headers=None):
+        import io
+        from PIL import Image
+        self.calls.append(url)
+        x = int(url.rsplit("/", 2)[1])
+        h = np.full((512, 512), 1600.0)
+        if x == 9300:
+            h[256, 256] = 1603.0
+        v = np.round((h + 32768) * 256).astype(np.int64)
+        a = np.zeros((512, 512, 3), np.uint8)
+        a[..., 0], a[..., 1], a[..., 2] = v // 65536, (v // 256) % 256, v % 256
+        buf = io.BytesIO()
+        Image.fromarray(a).save(buf, "PNG")
+
+        class R:
+            body = buf.getvalue()
+        return R()
+
+
+class PlausibleDemTest(unittest.TestCase):
+    """dem.Dem puts its lidar tiles (z >= plausible.MIN_ZOOM) through plausible.py when it is on, mirrored apart."""
+
+    def test_spike_out_when_on(self):
+        old = plausible.ON
+        try:
+            for on in (True, False):
+                plausible.ON = on
+                with tempfile.TemporaryDirectory() as d:
+                    dm = demmod.Dem(d, fetcher=SpikeFetcher())
+                    a = dm._load_tile((15, 9300, 12500))
+                    self.assertAlmostEqual(float(a[0, 0]), 1600.0, places=2)
+                    if on:
+                        self.assertLess(abs(float(a[256, 256]) - 1600.0), 0.05, "the spike gone")
+                        self.assertIn(f"p{plausible.VERSION}", dm._mirror_path((15, 9300, 12500)))
+                    else:
+                        self.assertGreater(float(a[256, 256]), 1602.5, "raw: the spike kept")
+                        self.assertNotIn(f"p{plausible.VERSION}", dm._mirror_path((15, 9300, 12500)))
+                    del a, dm
+                    gc.collect()
+        finally:
+            plausible.ON = old
 
 
 class LidarDepthFetcher(TerrariumFetcher):
