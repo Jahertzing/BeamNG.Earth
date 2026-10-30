@@ -36,7 +36,7 @@ import re
 import threading
 import time
 import unicodedata
-from collections import OrderedDict
+from collections import OrderedDict, deque
 
 import numpy as np
 
@@ -110,6 +110,7 @@ LIDAR_GAPS_WAIT_S = float(os.environ.get("BNE_LIDAR_GAPS_WAIT", "8"))
 GAP_NATIVE = 107            # earthfast.VERSION of lidar_gap_stretch
 SESSION_ENV = "BNGE_ROADZ_SESSION"      # (not BNE_: those are part of the revisit cache's code key)
 SESSION_KEEP_S = 86400.0
+WARM_SEEN_MAX = 20000       # cells RoadZ.warm remembers having been given (then forgets them all)
 
 _TOKEN = re.compile(r"[a-z0-9]+")
 _REF = re.compile(r"^([a-z]{0,3})(\d{1,4})([a-z]?)$")
@@ -440,6 +441,9 @@ class RoadZ:
         self._ept = {}                      # dataset name -> Ept
         self._lock = threading.Lock()
         self._cell_locks = {}
+        self._warm_q = deque()              # cells warm() is to build, in order (one thread: _warm_run)
+        self._warm_seen = set()             # cells warm() was given (each once)
+        self._warm_busy = False
         self.stats = {"cells": 0, "requests": 0, "bytes": 0, "seconds": 0.0}     # (built here, not read from disk)
         self.enabled = ON                   # (the probes measure with it on whatever BNE_ROADZ says)
         self.lidar = LIDAR_ON
@@ -451,7 +455,7 @@ class RoadZ:
             src = "lidar-nogaps"            # (built without the ground stretches: not the cells with them)
         return os.path.join(self.dir, src, str(key.z), str(key.x), f"{key.y}.npz") if self.dir else None
 
-    def lines(self, src, key):
+    def lines(self, src, key, fault=True):
         """The cell's Lines of source src (fetched and kept on disk the first time), or None when it could not be
         had (offline, a failed fetch: asked again next time)."""
         key = mapcells.CellKey(int(key[0]), int(key[1]), int(key[2]))
@@ -483,8 +487,9 @@ class RoadZ:
                     got = {"ign": self._ign, "nvdb": self._nvdb, "lidar": self._lidar}[src](key)
                 except Exception as e:      # (a FetchError is a revisit fault already)
                     log.debug("roadz %s %s: %s: %s", src, key, type(e).__name__, e)
-                    import revisit
-                    revisit.fault()
+                    if fault:               # (not warm's: nothing is built from what it fetches ahead)
+                        import revisit
+                        revisit.fault()
                     return None
                 if got is None:
                     return None
@@ -516,21 +521,45 @@ class RoadZ:
             self.stats["bytes"] += len(res.body)
         return res.body
 
-    def warm(self, keys):
+    def warm(self, keys, front=True):
         """Fetch / build the sources' cells of keys (in that order) in a background thread, so the road processes find
-        them on disk (earthd.Server.warm_place). Returns at once."""
+        them on disk (earthd.Server.warm_place; GeoTracker: the road geotiles about to be built ahead of the car, front
+        False). Each cell once; front: before the cells queued already (a new place's), else after them. The road
+        processes wait LIDAR_GAPS_WAIT_S at most for a cell's lidar and else take the rule for the whole server run, so
+        nothing built from that cell's roads is kept (gap_answers): on a first drive at 70 mph most of the route's road
+        work was not kept (2026-10-30, I-25: 227 items, 88k faults), its cells' lidar fetched only when a road tile asked.
+        Returns at once."""
         if not self.enabled or self.fetcher is None or not keys:
             return
+        with self._lock:
+            new = [k for k in keys if k not in self._warm_seen]
+            if not new:
+                return
+            if len(self._warm_seen) > WARM_SEEN_MAX:
+                self._warm_seen.clear()
+            self._warm_seen.update(new)
+            if front:
+                self._warm_q.extendleft(reversed(new))
+            else:
+                self._warm_q.extend(new)
+            if self._warm_busy:
+                return
+            self._warm_busy = True
+        threading.Thread(target=self._warm_run, name="roadz-warm", daemon=True).start()
 
-        def run():
-            for k in keys:
-                la, lo = k.center()
-                for src in sources_at(la, lo, self.lidar):
-                    try:
-                        self.lines(src, k)
-                    except Exception as e:      # (the road processes ask again)
-                        log.debug("roadz warm %s %s: %s", src, k, e)
-        threading.Thread(target=run, name="roadz-warm", daemon=True).start()
+    def _warm_run(self):
+        while True:
+            with self._lock:
+                if not self._warm_q:
+                    self._warm_busy = False
+                    return
+                k = self._warm_q.popleft()
+            la, lo = k.center()
+            for src in sources_at(la, lo, self.lidar):
+                try:
+                    self.lines(src, k, fault=False)
+                except Exception as e:      # (the road processes ask again)
+                    log.debug("roadz warm %s %s: %s", src, k, e)
 
     def _get_json(self, url, headers=None, lane=None):
         return json.loads(self._fetch(url, headers, lane).decode("utf-8"))
