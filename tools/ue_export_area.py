@@ -27,8 +27,8 @@ TILES = int(CELL / 256.0)
 _w = {}
 
 
-def init_worker(cache_dir):
-    """One blockworker state per process."""
+def init_worker(cache_dir, fit=None):
+    """One blockworker state per process; fit: tools/ue_fit.py's corrections, applied to the map."""
     try:
         import psutil
         psutil.Process().nice(psutil.BELOW_NORMAL_PRIORITY_CLASS)
@@ -45,6 +45,9 @@ def init_worker(cache_dir):
     import roads as roadsmod
     roadsmod.ROADS_IN_GROUND = False
     blockworker.init(cache_dir, True, True, True, True, True, None, 40, True, True)
+    if fit:
+        import ue_fit
+        ue_fit.install(fit)
     frame = geodesy.EnuFrame(*ue_export.FRAME)
     catch = ue_export.Catch()
     cdae.write = catch.write
@@ -216,6 +219,7 @@ def main():
     ap.add_argument("--cells", default=None, help="i,j;i,j: only these cells")
     ap.add_argument("--out", default="C:/beamng-earth/Earth.UE/export/frederick")
     ap.add_argument("--cache-dir", default=os.environ["BNGE_WORLD_CACHE"])
+    ap.add_argument("--fit", default=None, help="corrections file (tools/ue_fit.py)")
     a = ap.parse_args()
     out_dir = a.out
     os.makedirs(out_dir, exist_ok=True)
@@ -228,7 +232,7 @@ def main():
     cells.sort(key=lambda c: abs(c[0] * CELL + 1024 + 3668) + abs(c[1] * CELL + 1024 + 1480))
     t0 = time.perf_counter()
     results = []
-    with concurrent.futures.ProcessPoolExecutor(a.jobs, initializer=init_worker, initargs=(os.path.abspath(a.cache_dir),)) as pool:
+    with concurrent.futures.ProcessPoolExecutor(a.jobs, initializer=init_worker, initargs=(os.path.abspath(a.cache_dir), a.fit)) as pool:
         futures = {pool.submit(export_cell, (i, j, out_dir)): (i, j) for i, j in cells}
         for k, fut in enumerate(concurrent.futures.as_completed(futures), 1):
             cell = futures[fut]
