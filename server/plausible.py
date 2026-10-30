@@ -26,8 +26,8 @@ import os
 import numpy as np
 
 ON = os.environ.get("BNE_PLAUSIBLE", "on") != "off"
-VERSION = 2                 # (the decoded mirror's path: a change to the filter is a new mirror)
-MIN_ZOOM = 14               # lidar tiles this deep and deeper (pixels <= ~2 m)
+VERSION = 3                 # (the decoded mirror's path: a change to the filter is a new mirror)
+MIN_ZOOM = 15               # lidar tiles this deep and deeper (pixels <= ~2 m; z14's ~3.7 m are landform)
 SPIKE_M = 0.4               # m off the 3x3 median: a spike or a pit
 SIGMA_M = 4.0               # m: the smooth surface's Gaussian
 KEEP = 0.15                 # share of the relief under SIGMA_M kept on gentle ground

@@ -177,8 +177,11 @@ class PlausibleDemTest(unittest.TestCase):
             for on in (True, False):
                 plausible.ON = on
                 with tempfile.TemporaryDirectory() as d:
-                    dm = demmod.Dem(d, fetcher=SpikeFetcher())
+                    f = SpikeFetcher()
+                    dm = demmod.Dem(d, fetcher=f)
                     a = dm._load_tile((15, 9300, 12500))
+                    self.assertEqual([u for u in f.calls if "/15/" in u], [demmod.MAPTERHORN["url"].format(
+                        z=15, x=9300, y=12500)], "no neighbour fetched for the seam margin")
                     self.assertAlmostEqual(float(a[0, 0]), 1600.0, places=2)
                     if on:
                         self.assertLess(abs(float(a[256, 256]) - 1600.0), 0.05, "the spike gone")
