@@ -123,11 +123,11 @@ local FORMATS = { 3, 4 }
 local POSE_INTERVAL = 0.5      -- ~2 Hz
 local SKY_INTERVAL = 5.0       -- TimeOfDay lat/lon follow
 local VISIBLE_DISTANCE = 100000
-local LAG_PROBE_FRAMES = 10   -- simulated frames to watch for a rebase's vehicle move to show up
+M.LAG_PROBE_FRAMES = 10   -- simulated frames to watch for a rebase's vehicle move to show up
 local PLACE_DELAY_FRAMES = 2   -- let the collision rebuild settle before placing the vehicle
 local FLOOR_WAIT_S = 60        -- s a teleport into a tunnel waits for the tube's floor before giving up (car stays on top)
 local TELEPORT_RETRY_MAX_S = 60 -- s at most between the tries of a teleport whose first block failed (anchor_error)
-local FLOOR_HIT_M = 0.8        -- m the static collision found under floorZ + 2 may differ from floorZ: the tube is there
+M.FLOOR_HIT_M = 0.8        -- m the static collision found under floorZ + 2 may differ from floorZ: the tube is there
 local PRE_LIFT = 5             -- m above groundZ + 1 to hold the vehicle until it is placed
 local LOADING_AFTER_TELEPORT_S = 3 -- governor loading mode (8 ms budget) this long after a teleport
 local SLOW_SPEED, SLOW_S = 1, 3    -- ... and while the player is below 1 m/s for over 3 s
@@ -186,7 +186,7 @@ local function resetState()
     -- server = not answered yet, gate = ready but its far tiles not live, governor = no heavy slot yet
     followWait = { server = 0, gate = 0, governor = 0 },
     followHeld = false, followHolds = 0, groundAhead = nil, -- the altitude rule (follow.altitudeHold)
-    -- the last COMMIT_LOG follow commits, each { load, coll, cover (ms in the commit), f = { the wall ms of
+    -- the last M.COMMIT_LOG follow commits, each { load, coll, cover (ms in the commit), f = { the wall ms of
     -- the commit frame and the two after it } } (what a block move costs, and where: GPU uploads land in
     -- the frames after)
     commits = {}, commitFrames = nil,
@@ -251,7 +251,7 @@ local teleportTo -- defined with M.teleport (the level start's own teleport is o
 
 -- the level start's teleport: to the place picked in the level select (levelinfo.lua: a saved place, or a random
 -- road from the server), else to the window's lat/lon (the default start until it is changed)
-local RANDOM_WAIT_S = 15 -- s for the server's random place (an older server never answers: the default start)
+M.RANDOM_WAIT_S = 15 -- s for the server's random place (an older server never answers: the default start)
 -- "Where you left off": the last place of this game run, else the newest of the saved recent places (the window's
 -- lat / lon live only as long as the game: after a restart, an update's for one, every start went to Mount Whitney,
 -- Discord 2026-10-25), else the default start
@@ -474,7 +474,7 @@ end
 -- by kilometres and the frame smears at full strength (the "flash" seen in-game at rebases).
 -- Its strength goes to 0 for a few frames and back (strength, not isEnabled: as the graphics
 -- settings do it, core/settings/graphic.lua:1392). docs/research/2026-10-10-origin-distance.md.
-local BLUR_HOLD_FRAMES = 4
+M.BLUR_HOLD_FRAMES = 4
 local blurHold = { frames = 0, saved = nil }
 
 local function holdMotionBlur()
@@ -485,7 +485,7 @@ local function holdMotionBlur()
     if not blurHold.saved or blurHold.saved <= 0 then blurHold.saved = nil; return end
     fx.strength = 0
   end
-  blurHold.frames = BLUR_HOLD_FRAMES
+  blurHold.frames = M.BLUR_HOLD_FRAMES
 end
 
 local function tickMotionBlur()
@@ -733,7 +733,7 @@ end
 -- Terrain-follow commit (V1_1_SPEC 1a, V1_2_DESIGN 2.3), in a governor heavy slot, atomic in one
 -- frame: importMaps + setPosition + reloadCollision + the far tiles' cover change. Vehicles and
 -- camera stay where they are; far tiles only sink / hide / come back (no imports in this frame).
-local COMMIT_LOG = 20
+M.COMMIT_LOG = 20
 local COMMIT_SLOW_MS = 60      -- a commit frame this slow is logged with its materials and what the grass did (was 300:
                                -- the 100-150 ms swap frames of 2026-10-29 went unlogged)
 local frameTimer = hptimer and hptimer() or nil
@@ -759,7 +759,7 @@ local function commitTerrain(msg)
     mats = ls and ls.mats or nil, fresh = ls and ls.fresh or nil, at = { msg.cx, msg.cy },
     grass = groundcover.lastChange }   -- (what the block change did about the grass: the hitching half of the swaps)
   table.insert(st.commits, c)
-  if #st.commits > COMMIT_LOG then table.remove(st.commits, 1) end
+  if #st.commits > M.COMMIT_LOG then table.remove(st.commits, 1) end
   st.commitFrames = c
   st.block = { cx = msg.cx, cy = msg.cy }
   net.send({ type = 'commit_terrain', anchorId = st.anchorId, cx = msg.cx, cy = msg.cy })
@@ -891,7 +891,7 @@ function M.floorCheck()
   if not ray then return end
   local from = vec3(0, 0, st.floorZ + 2)
   local d = ray(from, vec3(0, 0, -1), 6)
-  if d and math.abs((from.z - d) - st.floorZ) < FLOOR_HIT_M then
+  if d and math.abs((from.z - d) - st.floorZ) < M.FLOOR_HIT_M then
     local z = st.floorZ
     st.floorZ, st.floorUntil = nil, nil
     log('I', 'beamngEarth', string.format('teleport: down onto the tunnel floor at %.1f', z))
@@ -1752,12 +1752,12 @@ end
 -- attribution line. Called every frame then, so no farfield.stats() table: its counters only.
 local function creditsFallback() return attributionText(farfield.counters()) end
 
--- The status bar's loading part (loadprogress.lua): false when no load is on; worked out at most every LOAD_LINE_S.
-local LOAD_LINE_S = 0.25
+-- The status bar's loading part (loadprogress.lua): false when no load is on; worked out at most every M.LOAD_LINE_S.
+M.LOAD_LINE_S = 0.25
 local loadLineAt, loadLineText = -math.huge, false
 local function loadLine()
   if not loadprogress.active() then return false end
-  if st.clock - loadLineAt < LOAD_LINE_S then return loadLineText end
+  if st.clock - loadLineAt < M.LOAD_LINE_S then return loadLineText end
   loadLineAt = st.clock
   local p = st.pending
   local placed = st.anchor ~= nil and not (p and (p.purpose == 'teleport' or p.purpose == 'resync'))
@@ -2178,7 +2178,7 @@ local function onUpdate(dtReal, dtSim)
     end
   end
   st.clock = st.clock + dtReal
-  if st.randomStart and st.clock - st.randomStart.t0 > RANDOM_WAIT_S then    -- no random place came: the default
+  if st.randomStart and st.clock - st.randomStart.t0 > M.RANDOM_WAIT_S then    -- no random place came: the default
     st.randomStart = nil
     if not st.anchor then defaultStart() end
   end
@@ -2321,9 +2321,9 @@ local function onPreRender(dtReal, dtSim)
     st.lastMoveLag = probe.frames
   elseif (dtSim or dtReal or 0) > 0 then
     probe.frames = probe.frames + 1
-    if probe.frames > LAG_PROBE_FRAMES then
+    if probe.frames > M.LAG_PROBE_FRAMES then
       st.lagProbe = nil
-      log('W', 'beamngEarth', 'rebase: vehicle move not visible after ' .. LAG_PROBE_FRAMES .. ' frames')
+      log('W', 'beamngEarth', 'rebase: vehicle move not visible after ' .. M.LAG_PROBE_FRAMES .. ' frames')
     end
   end
 end
