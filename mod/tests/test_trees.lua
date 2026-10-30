@@ -528,6 +528,7 @@ do
   trees.reset()
   for k in pairs(items) do items[k] = nil end
   trees.POOL_SPARE, trees.RECHECK_S = 0, -1
+  trees.FRAME_MS = 1e9      -- (whole tiles per pass even on a busy machine: the gate under load failed the counts)
   local LAT, LON = 39.2834, -76.5934
   local A = gd.newAnchor(LAT - 0.02, LON - 0.1)        -- the world before: ~9 km away
   local gx, gy = gt.tileOf(LAT, LON)
@@ -579,6 +580,6 @@ do
   trees.onDrop({ anchorId = 99, key = key })
   for _ = 1, 3 do trees.update(21, { x = 0, y = 0 }) end
   T.check(count() == 0 and trees.status().tiles == 0, 'dropped')
-  trees.RECHECK_S = 1.0
+  trees.RECHECK_S, trees.FRAME_MS = 1.0, FRAME_MS
 end
 T.done('test_trees')
