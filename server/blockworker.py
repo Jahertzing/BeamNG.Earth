@@ -1020,7 +1020,7 @@ def _write_geo_content(out_dir, vfs_dir, tile, P):
             data.pop("colliders", None)
         lean = "bldcol" in parts
         for what, info in parts.items():
-            info["col"] = what in GEO_COLLIDING or (what.startswith("bld") and not lean)
+            info["col"] = what.rstrip("0123456789") in GEO_COLLIDING or (what.startswith("bld") and not lean)
         data["key"] = tile.key
         data["frame"] = [float(tile.frame.lat0), float(tile.frame.lon0)]
         data["box"] = [round(float(v), 4) for v in tile.box]

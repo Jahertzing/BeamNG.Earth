@@ -58,6 +58,11 @@ local content = string.format([[{ v = 1, key = "%s", frame = { %.10f, %.10f }, h
   bldcol = { shape = "/s/rg_bldcol.cdae", pos = { -118, -118, 0 }, pivot = 20, relief = 30 },
   bld = { shape = "/s/rg_bld.cdae", pos = { -118, -118, 0 }, pivot = 20, relief = 30 },
   deck = { shape = "/s/rg_deck.cdae", pos = { -118, -118, 0 }, pivot = 12, relief = 2 },
+  deck2 = { shape = "/s/rg_deck2.cdae", pos = { -118, -118, 0 }, pivot = 12, relief = 2 },
+  rail = { shape = "/s/rg_rail.cdae", pos = { -118, -118, 0 }, pivot = 4, relief = 1 },
+  rail2 = { shape = "/s/rg_rail2.cdae", pos = { -118, -118, 0 }, pivot = 4, relief = 1 },
+  railcol = { shape = "/s/rg_railcol.cdae", pos = { -118, -118, 0 }, pivot = 4, relief = 1 },
+  railcol2 = { shape = "/s/rg_railcol2.cdae", pos = { -118, -118, 0 }, pivot = 4, relief = 1 },
   colliders = { deck = { { -10, -10, 5, 10, 10, 15 } }, bldcol = { { 50, 50, 0, 60, 60, 30 } } },
   park = { { 10, 20, 3, 90 } }, wells = { { 30, 40, 3, 45 } },
   sound = { 1, 5, 6, 7, 20, 10, 5, 0.5 },
@@ -87,7 +92,17 @@ T.check(roads.onTile({ anchorId = 1, key = key, path = '/s/rg.json', n = 0, fram
   'a geotile accepted')
 run(1, A)
 local bc = objsWith('rg_bldcol')
-T.check(#bc == 1 and #objsWith('rg_bld.') == 1 and #objsWith('rg_deck') == 1, 'its parts made once')
+T.check(#bc == 1 and #objsWith('rg_bld.') == 1 and #objsWith('rg_deck') == 2, 'its parts made once')
+-- pieces (server meshpieces: "deck2", "rail2", "railcol2" ...): every one made; with a railcol the rails only drawn
+T.check(#objsWith('rg_deck2') == 1 and #objsWith('rg_rail') == 4, 'every piece of a geotile made')
+for _, o in ipairs(objsWith('rg_rail')) do
+  local col = o.fields.collisionType
+  if tostring(o.fields.shapeName):find('railcol', 1, true) then
+    T.check(col == 'Collision Mesh', 'railcol pieces collide (' .. tostring(col) .. ')')
+  else
+    T.check(col ~= 'Visible Mesh Final' and col ~= 'Collision Mesh', 'rail pieces drawn only (' .. tostring(col) .. ')')
+  end
+end
 local frame = geotile.frameOf({ frame = { clat, clon } })
 do
   local pl = geotile.placement(frame, A, 0, 0, 20)

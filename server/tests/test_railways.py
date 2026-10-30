@@ -120,8 +120,12 @@ class RailwayTest(unittest.TestCase):
             with open(os.path.join(tmp, os.path.basename(path))) as fh:
                 data = json.load(fh)
             self.assertEqual(data["railcol"]["shape"], "/v/railcol_1_0_0.cdae")
-            self.assertTrue(os.path.getsize(os.path.join(tmp, "railcol_1_0_0.cdae"))
-                            < 0.5 * os.path.getsize(os.path.join(tmp, "rail_1_0_0.cdae")))
+            # in pieces, each a unit of its own in the game (a track's tile in one cost 105-125 ms, 2026-10-30)
+            self.assertIn("rail2", data)
+            size = {k: sum(os.path.getsize(os.path.join(tmp, os.path.basename(e["shape"])))
+                           for w, e in data.items() if isinstance(e, dict) and w.rstrip("0123456789") == k)
+                    for k in ("rail", "railcol")}
+            self.assertLess(size["railcol"], 0.5 * size["rail"])
         self.assertEqual(roads.shape_files(1, 0, 0)["railcol"], "railcol_1_0_0.cdae")
 
     def test_roads_and_trams_are_not_tracks(self):

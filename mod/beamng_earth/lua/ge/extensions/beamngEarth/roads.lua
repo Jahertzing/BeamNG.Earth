@@ -302,7 +302,7 @@ end
 -- its own that the governor spreads. kindOf('deck2') == 'deck': the rules go by the kind, the bookkeeping (t[what],
 -- colWant, colAt, cq) by the name. The drawn buildings keep their own "bld2".."bld4" (the engine's index limit).
 M.PIECES = 12
-local PIECE_KINDS = { deck = true, tunnel = true, rail = true, bldcol = true, walkcol = true }
+local PIECE_KINDS = { deck = true, tunnel = true, rail = true, railcol = true, bldcol = true, walkcol = true }
 local function kindOf(what) return type(what) == 'string' and what:match('^%a+') or what end
 M.kindOf = kindOf
 local function withPieces(kinds)
@@ -587,7 +587,9 @@ M.geoStats = { tiles = 0, kept = 0, replaced = 0, skins = 0, skinSwaps = 0, exac
 local geotile = require('beamngEarth/geotile')
 local geodesy = require('beamngEarth/geodesy')
 local anchorObj = nil       -- the current anchor (geodesy) the geotiles are placed into (M.update, onTile)
-M.CONTENT_WHATS = { 'deck', 'bld', 'bld2', 'bld3', 'bld4', 'bldcol', 'wire', 'tunnel', 'rail', 'railcol' }
+-- (with their pieces, "deck2" ...: a geotile's content listed only the first, so a deck, tunnel or collision mesh of
+-- more than one piece (server roads.COLLIDER_PIECE_TRIS) lost all but its first stretch, 2026-10-30)
+M.CONTENT_WHATS = withPieces({ 'deck', 'bld', 'bld2', 'bld3', 'bld4', 'bldcol', 'wire', 'tunnel', 'rail', 'railcol' })
 M.SKIN_WHATS = { 'road', 'walk', 'walkcol' }
 
 local function geoKey(gkey) return 'g:' .. tostring(gkey) end
@@ -724,8 +726,9 @@ local function queueGeoParts(key, t, data)
   local leanRail = t.parts.railcol ~= nil
   for _, what in ipairs(M.CONTENT_WHATS) do
     if t.parts[what] then
+      local kind = kindOf(what)
       local q = { key = key, what = what, tile = t, geo = true,
-        renderOnly = what == 'wire' or (lean and what:sub(1, 3) == 'bld' and what ~= 'bldcol') or (leanRail and what == 'rail') }
+        renderOnly = kind == 'wire' or (lean and kind:sub(1, 3) == 'bld' and kind ~= 'bldcol') or (leanRail and kind == 'rail') }
       if not q.renderOnly then t.colWant[what] = true end
       if q.renderOnly or M.collideNear(t) then walkQ[#walkQ + 1] = q else parked[#parked + 1] = q end
     end
@@ -912,10 +915,10 @@ function M.onExact(msg, currentAnchor)
         local keep = {}
         for _, q in ipairs(walkQ) do if not (q.tile == t and q.what == what) then keep[#keep + 1] = q end end
         walkQ = keep
-        local lean = t.parts.bldcol ~= nil
+        local lean, kind = t.parts.bldcol ~= nil, kindOf(what)
         local q = { key = geoKey(msg.key), what = what, tile = t, geo = true, swap = true,
-          renderOnly = what == 'wire' or (lean and what:sub(1, 3) == 'bld' and what ~= 'bldcol')
-            or (t.parts.railcol ~= nil and what == 'rail') }
+          renderOnly = kind == 'wire' or (lean and kind:sub(1, 3) == 'bld' and kind ~= 'bldcol')
+            or (t.parts.railcol ~= nil and kind == 'rail') }
         walkQ[#walkQ + 1] = q
       end
     end
