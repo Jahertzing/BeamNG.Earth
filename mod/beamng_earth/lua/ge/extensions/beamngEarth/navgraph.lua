@@ -48,15 +48,19 @@ M.RESPAWN_M = { 60, 300 }   -- a respawned car goes this far (min, max) behind t
 -- A car heading for a graph node whose road the clip cut off (within 45 degrees, CUT_M or CUT_S of driving away) is
 -- respawned too: to the AI the cut is a dead end, and a car spawned facing one made a three-point turn on the spot
 -- (GitHub #72, "spawns the wrong way and tries to turn around immediately"; Bathurst 2026-10-21: 20 m from a cut)
--- A car that has just appeared (FRESH_S) turns round for a cut much farther ahead (Bathurst: 89 m): CUT_FRESH_M.
+-- A car that has just appeared (FRESH_S) turns round for a cut much farther ahead (Bathurst: 89 m): CUT_FRESH_M
+-- (250 m sent cars respawned near a cut straight back again: traffic popping in and out, PR #493, OmdevShastri).
+-- A car respawned for a cut or for standing still is not respawned for those again within COOLDOWN_S (one that
+-- leaves the block's guard still is at once).
 M.CUT_M = 60
 M.CUT_S = 4
-M.CUT_FRESH_M = 250
--- ... but not a car this module put ahead along the player's way at motorway speed (aheadSpot): it faces the way the
--- player drives, toward the graph's far end, which moves on with the player's block. With CUT_FRESH_M the 150-350 m
--- spots ahead were all within 250 m of that end, and each such car was respawned again at once: on I-25 one car every
--- ~2 s went round that loop (the traffic bench, 2026-10-28: cut and ahead respawns rising together).
+M.CUT_FRESH_M = 95
+-- ... and not at all for a car this module put ahead along the player's way at motorway speed (aheadSpot): it faces
+-- the way the player drives, toward the graph's far end, which moves on with the player's block. With CUT_FRESH_M at
+-- 250 m the 150-350 m spots ahead were all within reach of that end, and each such car was respawned again at once: on
+-- I-25 one car every ~2 s went round that loop (the traffic bench, 2026-10-28: cut and ahead respawns rising together).
 M.FRESH_S = 5
+M.COOLDOWN_S = 8.0
 M.JUMP_M = 30           -- a car this much farther than at the last check was respawned (stock or ours)
 -- At speed a car respawned behind the camera is never seen again: on a motorway every car ahead reached the block's
 -- edge within ~30 s and reappeared behind the player, who drove alone (GitHub #353, Albany to New York). Faster than
@@ -91,6 +95,7 @@ local lastApply = -math.huge
 local persistent = nil  -- the node table handed out once (research §2.7.2)
 local ours = false
 local foreign = false
+local urgent = false      -- a rebase moved the graph: applied again without waiting for MIN_GAP_S (M.transform)
 local stats = { applies = 0, lastMs = 0, nodes = 0, edges = 0 }
 local pendingSignals = nil -- the clipped nodes whose signals go in next frame
 local started = false
@@ -403,8 +408,9 @@ local function setRules()
   end
 end
 
--- pre: buildNodes' prep (its toNodes results, and the map built ahead when it has a job: navbuild.lua), else made here
-local function apply(b, pre)
+-- pre: buildNodes' prep (its toNodes results, and the map built ahead when it has a job: navbuild.lua), else made here;
+-- moved: a rebase moved the graph (M.transform: gps keeps the AI's plan)
+local function apply(b, pre, moved)
   setRules()
   local tN = os.clock()
   local nodes, nn, ne, cl
@@ -470,7 +476,7 @@ local function apply(b, pre)
     persistent = m.nodes
   end
   local tA = os.clock()
-  if keep then pcall(gps.afterGraph, keep, m.nodes) end    -- before the vehicles' new map
+  if keep then pcall(gps.afterGraph, keep, m.nodes, moved) end    -- before the vehicles' new map
   stats.gpsMs = stats.gpsMs + (os.clock() - tA) * 1000
   be:queueAllObjectLua('mapmgr.requestMap()')
   -- the minimap (the navigation app, in 0.40's freeroam layout and ours) indexes the map's roads once and keeps them:
@@ -793,6 +799,7 @@ local seenAt = {}       -- car id -> { x, y, os.clock() it appeared there }
 local putAhead = {}     -- car id -> true: its last respawn was ours, ahead along the player's way (aheadSpot)
 local pushes = {}       -- car id -> { v = m/s, at = os.clock() }: a car put ahead, to be pushed to v once it has landed
 M.PUSH_WAIT_S = 3       -- a teleport not seen this long after: no push
+local lastTeleport = {} -- car id -> os.clock() it was last teleported
 local function guard(b, all)
   local gt = gameplay_traffic
   if not gt or gt.getState() ~= 'on' then return end
@@ -842,17 +849,20 @@ local function guard(b, all)
           if ahead == nil then ahead = M.headingToCut(p.x, p.y, ux, uy, cuts, reach) end
           toCut = ahead
         end
-        if toCut then stats.cutRespawns = (stats.cutRespawns or 0) + 1 end
         if not paused and o:getVelocity():length() < M.STUCK_MS then
           stillSince[id] = stillSince[id] or now
         else
           stillSince[id] = nil
         end
         local d = pp and (p - pp):length() or math.huge
+        local underCooldown = (now - (lastTeleport[id] or -math.huge)) < M.COOLDOWN_S
+        local urgent = not M.inside(b, p.x, p.y, M.GUARD_M)
         if pop.enabled() then
           stillSince[id] = nil      -- (the population places the cars)
-        elseif all or toCut or not M.inside(b, p.x, p.y, M.GUARD_M) or M.stuck(stillSince[id], now, d) then
+        elseif all or urgent or (not underCooldown and (toCut or M.stuck(stillSince[id], now, d))) then
+          if toCut then stats.cutRespawns = (stats.cutRespawns or 0) + 1 end
           stillSince[id] = nil
+          lastTeleport[id] = now
           -- behind the camera: the stock default is 100-500 m in front of it, where the player sees the car
           -- pop in and its tyres smoke as it lands (the photo comparisons, 2026-10-14)
           local cp, cf = core_camera and core_camera.getPosition(), core_camera and core_camera.getForward()
@@ -1146,6 +1156,8 @@ end
 -- The player teleported: the traffic cars go inactive (no physics: their old positions have no ground) and come
 -- back on the new place's graph once it is in.
 local heldActive = nil
+function M.currentGraph() return graph end      -- (tests)
+
 function M.onTeleport()
   respawnAll = true
   if pop.enabled() then pop.reset() end
@@ -1320,16 +1332,27 @@ function M.update(aid, b, gov)
   if not (dirty or foreign) and applied and M.boxMoved(applied.box, b) >= M.RECLIP_M then dirty = true end
   if not (dirty or foreign) then return end
   local t = os.clock()
-  if t - lastApply < M.MIN_GAP_S and not foreign then return end
-  local pre = buildNodes(b)
-  if not pre or not room(gov) then return end
+  if t - lastApply < M.MIN_GAP_S and not foreign and not urgent then return end
+  -- (a moved graph, M.transform: built in one go and applied in this frame, whatever the frame budget: until the cars
+  -- have it their AI drives on points of the old frame)
+  local pre
+  if urgent then
+    setRules()
+    local box = b and { b[1], b[2], b[3], b[4] } or nil
+    pre = { graph = graph, box = box, result = { M.toNodes(graph, box, M.EDGE_M, M.rules.rightHandDrive, nil, M.OUTER_M) } }
+  else
+    pre = buildNodes(b)
+    if not pre or not room(gov) then return end
+  end
   prep = nil
   lastApply = t
   -- (what came while it was built goes in next: a newer graph; a block moved on is the RECLIP check's)
   dirty, foreign = pre.graph ~= graph, false
+  local moved = urgent
+  urgent = false
   local sw = stopwatch.new()
   local pb = pre.box
-  local okA = apply(pb, pre)
+  local okA = apply(pb, pre, moved)
   if gov and gov.noteFrame then gov:noteFrame(sw()) end
   if okA then
     applied = { anchor = aid, serial = pre.graph.serial, box = pb and { pb[1], pb[2], pb[3], pb[4] } or {} }
@@ -1359,7 +1382,8 @@ function M.moved(g, xf, aid)
     local x, y, z = xf:apply(n[1], n[2], n[3])
     nodes[name] = { x, y, z, n[4] }
   end
-  local rx, ry = xf:rotate(1, 0, 0)
+  local rot = xf.rotate and function(x, y, z) return xf:rotate(x, y, z) end or function(x, y) return x, y end
+  local rx, ry = rot(1, 0, 0)
   local turn = math.deg(math.atan2(ry, rx))      -- (counter-clockwise; a head's heading turns clockwise)
   local signals = {}
   for i, j in ipairs(g.signals or {}) do
@@ -1368,7 +1392,7 @@ function M.moved(g, xf, aid)
       local b = { unpack(a) }
       if a[2] then b[2], b[3], b[4] = xf:apply(a[2], a[3], a[4]) end
       if a[5] then
-        local dx, dy = xf:rotate(a[5], a[6], 0)
+        local dx, dy = rot(a[5], a[6], 0)
         local l = math.sqrt(dx * dx + dy * dy)
         if l > 1e-9 then b[5], b[6] = dx / l, dy / l end
       end
@@ -1395,7 +1419,8 @@ function M.transform(xf, aid)
   for _, s in pairs(seenAt) do s[1], s[2] = xf:apply(s[1], s[2], 0) end
   pendingSignals, prep = nil, nil
   lastNodes = nil         -- (the old frame's: the guard's cut test falls back to the cone until the apply)
-  dirty, lastApply = true, -math.huge
+  dirty, lastApply, urgent = true, -math.huge, true    -- (urgent: applied in the next frame, M.update)
+  if applied then applied.box = nil end
   return true
 end
 
@@ -1434,6 +1459,7 @@ function M.reset()
   fades = {}
   paced = {}
   installedAt = {}
+  lastTeleport = {}
   cuts = {}
   cutNames = {}
   lastNodes, capped, lastMerge = nil, {}, -math.huge

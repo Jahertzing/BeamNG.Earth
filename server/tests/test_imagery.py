@@ -117,7 +117,8 @@ class ReprojectionTest(unittest.TestCase):
         clat = math.degrees(math.atan(math.sinh(math.pi * (1 - 2 * cy_px / W))))
         ce, cn, _ = frame.geodetic_to_enu(clat, clon, float(h))
         col, row = (ce - x0) / t - 0.5, (y0 + size - cn) / t - 0.5      # texel centres at +0.5
-        lum = rgb[..., 0].astype(float) - 20
+        # (above the background's 20 by more than the finished tiles' JPEG ringing round the mark: imagery.FIN_QUALITY)
+        lum = rgb[..., 0].astype(float) - 40
         w = np.clip(lum, 0, None)
         rr, cc = np.mgrid[0:px, 0:px]
         cy, cx = (w * rr).sum() / w.sum(), (w * cc).sum() / w.sum()
@@ -371,7 +372,7 @@ class ChainTest(unittest.TestCase):
         self.assertTrue((a == b).all() and (a == c).all())
         self.assertEqual(set(used), {"eox2023"})
         stats = im2.stats_snapshot()
-        self.assertGreater(stats.get("eox2023:disk", 0), 0)
+        self.assertGreater(stats.get("finished:disk", 0), 0)    # (the finished tiles: no raw tile read again)
         markers = [f for _, _, fs in os.walk(os.path.join(self.tmp.name, "usgs")) for f in fs if f.endswith(".404")]
         self.assertTrue(markers)
 
@@ -791,7 +792,7 @@ class ExportImageryTest(unittest.TestCase):
         self.assertTrue(all(x % 2 for x, y in usgs_naip), "USGS NAIP only where USDA was black")
         self.assertLessEqual(usgs_naip, usda)
         self.assertTrue(im.lazy_ready(self.frame, -512.0, -512.0, 1024.0, 1024))
-        _, used = im._render(self.frame, -512.0, -512.0, 1024.0, 1024)
+        _, used = im._render(imagery.EnuSquare(self.frame, -512.0, -512.0, 1024.0), 1024)
         self.assertIn("naipusda", used)
         # where a USDA tile meets a USGS-NAIP one, neither has all four bilinear taps: a texel line of USGS
         self.assertLess(used.get("usgs", 0), 0.001 * 1024 * 1024)
@@ -836,7 +837,7 @@ class ExportImageryTest(unittest.TestCase):
             time.sleep(0.05)
         self.assertEqual(len([r for r in self.requests if r[0] == "naipusda"]), n)
         self.assertTrue(im.lazy_ready(self.frame, -512.0, -512.0, 1024.0, 1024))
-        _, used = im._render(self.frame, -512.0, -512.0, 1024.0, 1024)
+        _, used = im._render(imagery.EnuSquare(self.frame, -512.0, -512.0, 1024.0), 1024)
         self.assertIn("naip", used)
 
     def test_state_source_bounds_and_white(self):
@@ -867,7 +868,7 @@ class ExportImageryTest(unittest.TestCase):
         usda = {r[2:] for r in self.requests if r[0] == "naipusda"}
         self.assertTrue(md and usda)
         self.assertTrue(all(x % 2 for x, y in usda), "USDA only where Maryland's image was white")
-        _, used = im._render(self.frame, -512.0, -512.0, 1024.0, 1024)
+        _, used = im._render(imagery.EnuSquare(self.frame, -512.0, -512.0, 1024.0), 1024)
         self.assertIn("md6in", used)
         self.assertIn("naipusda", used)
         # far from Maryland: never asked
@@ -937,8 +938,8 @@ class ExportImageryTest(unittest.TestCase):
         im = self.make()
         self.assertEqual(self.warm(im, [(128.0, 128.0)]), [])
         rgb, used = im.render(self.frame, 0.0, 0.0, 256.0, 256)
-        raw, _ = im._render(self.frame, 0.0, 0.0, 256.0, 256)
-        ref, _ = im._render(self.frame, 0.0, 0.0, 256.0, 256, None, skip_lazy=True)
+        raw, _ = im._render(imagery.EnuSquare(self.frame, 0.0, 0.0, 256.0), 256)
+        ref, _ = im._render(imagery.EnuSquare(self.frame, 0.0, 0.0, 256.0), 256, None, skip_lazy=True)
         self.assertEqual(set(used), {"naip"})
         far, near = np.abs(raw.mean((0, 1)) - ref.mean((0, 1))), np.abs(rgb.mean((0, 1)) - ref.mean((0, 1)))
         self.assertGreater(far.max(), 50)
@@ -1033,7 +1034,7 @@ class FinerExportTest(unittest.TestCase):
         self.assertEqual({r[1] for r in town}, {15, 16}, "z15 parents (z17 tiles) and z16 parents (z18 tiles)")
         z16 = [r for r in town if r[1] == 16]
         self.assertLessEqual(len(z16), 9, "the z18 tiles only within WARM_FINE_M")
-        _, used = self.im._render(self.frame, -64.0, -64.0, 128.0, 256)       # an L-1 tile: 0.5 m texels
+        _, used = self.im._render(imagery.EnuSquare(self.frame, -64.0, -64.0, 128.0), 256)       # an L-1 tile: 0.5 m texels
         self.assertEqual(set(used), {"co_frederick"})
 
     def test_z17_stands_in_for_z18(self):
@@ -1041,7 +1042,7 @@ class FinerExportTest(unittest.TestCase):
         src = imagery.SOURCES["co_frederick"]
         shutil.rmtree(os.path.join(self.tmp.name, "co_frederick", "18"))
         self.im._lru.clear()
-        rgb, used = self.im._render(self.frame, 600.0, 0.0, 128.0, 256)     # outside the z18 ring
+        rgb, used = self.im._render(imagery.EnuSquare(self.frame, 600.0, 0.0, 128.0), 256)     # outside the z18 ring
         self.assertEqual(set(used), {"co_frederick"}, "its z17 tiles, not USGS")
         self.assertGreater(src.max_zoom, imagery.zoom_for(self.LAT, 1.0))
 

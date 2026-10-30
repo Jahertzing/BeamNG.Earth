@@ -59,8 +59,9 @@ class PlanBudgetTest(unittest.TestCase):
 
     def test_a_grader_forgets_a_cell_and_plans_it_again(self):
         import geodesy
-        g = grading.Grader(geodesy.EnuFrame(40.0, -105.0), None, lambda la, lo: 0.0)
         key = (14, 3413, 6217)
+        # (the plans are its planning region's planner's since upstream 1.7.2: grading.PlanStore)
+        g = grading.Grader(geodesy.EnuFrame(40.0, -105.0), None, lambda la, lo: 0.0).store.planner_of_cell(key)
         p = plan()
         g.cells[key] = [("f1", p)]
         g.keeps[key] = []
@@ -78,7 +79,7 @@ class PlanBudgetTest(unittest.TestCase):
         budget_keep = grading.plan_budget
         try:
             grading.plan_budget = grading.PlanBudget()
-            g2 = grading.Grader(geodesy.EnuFrame(40.0, -105.0), None, lambda la, lo: 0.0)
+            g2 = grading.Grader(geodesy.EnuFrame(40.0, -105.0), None, lambda la, lo: 0.0).store.planner_of_cell(key)
             with mock.patch.object(g2, "_make_cell", return_value=([("f", p)], [], [], [])):
                 got = g2._cell_plans(key)
             self.assertEqual(len(got), 1)

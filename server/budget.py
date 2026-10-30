@@ -55,6 +55,14 @@ BAKE_PLAN_SETS = 8          # merged plan sets kept per grader (grading.PLAN_SET
 BAKE_ENU_CELLS = 128        # cells' road parts kept per grader (grading.ENU_CACHE_MAX, 512)
 BAKE_REGIONS = 6            # region graders kept per process (regiongrade.MAX_REGIONS, 9)
 BAKE_IMAGERY_TILES = 128    # decoded photo tiles (imagery.MEM_TILES, 512)
+# The finished imagery pyramid's memory (imagery.MEM_FINISHED_MB of its JPEGs, MEM_DECODED tiles decoded at 192 KB) in
+# every process that renders textures (the server; on a small machine its far-tile workers too, the analyses off):
+# 160 MB + 384 on a desktop, ~230 MB a process; on a small machine FIN_MB_PER_GB per GB of RAM (at most the desktop's,
+# at least SMALL_FIN_MB) and SMALL_FIN_DECODED (a rebase's textures share their neighbours' tiles: a far texture
+# touches 9-16 of them)
+FIN_MB_PER_GB = 4.0
+SMALL_FIN_MB = 32
+SMALL_FIN_DECODED = 96
 
 
 def total_gb():
@@ -106,6 +114,10 @@ def apply(is_small=None):
         dem.MEM_TILES = SMALL_DEM_TILES
         mapdata.MEM_MB = SMALL_MAPDATA_MB
         roadwidth.WALL_CELLS = SMALL_WALL_CELLS
+        import imagery
+        gb = total_gb() or 16.0
+        imagery.MEM_FINISHED_MB = int(min(imagery.MEM_FINISHED_MB, max(SMALL_FIN_MB, round(FIN_MB_PER_GB * gb))))
+        imagery.MEM_DECODED = min(imagery.MEM_DECODED, SMALL_FIN_DECODED)
         for cells, table in farfield.K_TABLE.items():       # (read when the server makes its Layout)
             farfield.K_TABLE[cells] = {lvl: k * SMALL_FAR_K for lvl, k in table.items()}
         for cells, tex in farfield.TEX_DEFAULT.items():

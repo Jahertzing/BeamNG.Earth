@@ -25,7 +25,13 @@ BNE_REVISIT_GENS=bake) marks each anchor it stores or reads pinned items for, un
 Another server, missing an item of an anchor its own code never baked, takes the whole anchor from the newest
 generation that did (one generation per anchor and process: a road tile and the ground carved for it come from the
 same code). So after an update the route stays baked as it was, and the next bake run replaces it anchor by anchor
-(Jeff, 2026-10-28: "why does it have to keep restarting from scratch")."""
+(Jeff, 2026-10-28: "why does it have to keep restarting from scratch").
+
+Where each item stands (the map's cache view, covermap.py): store(..., where=where(...)) also appends one line to this
+process's revisit/where/<pid>_<start>.tsv (one os.write under O_APPEND: whole lines, and only this process writes
+the file): the code_key, the settings it was built with (sig(): one short hash per setting, compared with
+earthd.Server.world_signature()), kind, key, the anchor and the item's box in degrees. compact() (the server's start)
+folds the files into one and drops the lines whose zip is gone."""
 import hashlib
 import json
 import os
@@ -48,6 +54,13 @@ GENS = os.environ.get("BNE_REVISIT_GENS", "on")     # on: older baked generation
                                                     # bake's server, which builds anew); off: neither
 GENS_SUBDIR = "gens"        # in PIN_SUBDIR: <code>/<lat>_<lon> an anchor that code baked, <code>/started its first mark
 MAX_GENS = 8                # the older generations looked at
+
+WHERE_DIR = "where"
+WHERE_KINDS = ("roads", "roadsg", "plans", "bldfar", "bldsky", "brfar", "fargeo", "far")    # (cellfacts: per cell, no place)
+NEAR_KINDS = ("roads", "roadsg", "plans")    # the drivable world (the road geotiles too); the others the distant view
+COMPACTED = threading.Event()           # set once compact() ran in this process (covermap reads the files after it)
+_where = {}                             # cache dir -> this process's open sidecar fd
+_START = int(time.time())
 
 _faults = [0]
 _code = []
@@ -290,9 +303,114 @@ def _path(cache_dir, kind, k, sub=SUBDIR):
                         k + ".zip")
 
 
-def store(cache_dir, kind, k, blobs, extra=None):
+def sig(**settings):
+    """The settings an item was built with, as the sidecar keeps them: "name=hash,..." (sorted; 8 hex of each value's
+    repr). earthd.Server.world_signature() gives the server's current values under the same names."""
+    return ",".join(f"{n}={_h(v)}" for n, v in sorted(settings.items()))
+
+
+def _h(v):
+    return hashlib.sha1(repr(v).encode()).hexdigest()[:8]
+
+
+def sig_current(row_sig, current):
+    """Was a sidecar row built with the current settings (current: {name: value}, world_signature())? Every setting the
+    row names must have the current value's hash; a row naming none is current."""
+    for part in row_sig.split(","):
+        if not part:
+            continue
+        name, _, h = part.partition("=")
+        if name not in current or _h(current[name]) != h:
+            return False
+    return True
+
+
+def where(lat, lon, s, w, n, e, settings):
+    """store()'s where: the anchor (lat, lon), the item's box (degrees) and its sig()."""
+    return (float(lat), float(lon), float(s), float(w), float(n), float(e), settings)
+
+
+def _note(cache_dir, kind, k, wh):
+    """One sidecar line for item k (never raises)."""
+    try:
+        lat, lon, s, w, n, e, settings = wh
+        line = (f"{code_key()}\t{settings}\t{kind}\t{k}\t{lat:.7f}\t{lon:.7f}\t{s:.6f}\t{w:.6f}\t{n:.6f}\t{e:.6f}\n")
+        fd = _where.get(cache_dir)
+        if fd is None:
+            with _lock:
+                fd = _where.get(cache_dir)
+                if fd is None:
+                    d = os.path.join(cache_dir, SUBDIR, WHERE_DIR)
+                    os.makedirs(d, exist_ok=True)
+                    fd = _where[cache_dir] = os.open(os.path.join(d, f"{os.getpid()}_{_START}.tsv"),
+                                                     os.O_WRONLY | os.O_APPEND | os.O_CREAT | getattr(os, "O_BINARY", 0),
+                                                     0o644)
+        os.write(fd, line.encode("utf-8"))
+    except Exception:
+        pass
+
+
+def parse_where(line):
+    """A sidecar line -> (code, sig, kind, key, lat, lon, s, w, n, e), or None (a damaged one)."""
+    p = line.rstrip("\n").split("\t")
+    if len(p) != 10 or p[2] not in WHERE_KINDS:
+        return None
+    try:
+        return (p[0], p[1], p[2], p[3]) + tuple(float(v) for v in p[4:])
+    except ValueError:
+        return None
+
+
+def compact(cache_dir, before=None):
+    """The sidecar files last written before `before` (s; default now) folded into one: a line per item (the last),
+    only those whose zip is still there (the start-up prune removes the oldest). Run once at the server's start,
+    after the prune. Returns the lines kept. Sets COMPACTED."""
+    d = os.path.join(cache_dir, SUBDIR, WHERE_DIR)
+    before = time.time() if before is None else before
+    try:
+        names = sorted(n for n in os.listdir(d) if n.endswith(".tsv"))
+    except OSError:
+        COMPACTED.set()
+        return 0
+    try:
+        old, rows = [], {}
+        mine = f"{os.getpid()}_{_START}.tsv"
+        for n in names:
+            p = os.path.join(d, n)
+            try:
+                if n == mine or os.path.getmtime(p) >= before:
+                    continue                # (a process writing now)
+                with open(p, encoding="utf-8", errors="replace") as f:
+                    for line in f:
+                        r = parse_where(line)
+                        if r is not None:
+                            rows[(r[2], r[3])] = line if line.endswith("\n") else line + "\n"
+                old.append(p)
+            except OSError:
+                continue
+        if not old:
+            return 0
+        lines = [line for (kind, k), line in rows.items() if os.path.exists(_path(cache_dir, kind, k))]
+        out = os.path.join(d, f"c{os.getpid()}_{int(before)}.tsv")
+        tmp = out + ".tmp"
+        with open(tmp, "w", encoding="utf-8", newline="") as f:
+            f.writelines(lines)
+        os.replace(tmp, out)
+        for p in old:
+            if p != out:
+                try:
+                    os.remove(p)
+                except OSError:
+                    pass
+        return len(lines)
+    finally:
+        COMPACTED.set()
+
+
+def store(cache_dir, kind, k, blobs, extra=None, where=None):
     """Keep an item under key k: blobs {name: bytes}, extra JSON data (in PIN_SUBDIR when built in a baked route's
-    anchor). Never raises; False when not kept."""
+    anchor); where (where()): the place it stands, for the map's cache view (a sidecar line). Never raises; False when
+    not kept."""
     if not ON or kind in SKIP:
         return False
     pinned = _pinned(cache_dir, k)
@@ -310,6 +428,8 @@ def store(cache_dir, kind, k, blobs, extra=None):
             # the anchor as baked by its code though its other kinds come from an older generation; harmless for the
             # module-keyed kinds, which skip the generations, but the mark means "this code stored here", no more)
             _mark(cache_dir, k)
+        if where is not None:
+            _note(cache_dir, kind, k, where)
         return True
     except Exception:
         try:

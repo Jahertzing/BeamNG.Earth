@@ -377,8 +377,9 @@ class GraderTest(unittest.TestCase):
         self.assertGreater(len(bbox), 100)
         out = g.apply(la, lo, np.zeros(2))
         # (each point's own cells and those whose plans reach it: a cell plans CLIP_MARGIN_M past its edges; and the
-        # bridges of their neighbours, read for the underpasses: grading.UNDER_*)
-        self.assertLessEqual(md.calls, 30, "the cells around the two points")
+        # bridges of their neighbours, read for the underpasses: grading.UNDER_*; the fork's decks a motorway leads
+        # onto, grading._decks_near: 4 more)
+        self.assertLessEqual(md.calls, 34, "the cells around the two points")
         self.assertAlmostEqual(float(out[0]), 10.0, delta=0.05)
         near = mapcells.cells_near_points(la, lo, 1e-4, 1e-4)
         self.assertTrue(set(near) <= set(bbox))

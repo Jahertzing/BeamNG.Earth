@@ -422,4 +422,22 @@ do
   T.check(N.autoAmount(1, vs, 1) == 0 and N.autoAmount(nil, vs, 1) == nil, 'autoAmount: never below 0; unknown: nil')
   T.check(N.modeAmount('normal', N.autoAmount(7, {}, 1)) == -1, 'normal: the caller then sets up the own amount explicitly')
 end
+
+-- a rebase moves the graph into the new anchor (core finishRebase): kept and applied again at once
+do
+  N.enabled = true
+  local jd, rf = rawget(_G, 'jsonDecode'), rawget(_G, 'readFile')
+  jsonDecode = function() return { nodes = { a = { 100, 200, 5, 3 }, b = { 150, 200, 5, 3 } },
+                                   edges = { { 'a', 'b', 0, 1, 1, 13, 1, 3 } } } end
+  readFile = function() return '{}' end
+  T.check(N.onMessage({ anchorId = 7, path = 'x', serial = 1 }, 7), 'a graph for anchor 7')
+  local xf = { apply = function(_, x, y, z) return x - 1000, y + 50, z - 2 end }
+  T.check(N.transform(xf, 8), 'moved into anchor 8')
+  local g = N.currentGraph()
+  T.check(g.anchor == 8 and g.nodes.a[1] == -900 and g.nodes.a[2] == 250 and g.nodes.a[3] == 3 and g.nodes.a[4] == 3,
+    'its nodes in the new frame, radius kept')
+  T.check(not N.transform(nil, 9) and N.currentGraph().anchor == 8, 'no transform: nothing')
+  jsonDecode, readFile = jd, rf
+end
+
 T.done('test_navgraph')
