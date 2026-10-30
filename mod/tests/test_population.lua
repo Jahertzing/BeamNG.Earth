@@ -52,7 +52,7 @@ local fromW = false
 for _, it in ipairs(entries) do if it.from == 'w' then fromW = true end end
 T.check(fromW and #entries >= 1, 'weighted: entries are the graph edges driving in (w): ' .. #entries)
 local tn = P.target(adj, 1)
-T.check(tn >= 30 and tn <= P.MAX_GHOSTS, 'target: about 4 a lane-km on 4 km of 3-lane motorway: ' .. tn)
+T.check(tn >= 15 and tn <= P.MAX_GHOSTS, 'target: about 2 a lane-km on 4 km of 3-lane motorway: ' .. tn)
 
 -- the state: a graph, seeded ghosts, stepping
 P.reset()
@@ -95,6 +95,22 @@ T.check(want[gs[1]] and want[gs[2]] and not want[gs[3]] and not want[gs[4]], 'ch
 gs[3].real = 77      -- ghost 3 is real now, a little farther than the 2nd
 local want2 = P.chooseReal(gs, g.nodes, 2, -1500, 0, box, false)
 T.check(want2[gs[3]] and want2[gs[1]] and not want2[gs[2]], 'chooseReal: a real one near the edge of the set stays')
+
+-- a ghost the other way on a divided road counts ONCOMING_FACTOR times its distance: the same-way cars farther are real
+do
+  local gn = { nodes = { a = { 0, 0, 0, 5 }, b = { 2000, 0, 0, 5 }, c = { 2000, 40, 0, 5 }, d = { 0, 40, 0, 5 } },
+               edges = { { 'a', 'b', 1, 3, 0, 31, 1, 5 }, { 'c', 'd', 1, 3, 0, 31, 1, 5 } } }
+  local ad = P.adjacency(gn)
+  local east, west = P.edge(ad, 'a', 'b'), P.edge(ad, 'c', 'd')
+  local same = { id = 1, from = 'a', link = east, s = 800, v = 30, lane = 1 }     -- 300 m ahead, the player's way
+  local opp = { id = 2, from = 'c', link = west, s = 1400, v = 30, lane = 1 }     -- 100 m ahead, the other way
+  local w0 = P.chooseReal({ same, opp }, gn.nodes, 1, 500, 0, nil, false)
+  T.check(w0[opp] and not w0[same], 'chooseReal: no velocity: the nearest')
+  local w1 = P.chooseReal({ same, opp }, gn.nodes, 1, 500, 0, nil, false, 30, 0)
+  T.check(w1[same] and not w1[opp], 'chooseReal: at speed: the car going the same way, not the one across the median')
+  local w2 = P.chooseReal({ same, opp }, gn.nodes, 1, 500, 0, nil, false, 5, 0)
+  T.check(w2[opp], 'chooseReal: at a crawl: nearest again')
+end
 
 -- the swaps: free cars first, then cars off the ground or stuck, then the farthest
 local need = { gs[1], gs[2] }
@@ -143,7 +159,7 @@ T.check(stillReal, 'rebalance: never a real car\'s ghost')
 do
   local vars = {}
   gameplay_traffic = { setTrafficVars = function(v) for k, x in pairs(v) do vars[k] = x end end }
-  P.setEnabled(true, 1, false)
+  P.setEnabled(true, false)
   T.check(P.enabled() and vars.spawnValue == 0, 'setEnabled: on, the stock recycling off')
   P.setEnabled(false)
   T.check(not P.enabled() and vars.spawnValue == 1, 'setEnabled: off, back on')
@@ -228,9 +244,11 @@ do
     respawnVehicle = function(id, pos) objs[id].p = vec3(pos.x, pos.y, pos.z) placed = placed + 1 end }
   map = { findBestRoad = function(p) return nil end, surfaceNormal = function() return vec3(0, 0, 1) end }
   package.loaded['beamngEarth/navgraph'] = { pushLua = function(v) return 'push ' .. v end }
+  local refWas = P.REAL_REF
+  P.REAL_REF = 2      -- (4 cars standing where they were put: ghosts enough round the player that they stay near)
   P.reset()
   P.state.rnd = math.random
-  P.setEnabled(true, 1, false)
+  P.setEnabled(true, false)
   P.setGraph(g)
   local box = { -2500, -1000, -500, 1000 }
   local ok, err = true, nil
@@ -254,6 +272,25 @@ do
     local d = (objs[id].p - player.p):length()
     T.check(d <= P.REAL_M + 50, 'update: car ' .. id .. ' near the player: ' .. math.floor(d))
   end
+  -- the speed set again until it holds (a vehicle reset after the first go zeroes it)
+  do
+    local c = car(77, 0, 0)
+    local n = 0
+    function c:applyClusterVelocityScaleAdd() n = n + 1 end    -- (stays standing)
+    gameplay_traffic.getTrafficData = function() return { [77] = {} } end
+    P.state.pushes = { [77] = { v = 30, at = clock, dx = 1, dy = 0 } }
+    for _ = 1, 8 do clock = clock + 0.1 pcall(P.update, box) end
+    T.check(n >= 3 and P.state.pushes[77] ~= nil, 'startCars: again while it is not at speed: ' .. n)
+    c.u = vec3(25, 0, 0)
+    P.state.pushes[77].at = clock
+    clock = clock + 0.3
+    pcall(P.update, box)
+    T.check(P.state.pushes[77] ~= nil, 'startCars: at speed at once: still watched (a reset may come yet)')
+    clock = clock + 0.4
+    pcall(P.update, box)
+    T.check(P.state.pushes[77] == nil, 'startCars: done after HOLD_S at GOT_IT of the speed')
+  end
+  P.REAL_REF = refWas
   P.setEnabled(false)
   os.clock = realClock
   be, gameplay_traffic, map, getObjectByID = nil, nil, nil, nil

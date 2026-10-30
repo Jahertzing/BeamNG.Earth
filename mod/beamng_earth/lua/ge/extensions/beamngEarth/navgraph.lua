@@ -918,7 +918,7 @@ function M.setPopulation(v)
   -- (traffic already running: at once; else when it starts)
   local gt = rawget(_G, 'gameplay_traffic')
   if M.POPULATION and not pop.enabled() and gt and gt.getState and gt.getState() == 'on' then
-    pop.setEnabled(true, M.MODES[M.choice.mode or M.MODE] or 1, M.rules.rightHandDrive)
+    pop.setEnabled(true, M.rules.rightHandDrive)
   end
   return M.POPULATION
 end
@@ -1124,7 +1124,7 @@ local function startTraffic()
       amount < 0 and 'the game\'s' or tostring(amount), tostring(auto or '?')))
     if amount > 0 then
       setupCars(gt, amount, c.police)
-      if M.POPULATION then pop.setEnabled(true, M.MODES[c.mode or M.MODE] or 1, M.rules.rightHandDrive) end
+      if M.POPULATION then pop.setEnabled(true, M.rules.rightHandDrive) end
       watch = { untilT = os.clock() + M.WATCH_S, seenOn = false, done = false }
     elseif amount < 0 then
       local ok, err = pcall(gt.setupTraffic, -1, { police = c.police })
@@ -1136,6 +1136,10 @@ end
 
 -- The watched traffic went off: the traffic cars it dropped (flagged traffic, not in its table) deleted, and the
 -- choice's cars set up again.
+-- Traffic is being set up by someone else (tools/traffic_bench.py): do not set it up again when it goes off (bench11: 20
+-- cars instead of 10, ours on top of the bench's).
+function M.unwatch() watch = nil end
+
 local function restartTraffic()
   local gt = gameplay_traffic
   if not gt then return end

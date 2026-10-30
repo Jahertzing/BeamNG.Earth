@@ -14,12 +14,16 @@ With the population on:
   each with an edge, a place on it, a lane, a speed and a pace (about +-6 %). Every 0.25 s they move at their road's
   speed times their pace, behind the car ahead in their lane (IDM), and at forks pick their way as the stock AI does
   (drivability ratio squared, straightness squared, lanes): alleys almost never, exits sometimes.
-- Density is by road: cars per lane-km by the road's speed (`DENSITY`), times the AI traffic setting's share, at most
-  `MAX_GHOSTS`. No ghost on a road of drivability under 0.5.
-- The **nearest K ghosts on the ground** (K: the game's traffic cars) are real. A car swaps between ghost and real where
+- Density is by road: cars per lane-km by the road's speed (`DENSITY`), per `REAL_REF` real cars, at most `MAX_GHOSTS`.
+  It sets the size of the real zone: about 450 m round the player on I-25 at 10 cars. At twice that (bench11) the zone
+  was 200 m and cars swapped 45 times a minute, in plain sight. No ghost on a road of drivability under 0.5.
+- The **nearest K ghosts on the ground** (K: the game's traffic cars) are real, a ghost the other way on a divided road
+  counting `ONCOMING_FACTOR` times its distance at speed: those stay far models. A car swaps between ghost and real where
   it is: a demoted car's ghost carries on from the car's place and speed; a promoted ghost's car is put on its spot
-  (`gameplay_traffic.respawnVehicle`) and pushed gently to its speed (navgraph `pushLua`). Hysteresis (`KEEP_FACTOR`)
-  stops cars flickering; at most `SWAPS_PER` swaps every `SWAP_S`.
+  (`gameplay_traffic.respawnVehicle`) and given its speed, again until it holds (`GOT_IT`, `HOLD_S`, `GIVE_UP_S`: the
+  vehicle reset can land after the first go). Hysteresis (`KEEP_FACTOR`)
+  stops cars flickering; at most `SWAPS_PER` swaps every `SWAP_S`. A real car standing `STUCK_S` (a wreck) is taken for
+  another ghost: the stock recycling is off, so nothing else clears the lane.
 - A ghost that drives off the graph's edge, or ends up `BEHIND_M` behind, comes back at an entry of the graph (a road
   driving in from its edge) at least `ENTRY_MIN_M` away. A real car left off the ground with no ghost wanting it gets a
   spare ghost behind the camera.

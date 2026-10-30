@@ -22,8 +22,18 @@ M.BEHIND_M = 1300        -- a ghost this far from the player comes back elsewher
 M.SPREAD = 0.06          -- pace: about 1 +- this (navgraph paceFactor's)
 M.SPREAD_MAX = 0.12
 M.IDM = { T = 1.4, a = 1.4, b = 2.0, s0 = 4, len = 5 }
--- cars per km of lane by the road's speed (m/s), times the traffic mode's share (navgraph MODES)
-M.DENSITY = { { 27, 4.0 }, { 20, 3.0 }, { 15, 1.8 }, { 11, 0.8 }, { 0, 0.3 } }
+-- cars per km of lane by the road's speed (m/s)
+-- At 10 real cars these make the real zone ~450 m round the player on I-25 (10 cars over 0.9 km of 6 lanes: 1.9 a lane-km).
+-- It was 4 a lane-km, which made it ~200 m: cars turned real and back 45 times a minute, a median 209 m from the player
+-- (bench11, 2026-10-30, 584 swaps in 13 min).
+M.DENSITY = { { 27, 1.9 }, { 20, 1.5 }, { 15, 1.0 }, { 11, 0.5 }, { 0, 0.2 } }
+-- ... per REAL_REF real cars: more of them, more ghosts, the real zone stays this size (the traffic mode sets their number)
+M.REAL_REF = 10
+-- A ghost driving the other way on a divided road (a one-way edge, against the player's way) counts this many times its
+-- distance when choosing the real cars: it passes at twice the speed, so it took a real car for ~15 s and gave it back,
+-- half the swaps; and across a median it needs no physics, its far model is enough.
+M.ONCOMING_FACTOR = 3
+M.ONCOMING_MS = 15       -- ... with the player faster than this
 M.MIN_DRIVABILITY = 0.5  -- (alleys and living streets carry none: they are a way through, not a home)
 
 -- ---- the graph ----
@@ -231,7 +241,7 @@ local function pick(list, total, u)
   return list[#list]
 end
 
--- Pure-ish: the number of ghosts graph adjacency adj carries at traffic share f (navgraph MODES: 0.5, 1, 1.5).
+-- Pure-ish: the number of ghosts graph adjacency adj carries at f times DENSITY.
 function M.target(adj, f)
   local _, total = M.weighted(adj, false)
   return math.min(M.MAX_GHOSTS, math.floor(total / 1000 * (f or 1) + 0.5))
@@ -304,7 +314,7 @@ end
 -- ahead): missing ghosts start ENTRY_MIN_M or more from the player at (px, py), out of sight's reach; a surplus goes
 -- farthest first (never a real car's).
 function M.rebalance(px, py)
-  local want = M.target(P.adj, P.share or 1)
+  local want = M.target(P.adj, P.scale or 1)
   local n = #P.ghosts
   if n < want then
     local list, total = M.weighted(P.adj, false)
@@ -388,15 +398,22 @@ end
 
 -- Pure: which ghosts should be real: the k nearest (px, py) that stand on the physics ground box b (GROUND_IN_M inside)
 -- within REAL_M; a ghost that is real now stays so while it is within KEEP_FACTOR of the k-th one's distance and on the
--- ground. Returns a set { ghost = true }.
-function M.chooseReal(ghosts, nodes, k, px, py, b, left)
+-- ground. (vx, vy): the player's velocity (optional): ONCOMING_FACTOR. Returns a set { ghost = true }.
+function M.chooseReal(ghosts, nodes, k, px, py, b, left, vx, vy)
   local cand = {}
+  local vl = vx and math.sqrt(vx * vx + vy * vy) or 0
   for _, g in ipairs(ghosts) do
     local x, y = M.pose(nodes, g.from, g.link, g.s, g.lane, left)
     local onGround = x ~= nil and (not b or (x >= b[1] + M.GROUND_IN_M and x <= b[3] - M.GROUND_IN_M and
                                              y >= b[2] + M.GROUND_IN_M and y <= b[4] - M.GROUND_IN_M))
     local d2 = x and (x - px) ^ 2 + (y - py) ^ 2 or math.huge
-    if onGround and d2 <= M.REAL_M ^ 2 then cand[#cand + 1] = { g = g, d2 = d2 } end
+    if onGround and d2 <= M.REAL_M ^ 2 then
+      local _, _, _, dx, dy = M.pose(nodes, g.from, g.link, g.s, g.lane, left)
+      if vl > M.ONCOMING_MS and g.link.oneWay and (dx * vx + dy * vy) / vl < -0.5 then
+        d2 = d2 * M.ONCOMING_FACTOR ^ 2
+      end
+      cand[#cand + 1] = { g = g, d2 = d2 }
+    end
   end
   table.sort(cand, function(a, b2) return a.d2 < b2.d2 end)
   local want = {}
@@ -540,7 +557,8 @@ function M.plan(need, bound, free, want, dist, ground, stuck, lookOf)
   return out
 end
 
-M.STUCK_S = 60           -- a real car standing this long (40 m or more from the player) may be taken for another ghost
+M.STUCK_S = 20           -- a real car standing this long (40 m or more from the player) may be taken for another ghost
+                         -- (60 until 2026-10-30: with the stock recycling off, wrecks stood in the lane, bench11's pile-ups)
 
 -- Every frame (navgraph.update): move the ghosts, keep the real cars on the nearest ones.
 -- A car's move (respawnVehicle: a safe teleport, a few ms) waits for a frame with this much room (the frame governor's
@@ -549,7 +567,9 @@ M.PLACE_MS = 3.0
 M.PLACE_WAIT_FRAMES = 20
 
 M.LAND_S = 0.15          -- a car put somewhere gets its speed this long after (the teleport has landed)
-M.GIVE_UP_S = 3
+M.GIVE_UP_S = 1.5        -- ... and again until it has it (the vehicle reset can come after the first go: bench11, a
+M.GOT_IT = 0.6           -- quarter of the cars crawling after they joined), to GOT_IT of it, up to GIVE_UP_S
+M.HOLD_S = 0.6           -- ... and watched this long though it had it at once (it is the reset that takes it away)
 
 -- Cars put somewhere get the ghost's speed, in the car's own frame of the road (every frame: the sooner the better).
 local function startCars(now)
@@ -559,12 +579,14 @@ local function startCars(now)
       P.pushes[id] = nil
     elseif now - push.at > M.LAND_S then
       local u = o:getVelocity()
-      if u:length() < 3 and push.v > 1 then
-        local z = u.z or 0
-        o:applyClusterVelocityScaleAdd(-1, 0, push.dx * push.v, push.dy * push.v, z)
+      if push.v <= 1 then
+        P.pushes[id] = nil
+      elseif u:length() < push.v * M.GOT_IT then
+        o:applyClusterVelocityScaleAdd(-1, 0, push.dx * push.v, push.dy * push.v, u.z or 0)
         P.stats.pushes = P.stats.pushes + 1
+      elseif now - push.at > M.HOLD_S then
+        P.pushes[id] = nil
       end
-      P.pushes[id] = nil
     end
   end
 end
@@ -579,14 +601,15 @@ function M.update(b, gov)
   local pv = me and me >= 0 and getObjectByID(me) or nil
   local pp = pv and pv:getPosition()
   if not pp then return end
+  local ids = trafficIds()
+  local idSet = {}
+  P.scale = math.max(0.3, #ids / M.REAL_REF)
   if #P.ghosts == 0 then
-    M.seed(M.target(P.adj, P.share or 1))
+    M.seed(M.target(P.adj, P.scale))
   elseif P.graphChanged then
     M.rebalance(pp.x, pp.y)
   end
   P.graphChanged = false
-  local ids = trafficIds()
-  local idSet = {}
   P.look = P.look or {}
   local tdata = gameplay_traffic and gameplay_traffic.getTrafficData and gameplay_traffic.getTrafficData() or {}
   for _, id in ipairs(ids) do
@@ -632,7 +655,8 @@ function M.update(b, gov)
   local vars = tr.getTrafficVars and tr.getTrafficVars()
   if vars and vars.spawnValue ~= 0 then pcall(tr.setTrafficVars, { spawnValue = 0 }) end
   local nodes = P.graph.nodes
-  local want = M.chooseReal(P.ghosts, nodes, #ids, pp.x, pp.y, b, P.left)
+  local pu = pv:getVelocity()
+  local want = M.chooseReal(P.ghosts, nodes, #ids, pp.x, pp.y, b, P.left, pu.x, pu.y)
   local need = {}
   for _, g in ipairs(P.ghosts) do
     if want[g] and not g.real then
@@ -694,11 +718,11 @@ end
 -- The far ghosts' models (farghosts.lua) with the population: FAR (on by default with it).
 M.FAR = true
 
-function M.setEnabled(on, share, left)
+function M.setEnabled(on, left)
   P.enabled = on and true or false
   local okF, far = pcall(require, 'beamngEarth/farghosts')
   if okF then far.setEnabled(P.enabled and M.FAR) end
-  P.share, P.left = share or 1, left and true or false
+  P.left = left and true or false
   local tr = rawget(_G, 'gameplay_traffic')
   if tr and tr.setTrafficVars then pcall(tr.setTrafficVars, { spawnValue = on and 0 or 1 }) end
   if not on then P.ghosts = {} end

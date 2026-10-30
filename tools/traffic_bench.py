@@ -5,7 +5,7 @@ game's own amount), the car is put on the start and drives itself to the goal (t
 sampled: active cars, how many near the player, off the road, their speeds (the pace spread), the AI graph's status
 and the rebases. One mode may get a short rebase distance (--rebase-in) so a rebase happens during it.
 
-  python tools/traffic_bench.py --from 40.090,-104.985 --to 39.74,-104.99 --minutes 12 --pace --out bench
+  python tools/traffic_bench.py --from 40.090,-104.9806 --to 39.74,-104.99 --minutes 12 --pace --out bench
 
 Writes <out>/<mode>/ (autodrive_perf's samples.jsonl, summary.json) plus traffic.jsonl, and <out>/report.json. The
 game's MCP server must be on and the companion server running. Restores the rebase distance and leaves the traffic
@@ -46,6 +46,8 @@ def mode_amount(mode, auto):
 SETUP_LUA = r"""
 if not gameplay_traffic then extensions.load('core_multiSpawn', 'gameplay_traffic', 'gameplay_walk') end
 local gt = gameplay_traffic
+local okW, nav0 = pcall(require, 'beamngEarth/navgraph')
+if okW and nav0.unwatch then nav0.unwatch() end     -- (deleting the cars must not make the mod set them up again)
 pcall(gt.deleteVehicles)
 local ok, auto = pcall(gt.getIdealSpawnAmount, nil, true)
 -- what the mod would set up for this mode (navgraph.plannedAmount: the CPU floor included), when it can say
