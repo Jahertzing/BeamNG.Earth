@@ -329,7 +329,7 @@ def clip_terrain(polys, mask, z, x0, y0, labels):
     return P[first], inv[T], M
 
 
-def build_cell(pieces, lines, i, j, in_dir, out_dir, lots=()):
+def build_cell(pieces, lines, i, j, in_dir, out_dir, lots=(), road_dir=None):
     t0 = time.perf_counter()
     x0, y0 = i * CELL, j * CELL
     box = (x0 - MARGIN_M, y0 - MARGIN_M, x0 + CELL + MARGIN_M, y0 + CELL + MARGIN_M)
@@ -350,7 +350,7 @@ def build_cell(pieces, lines, i, j, in_dir, out_dir, lots=()):
     C = np.full((len(P), 4), 255, np.uint8)
     names = list(MATERIALS)
     allP, allT, allUV, allC, allM, base = [P], [T], [UV], [C], [M], len(P)
-    path = os.path.join(in_dir, f"road_{i}_{j}.glb")
+    path = os.path.join(road_dir or in_dir, f"road_{i}_{j}.glb")
     if os.path.exists(path):
         for prim in ue_survey.read_glb(path):
             if prim["name"].startswith(DROPPED):
