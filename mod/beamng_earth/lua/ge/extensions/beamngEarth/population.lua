@@ -582,6 +582,7 @@ M.HOLD_S = 0.6           -- ... and watched this long though it had it at once (
 -- P.stops, at most STOP_MAX.
 M.WATCH_STOPS = false
 M.STOP_MS = 9
+M.TELEPORT_MS = 150      -- (a speed lost above this is the frame after a teleport, not a stop)
 M.STOP_DT_S = 0.4
 M.STOP_NEAR_M = 45
 M.STOP_MAX = 200
@@ -610,15 +611,18 @@ local function watchStops(now)
       local p, u = o:getPosition(), o:getVelocity()
       P.seen[id] = P.seen[id] or {}
       local lost = M.suddenStop(P.seen[id], now, u:length())
-      if lost and #P.stops < M.STOP_MAX then
+      if lost and lost < M.TELEPORT_MS and #P.stops < M.STOP_MAX then
         local near = {}
+        local gp = rawget(_G, 'gameplay_parking')
+        local parked = gp and gp.getParkedCarsData and gp.getParkedCarsData() or {}
         for _, n in ipairs(getAllVehicles()) do
           local q = n:getPosition()
           local d = (q - p):length()
           if n:getID() ~= id and d <= M.STOP_NEAR_M then
             local w = n:getVelocity()
             near[#near + 1] = { id = n:getID(), x = q.x, y = q.y, z = q.z, d = d, v = w:length(),
-                                kind = n:getID() == me and 'player' or data[n:getID()] and 'traffic' or 'other',
+                                kind = n:getID() == me and 'player' or data[n:getID()] and 'traffic' or
+                                  parked[n:getID()] and 'parked' or 'other',
                                 on = n:getActive() }
           end
         end

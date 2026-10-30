@@ -208,7 +208,7 @@ end
 -- teleport to any road of the graph, in view, and the guard moved it again half a second later: 16 cars flickered
 -- about in the distance, ~30 moves a second (the user's session 2026-10-15, Arizona). Those cars wait hidden instead
 -- and come back once spots are near (M.freeNear).
-local hidden = {}       -- parked car id -> true while it waits hidden for a spot
+local hidden = {}       -- parked car id -> os.clock() it may try again while it waits hidden for a spot
 local banned = {}       -- spot object -> true: banned by this module (in view)
 local held = {}         -- parked car id -> true: its ignoreTeleport set by this module (in view)
 local spotAt = {}       -- parked car id -> { x, y } of the spot it was last seen on (its spot may leave the sites)
@@ -314,9 +314,10 @@ local function guard(player)
   for _, id in ipairs(gp.getParkedCarsList() or {}) do
     local o = getObjectByID(id)
     if o and hidden[id] then
-      if freeFar > 0 and free > 0 and moves <= 0 then
+      local due = os.clock() >= hidden[id]
+      if due and freeFar > 0 and free > 0 and moves <= 0 then
         waiting = waiting + 1
-      elseif freeFar > 0 and free > 0 then     -- spots near again: back, onto one of them
+      elseif due and freeFar > 0 and free > 0 then     -- spots near again: back, onto one of them
         moves = moves - 1
         freeFar = freeFar - 1
         hidden[id] = nil
@@ -345,13 +346,37 @@ local function guard(player)
         elseif free > 0 and not falling then
           waiting = waiting + 1              -- (next pass: it stands on the ground out of view meanwhile)
         else
-          hidden[id] = true
+          hidden[id] = 0
           o:setActive(0)
         end
       end
     end
   end
   return waiting
+end
+
+-- The stock forceTeleport with no spot it will take (every path to it, not only the guard's: the pool's activation, its
+-- _teleport flag, a spot refused for a car too near) falls back on gameplay_traffic.forceTeleport: "out of map; this
+-- should be unlikely". On our small graph that is a lane of the nearest road, with the engine off: I-25 through open
+-- country has no spots, so a dozen parked cars stood in its lanes and mapmgr does not track a parked car off a street
+-- spot, so the traffic could not see them (bench13: 80 mph crashes at 40.074 into cars no probe listed, and the stops of
+-- benches 11 and 12 at the same place). The car waits hidden instead, RETRY_S before it tries again.
+M.RETRY_S = 5
+local function hookFallback()
+  local gt = rawget(_G, 'gameplay_traffic')
+  if not gt or gt.__bngeParkedHooked or type(gt.forceTeleport) ~= 'function' then return end
+  local orig = gt.forceTeleport
+  gt.forceTeleport = function(id, ...)
+    local gp = rawget(_G, 'gameplay_parking')
+    local data = gp and gp.getParkedCarsData and gp.getParkedCarsData()
+    if not (data and data[id]) then return orig(id, ...) end
+    local o = getObjectByID(id)
+    if o then
+      hidden[id] = os.clock() + M.RETRY_S
+      o:setActive(0)
+    end
+  end
+  gt.__bngeParkedHooked = true
 end
 
 -- The stock gameplay_parking.setupVehicles (the radial menu's parked cars, our own start) rebuilds the sites first
@@ -406,6 +431,7 @@ function M.update(aid, player, blk, gov)
     M.parts.scatter = M.parts.scatter + sw()
   end
   hookSetup()
+  hookFallback()
   if not M.enabled or not player or not dirty or not next(spots) then return end
   -- no parked cars (the player's choice, or removed): the sites only every REBUILD_OFF_S (a rebuild cost 24 ms every
   -- few seconds while driving, used by nobody, up to 88 ms on a Steam Deck); turning them on (the radial menu: the

@@ -300,6 +300,27 @@ do
   end
   T.check(cars[84].on, 'guard: the hidden car comes back once the others are moved')
   T.check(P.parts.guard >= 0 and P.parts.view >= 0, 'parts: guard and view timed')
+  -- the stock fallback for a parked car with no spot is a lane of the nearest road: hidden instead, traffic as it was
+  local moved = {}
+  gameplay_traffic = { forceTeleport = function(id) moved[#moved + 1] = id end }
+  P.update(9, { x = 0, y = 0, z = 1600 }, { -1000, -1000, 1000, 1000 })
+  gameplay_traffic.forceTeleport(81, nil, nil, 10000, 10000)
+  T.check(#moved == 0 and not cars[81].on, 'fallback: a parked car is not put on a road, it waits hidden')
+  gameplay_traffic.forceTeleport(500)
+  T.check(#moved == 1 and moved[1] == 500, 'fallback: a traffic car goes on as before')
+  for i = #teleported, 1, -1 do teleported[i] = nil end
+  for _ = 1, 3 do
+    clock = clock + P.GUARD_S + 0.01
+    P.update(9, { x = 0, y = 0, z = 1600 }, { -1000, -1000, 1000, 1000 })
+  end
+  T.check(not cars[81].on, 'fallback: not back before RETRY_S')
+  clock = clock + P.RETRY_S
+  for _ = 1, 3 do
+    clock = clock + P.GUARD_S + 0.01
+    P.update(9, { x = 0, y = 0, z = 1600 }, { -1000, -1000, 1000, 1000 })
+  end
+  T.check(cars[81].on, 'fallback: back after RETRY_S with spots free')
+  gameplay_traffic = nil
   core_camera, getObjectByID = nil, nil
   P.reset()
 end
