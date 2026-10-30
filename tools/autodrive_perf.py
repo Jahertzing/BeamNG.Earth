@@ -36,6 +36,7 @@ import obsctl  # noqa: E402
 POLL_S = 1.0
 STALL_MS = 0.5          # slower than this (m/s) counts as standing
 STOP_S = 45.0           # standing this long, not arrived: a stop (longer than a red light)
+RESET_GRACE_S = 6.0     # s after a --keep-going reset autodrive being off is not the drive's end
 CRASH_DAMAGE = 1500.0   # the damage rising this much between two polls: a crash (a curb scrape is a few hundred)
 OFF_ROUTE_M = 25.0
 ARRIVED_M = 60.0
@@ -560,6 +561,7 @@ def main():
     rows, end = [], time.time() + a.minutes * 60
     evf = open(os.path.join(a.out, "events.jsonl"), "w")
     checks = Checks(lambda n, ev: shot(a.out, f"event_{n}_{ev['kind']}.jpg"))
+    reset_at = -1e9                 # (time of the last --keep-going reset after a crash)
     try:
         with open(os.path.join(a.out, "samples.jsonl"), "w") as f:
             while time.time() < end:
@@ -599,7 +601,11 @@ def main():
                             time.sleep(2.0)
                             lua("beamngEarth_settings.uiGpsAutodrive(true) return 1")
                             print("reset after the crash", flush=True)
-                    if r["gps"].get("autodrive") is False and rows[0]["gps"].get("autodrive"):
+                            reset_at = time.time()
+                    # (a hard crash turns autodrive off itself, "the car is damaged": not the drive's end while the
+                    # reset above puts it on again; bench13 2026-10-30 ended twice at the first crash)
+                    if (r["gps"].get("autodrive") is False and rows[0]["gps"].get("autodrive")
+                            and time.time() - reset_at > RESET_GRACE_S):
                         break                   # arrived (the GPS clears itself) or stopped by hand
                 time.sleep(max(0.0, POLL_S - (time.time() - t0)))
     finally:
