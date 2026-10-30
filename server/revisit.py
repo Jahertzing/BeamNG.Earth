@@ -34,6 +34,7 @@ earthd.Server.world_signature()), kind, key, the anchor and the item's box in de
 folds the files into one and drops the lines whose zip is gone."""
 import hashlib
 import json
+import logging
 import os
 import re
 import threading
@@ -41,6 +42,8 @@ import time
 import zipfile
 
 import cache
+
+log = logging.getLogger("earthd.revisit")
 
 ON = os.environ.get("BNE_REVISIT", "on") != "off"
 SKIP = {k for k in os.environ.get("BNE_REVISIT_SKIP", "").split(",") if k}     # kinds left out (tests: "roads,far")
@@ -63,6 +66,10 @@ _where = {}                             # cache dir -> this process's open sidec
 _START = int(time.time())
 
 _faults = [0]
+# BNE_REVISIT_FAULT_LOG=on: each fault's callers logged (at the 1st, 2nd, 4th, 8th ... from the same place), to find
+# what keeps builds from being kept ("not kept" lines on a clean I-25 drive with no errors, 2026-10-30)
+FAULT_LOG = os.environ.get("BNE_REVISIT_FAULT_LOG", "off") != "off"
+_fault_seen = {}
 _code = []
 _lock = threading.Lock()
 _at = {}                    # key -> its anchor (lat, lon), from key(): whether store() pins it
@@ -76,6 +83,13 @@ _pins = {"stamp": None, "set": frozenset()}
 def fault():
     """Something a build may read failed or was not there yet: builds running now are not kept."""
     _faults[0] += 1
+    if FAULT_LOG:
+        import traceback
+        where = " < ".join(f"{os.path.basename(f.filename)}:{f.lineno} {f.name}"
+                           for f in reversed(traceback.extract_stack(limit=5)[:-1]))
+        n = _fault_seen[where] = _fault_seen.get(where, 0) + 1
+        if n & (n - 1) == 0:
+            log.info("revisit fault #%d (%d in all) at %s", n, _faults[0], where)
 
 
 def faults():
