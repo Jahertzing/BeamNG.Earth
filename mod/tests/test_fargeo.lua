@@ -76,6 +76,7 @@ end
 -- a far buildings tile of K with its lamps, a skyline tile of K's square, a far bridge tile with pieces in K and K2
 local fdata = { v = 1, key = K, frame = { clat, clon }, h = 'f1', shape = '/s/bf_' .. K .. '.cdae',
   pos = { -118, -118, 0 }, pivot = 25, relief = 40,
+  pieces = { { shape = '/s/bfp2_' .. K .. '.cdae', pos = { -118, -118, 0 }, pivot = 26 } },   -- (far_mesh_pieces)
   lamps = { [K] = { pivot = 30, rows = { { 1, 2, 30 }, { 5, 6, 31 } } } } }
 T.check(roads.onFarTile(farMsg(K, { clat, clon }, fdata), 1), 'far buildings geotile accepted')
 local sdata = { v = 1, key = SK, frame = { slat, slon }, h = 's1', shape = '/s/bs_' .. SK .. '.cdae',
@@ -88,6 +89,7 @@ T.check(roads.onFarTile(farMsg(SK, { slat, slon }, bdata), 1, 'B'), 'far bridge 
 run(1, A)
 local f1 = objsWith('bf_' .. K)
 T.check(#f1 == 1 and f1[1].hidden == false, 'far buildings made and shown (no road geotile here)')
+T.check(#objsWith('bfp2_' .. K) == 1 and objsWith('bfp2_' .. K)[1].hidden == false, 'its second piece made and shown')
 T.check(#objsWith('bs_' .. SK) == 1 and objsWith('bs_' .. SK)[1].hidden == false, 'skyline shown: its square incomplete')
 T.check(#objsWith('bb_' .. SK) == 2, 'a far bridge piece per road geotile')
 local frame = geotile.frameOf({ frame = { clat, clon } })
@@ -126,6 +128,7 @@ roads.onTile({ anchorId = 1, key = K, path = '/s/rg.json', n = 0, frame = { clat
 T.check(roads.nearShowsBuildings(K) == false, 'its buildings not made yet: the far ones stay')
 run(1, A)
 T.check(objsWith('bf_' .. K)[1].hidden == true, 'far buildings of K hidden: the road geotile shows its own')
+T.check(objsWith('bfp2_' .. K)[1].hidden == true, '... and its second piece')
 T.check(#called('trees', 'dropKey', 'g:FLF' .. K) == 1, 'their lamps dropped')
 local function piece(k)
   for _, o in ipairs(objsWith('bb_' .. SK .. '_' .. k)) do return o end

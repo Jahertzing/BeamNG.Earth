@@ -259,5 +259,42 @@ class RealDataTest(unittest.TestCase):
         self.assertEqual(max(shown.values()), 1, "no building shown twice at the near / far seam")
 
 
+class FarMeshPiecesTest(unittest.TestCase):
+    """A big far buildings / skyline mesh in pieces (blockworker.far_mesh_pieces): a 1.2 MB tile made in one took a
+    600 ms frame (2026-10-30)."""
+
+    def test_pieces(self):
+        import tempfile
+        import blockworker
+        import buildings
+        rng = np.random.default_rng(1)
+        nv = 3 * (blockworker.FAR_PIECE_TRIS * 2 + 100)
+        P = rng.random((nv, 3)) * 100.0
+        UV = rng.random((nv, 2))
+        T = np.arange(nv).reshape(-1, 3)
+        M = np.zeros(len(T), np.int64)
+        C = np.tile(np.arange(nv, dtype=np.int64)[:, None] % 256, (1, 4)).astype(np.uint8)
+        mesh = (P, UV, T, M, buildings.MATERIALS, C)
+        got = blockworker.far_mesh_pieces(mesh)
+        self.assertEqual(len(got), 3)
+        self.assertEqual(sum(len(m[2]) for m in got), len(T))
+        self.assertTrue(all(len(m[2]) <= blockworker.FAR_PIECE_TRIS for m in got))
+        for p in got:                       # (each piece's vertices, uvs and colours its own, renumbered)
+            pP, pUV, pT, pM, mats, pC = p
+            self.assertEqual(len(pP), len(pUV))
+            self.assertEqual(len(pP), len(pC))
+            self.assertEqual(int(pT.max()) + 1, len(pP))
+            self.assertIs(mats, buildings.MATERIALS)
+        q = got[1]
+        orig = T[len(got[0][2])]            # (the second piece's first triangle)
+        np.testing.assert_array_equal(q[0][q[2][0]], P[orig])
+        np.testing.assert_array_equal(q[5][q[2][0]], C[orig])
+        with tempfile.TemporaryDirectory() as d:
+            for i, p in enumerate(got):
+                buildings.write(os.path.join(d, f"p{i}.cdae"), p)
+        small = (P[:30], UV[:30], T[:10], M[:10], buildings.MATERIALS, C[:30])
+        self.assertIs(blockworker.far_mesh_pieces(small)[0], small, "a small mesh whole")
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -1720,16 +1720,44 @@ def _far_geo_build(kind, tile, gzoom, out_dir, vfs_dir, lamp_region):
         if pieces:
             data["parts"] = pieces
         return data, shapes, len(parts) if pieces else 0
-    if mesh is not None:
-        buildingsmod.write(os.path.join(out_dir, names["shape"]), mesh)
-        data["shape"] = f"{vfs_dir}/{names['shape']}"
-        data["pos"] = [x0, y0, 0.0]
-        data.update(_shape_info(os.path.join(out_dir, names["shape"]), data["pos"], kind))
-        shapes["shape"] = names["shape"]
+    if mesh is not None:                # (in pieces: far_mesh_pieces; "shape", then "shape2" ... in data["pieces"])
+        import meshpieces
+        first = os.path.join(out_dir, names["shape"])
+        for i, m in enumerate(far_mesh_pieces(mesh), 1):
+            fname = os.path.basename(meshpieces.piece_path(first, i))
+            buildingsmod.write(os.path.join(out_dir, fname), m)
+            e = {"shape": f"{vfs_dir}/{fname}", "pos": [x0, y0, 0.0]}
+            e.update(_shape_info(os.path.join(out_dir, fname), e["pos"], kind))
+            if i == 1:
+                data.update(e)
+                shapes["shape"] = fname
+            else:
+                data.setdefault("pieces", []).append(e)
+                shapes[f"shape{i}"] = fname
     by = _lamps_by_geotile(frame, lamps)
     if by:
         data["lamps"] = by
     return data, shapes, n
+
+
+# A far buildings or skyline mesh in pieces of FAR_PIECE_TRIS triangles at most (FAR_PIECES_MAX at most), each a unit
+# of its own in the game: a far buildings tile of 0.4-1.2 MB in one cost the game's frame 300-600 ms to make (the
+# route south of Denver, 2026-10-30: about 0.5 ms a KB, render-only)
+FAR_PIECE_TRIS = 4000
+FAR_PIECES_MAX = 16
+
+
+def far_mesh_pieces(mesh):
+    """[mesh] of buildings.build's (positions, uvs, tris, tri materials, materials, colours) cut into runs of consecutive
+    triangles (meshpieces.split: a building's are consecutive), each with only the vertices it uses. Pure."""
+    import meshpieces
+    P, UV, T, M, mats, C = mesh[:6]
+    T = np.asarray(T)
+    if len(mesh) > 6 or len(T) <= FAR_PIECE_TRIS:
+        return [mesh]
+    P, UV, M, C = np.asarray(P), np.asarray(UV), np.asarray(M), np.asarray(C)
+    return [(P[ids], UV[ids], Ti, M[lo:hi], mats, C[ids])
+            for (lo, hi), ids, Ti in meshpieces.split(T, FAR_PIECE_TRIS, FAR_PIECES_MAX)]
 
 
 def far_geo(kind, gx, gy, gzoom, out_dir, vfs_dir, lamp_region=None):
