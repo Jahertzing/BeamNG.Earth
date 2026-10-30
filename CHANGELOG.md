@@ -5,6 +5,16 @@ What changed in each release of BeamNG.Earth, newest first.
 ## Unreleased (fork)
 
 ### New
+- **Rain and snow you can feel** (2026-10-30): wet roads darken and gloss, puddles grow and reflect the sky and the
+  street lights, snow settles on the ground and roofs and melts again, and thunderstorms flash and rumble. The ground
+  gets slippery like it looks: wet asphalt grips like the game's ASPHALT_WET, puddles less, packed snow and black ice
+  much less, dirt and grass turn to mud (the game's ground models edited live, written back when the weather clears).
+  The roads get wet over minutes of rain and dry over half an hour, snow sticks below about 1 C, and in real weather
+  the ground starts the way Open-Meteo says it is (its snow depth). Ctrl+Alt+E / Ctrl+Alt+Shift+E the next / last
+  weather (clear, cloudy, drizzle, rain, storm, snow, blizzard, fog), Ctrl+Alt+Shift+1..8 one of them,
+  Ctrl+Alt+Shift+9 dry roads now, Ctrl+Alt+Shift+W back to the real weather; settings "Slippery wet and snowy roads"
+  and "Wet roads, snow on the ground, lightning". A screen-space pass (shaders/beamngEarth/weatherSurface.cs.hlsl,
+  weatherfx.lua), three synthesized thunder claps (tools/make_thunder.py) and the Stream Deck kit's new Weather page.
 - **Graphics keys** (2026-10-30): Ctrl+Alt+1 / 2 render scale down / up (5 % steps), Ctrl+Alt+3 / 4 the upscaler's
   sharpening down / up, Ctrl+Alt+5 the next anti-aliasing the game offers (DLSS, FSR, XeSS, SMAA T2x, SMAA, FXAA),
   Ctrl+Alt+6 / 7 / 8 / 9 motion blur, depth of field, screen-space reflections and ambient occlusion on / off,

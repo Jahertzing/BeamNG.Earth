@@ -590,4 +590,37 @@ do
   T.check(W.setPreset(nil) == false and W.preset() == nil, 'cleared')
 end
 
+-- a weather the player chooses (the keys, weatherfx.lua): in place of the real one, the round, the ground temperature
+do
+  local m = W.presetMsg('rain', 1600)
+  T.near(m.slTempC, W.PRESETS.rain.groundTempC + W.LAPSE * 1600, 1e-9, 'a preset is its ground temperature at the player')
+  T.check(W.presetMsg('rain').slTempC == W.PRESETS.rain.slTempC, 'no height: its sea-level value')
+  T.check(W.cycleNext(nil, 1) == W.CYCLE[1] and W.cycleNext(W.CYCLE[#W.CYCLE], 1) == nil, 'the round: real, first ... last, real')
+  T.check(W.cycleNext(nil, -1) == W.CYCLE[#W.CYCLE] and W.cycleNext(W.CYCLE[1], -1) == nil, 'backwards too')
+  T.check(W.cycleNext('rain', 1) == 'storm', 'rain then the storm')
+  for _, name in ipairs(W.CYCLE) do T.check(W.PRESETS[name] ~= nil, 'the round has presets only: ' .. name) end
+  level = 'beamng_earth'
+  W.onClientEndMission()
+  W.onClientStartMission()
+  W.setMode('manual')
+  T.check(W.force('blizzard') == 'blizzard' and W.forced() == 'blizzard' and W.getMode() == 'real', 'chosen: blizzard, mode real')
+  T.check(W.statusLine():find('chosen: blizzard', 1, true) ~= nil, 'status says chosen: ' .. W.statusLine())
+  local r, sn = W.targetPrecip()
+  T.check(r == 0 and sn > 0.9, 'a blizzard is heading for full snow: ' .. tostring(sn))
+  W.onWeather({ cover = { low = 0, mid = 0, high = 0 }, visM = 50000, slTempC = 25, code = 0 })
+  r, sn = W.targetPrecip()
+  T.check(sn > 0.9, 'a real message waits while a weather is chosen')
+  T.check(W.force('nope') == 'blizzard', 'an unknown name changes nothing')
+  T.check(W.force(nil) == nil and W.forced() == nil, 'real weather again')
+  r, sn = W.targetPrecip()
+  T.check(sn == 0, 'back to the real message at once (clear)')
+  T.check(W.stormNow() == false, 'no storm in the real message')
+  W.force('storm')
+  T.check(W.stormNow() == true, 'the storm is one')
+  run(W.GRACE_S + 30)
+  local t = W.airTempC()
+  T.check(t and math.abs(t - W.PRESETS.storm.groundTempC) < 1, 'the air at the player is the preset\'s ground temperature: ' .. tostring(t))
+  W.force(nil)
+end
+
 T.done('test_weather')

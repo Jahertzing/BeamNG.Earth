@@ -36,7 +36,7 @@ API = "https://api.open-meteo.com/v1/forecast"
 CURRENT = ("temperature_2m", "dew_point_2m", "relative_humidity_2m", "is_day", "precipitation", "rain",
            "showers", "snowfall", "weather_code", "cloud_cover", "cloud_cover_low", "cloud_cover_mid",
            "cloud_cover_high", "surface_pressure", "wind_speed_10m", "wind_direction_10m", "wind_gusts_10m",
-           "visibility")
+           "visibility", "snow_depth")
 HOURLY = ("wind_speed_700hPa", "wind_direction_700hPa")      # winds aloft: where the clouds drift
 CREDIT = "Weather data by Open-Meteo.com"
 VERSION = 1                 # weather.v: the message layout
@@ -133,6 +133,7 @@ def derive(om, lat=None, lon=None):
                     "gustMs": max(ms, _f(cur.get("wind_gusts_10m"), ms))},
            "tempC": t, "dewC": td, "elevM": elev, "slTempC": round(t + LAPSE * elev, 2),
            "pressureHpa": _f(cur.get("surface_pressure"), 1013.25),
+           "snowDepthM": round(_f(cur.get("snow_depth")), 3),     # snow on the ground (m): the mod's snow cover
            "credit": CREDIT}
     hourly = om.get("hourly") or {}
     sp, dr = hourly.get("wind_speed_700hPa"), hourly.get("wind_direction_700hPa")
