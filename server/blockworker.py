@@ -175,11 +175,42 @@ def _rss_mb():
         return 0.0
 
 
+def trace_frames():
+    """BNGE_TRACEMALLOC: the frames tracemalloc keeps per allocation: 1 (the allocating line alone, cheap), or the
+    number given (its callers too: trace_callers names who holds what np.load loaded, 2026-10-30)."""
+    v = os.environ.get("BNGE_TRACEMALLOC", "")
+    try:
+        return max(1, min(32, int(v)))
+    except ValueError:
+        return 1
+
+
+def trace_callers(snap, stats, depth=8):
+    """For the memory report: one line per statistic of stats (snapshot snap's "lineno" statistics) with the callers
+    of its allocating line (the traceback's frames, innermost first), when tracemalloc keeps more than one frame;
+    nothing otherwise."""
+    import tracemalloc
+    if tracemalloc.get_traceback_limit() <= 1:
+        return []
+    out = []
+    by_tb = snap.statistics("traceback")        # (a Traceback's frames run from the oldest to the allocating one)
+    for st in stats:
+        best = next((t for t in by_tb if t.traceback[-1].filename == st.traceback[0].filename
+                     and t.traceback[-1].lineno == st.traceback[0].lineno), None)
+        if best is None:
+            continue
+        frames = list(reversed(best.traceback))[:depth]
+        chain = " < ".join(f"{os.path.basename(f.filename)}:{f.lineno}" for f in frames)
+        out.append(f"{best.size / 1e6:.0f} MB via {chain}")
+    return out
+
+
 def _trace_memory(every_s=60.0, top=10):
     """BNGE_TRACEMALLOC: log this worker's resident size, what Python and numpy hold of it and its top allocation
-    sites every every_s (the rest is native: DuckDB, the allocator's free lists)."""
+    sites every every_s (the rest is native: DuckDB, the allocator's free lists); BNGE_TRACEMALLOC > 1: the top three
+    sites' callers too (trace_callers)."""
     import tracemalloc
-    tracemalloc.start(1)
+    tracemalloc.start(trace_frames())
 
     def loop():
         log = logging.getLogger("earthd.worker")
@@ -187,9 +218,12 @@ def _trace_memory(every_s=60.0, top=10):
             time.sleep(every_s)
             snap = tracemalloc.take_snapshot()
             total = sum(st.size for st in snap.statistics("filename"))
+            stats = snap.statistics("lineno")[:top]
             log.info("memory pid %d: rss %.0f MB, traced %.0f MB; top: %s", os.getpid(), _rss_mb(), total / 1e6,
                      "; ".join(f"{os.path.basename(st.traceback[0].filename)}:{st.traceback[0].lineno} "
-                               f"{st.size / 1e6:.0f} MB" for st in snap.statistics("lineno")[:top]))
+                               f"{st.size / 1e6:.0f} MB" for st in stats))
+            for line in trace_callers(snap, stats[:3]):
+                log.info("memory pid %d: %s", os.getpid(), line)
     threading.Thread(target=loop, daemon=True, name="trace-mem").start()
 
 

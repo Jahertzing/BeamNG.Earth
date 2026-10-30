@@ -5391,6 +5391,8 @@ async def main_async(args):
                 log.info("memory: rss %.0f MB, %.0f MB traced; top: %s", blockworker._rss_mb(), total / 1e6, "; ".join(
                     f"{os.path.basename(st.traceback[0].filename)}:{st.traceback[0].lineno} {st.size / 1e6:.0f} MB"
                     for st in top))
+                for line in blockworker.trace_callers(snap, top[:3]):     # (BNGE_TRACEMALLOC > 1: who called)
+                    log.info("memory: %s", line)
         threading.Thread(target=trace_mem, daemon=True, name="trace-mem").start()
 
     async def sessions():
@@ -5905,7 +5907,7 @@ def main():
             log.warning("could not set idle scheduling: %s", e)
     if os.environ.get("BNGE_TRACEMALLOC"):      # (before the caches are made: main_async's trace_mem reports them)
         import tracemalloc
-        tracemalloc.start(1)
+        tracemalloc.start(blockworker.trace_frames())
     game_cpus = server_cpus = None
     small = budget.apply()
     import bakedeps

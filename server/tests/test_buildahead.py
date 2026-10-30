@@ -572,3 +572,54 @@ class OptionsTest(unittest.TestCase):
         for name in ("BUILD_AHEAD_ON", "BUILD_AHEAD_MAX_M", "BUILD_AHEAD_JOBS", "ROUTE_AHEAD_MAX_M", "PROGRESS_S"):
             self.assertIn(name, code.co_names, f"{name} is assigned in main_async")
             self.assertNotIn(name, code.co_varnames, f"{name} must be declared global in main_async")
+
+
+class DriveStartTest(unittest.TestCase):
+    def test_the_drive_sends_its_leg_as_the_route_after_the_teleport(self):
+        sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "tools"))
+        import headless_bake as hb
+        import ghost_drive as gd
+        sent = []
+        c = types.SimpleNamespace(send=sent.append)
+        route = gd.Route(north(A, 1.0))
+        a = types.SimpleNamespace(speed=30.0, fly=30.0, ahead="on")
+        d = hb.Drive(c, route, [], 0.0, 15000.0, 512, None, a, next_id=1, out=None, say=lambda *x, **k: None)
+        d.start(0.0)
+        self.assertEqual([m["type"] for m in sent], ["prepare_anchor", "route"])
+        r = sent[1]
+        self.assertEqual((len(r["points"]), r["pins"], r["rebaseM"]), (len(route.pts), True, 15000.0))
+        self.assertEqual(r["points"][0], [route.pts[0][0], route.pts[0][1]])
+        self.assertNotEqual(r["id"], sent[0]["requestId"])
+        # --ahead off: the teleport alone
+        sent.clear()
+        a.ahead = "off"
+        d.start(0.0)
+        self.assertEqual([m["type"] for m in sent], ["prepare_anchor"])
+        # the server's planned anchors join the pins the drive follows
+        d.handle({"type": "route_anchors", "anchors": [[39.9, -105.0]], "pinM": 6750}, 1.0)
+        self.assertEqual((d.anchors, d.pin_m), ([(39.9, -105.0)], 6750.0))
+
+    def test_trace_frames_and_callers(self):
+        import blockworker
+        with mock.patch.dict(os.environ, {"BNGE_TRACEMALLOC": "12"}):
+            self.assertEqual(blockworker.trace_frames(), 12)
+        with mock.patch.dict(os.environ, {"BNGE_TRACEMALLOC": "1"}):
+            self.assertEqual(blockworker.trace_frames(), 1)
+        with mock.patch.dict(os.environ, {"BNGE_TRACEMALLOC": "yes"}):
+            self.assertEqual(blockworker.trace_frames(), 1)
+        import tracemalloc
+        was = tracemalloc.is_tracing()
+        tracemalloc.start(4)
+        try:
+            keep = [bytearray(200000) for _ in range(5)]
+            snap = tracemalloc.take_snapshot()
+            top = snap.statistics("lineno")[:1]
+            lines = blockworker.trace_callers(snap, top)
+            self.assertEqual(len(lines), 1)
+            self.assertIn("MB via test_buildahead.py:", lines[0])
+            self.assertIn(" < ", lines[0], "the callers follow the allocating line")
+            del keep
+        finally:
+            tracemalloc.stop()
+            if was:
+                tracemalloc.start(1)

@@ -124,6 +124,7 @@ FOLLOW_RETRY_S = 2.0        # after a terrain_error
 CAR_Z = 0.5                 # the car's position over the ground (the pose's z)
 SAMPLE_S = 1.0              # a samples.jsonl line this often
 AHEAD_STARVED_M = 500.0     # a wait with less than this ready ahead (load_progress "ahead") counts as the build-ahead behind
+TRACE_FRAMES = "12"         # --profile: frames tracemalloc keeps per allocation (BNGE_TRACEMALLOC; who holds the memory)
 LISTEN_RE = re.compile(r"earthd listening on 127\.0\.0\.1:(\d+)")
 MOD_VERSION = re.search(r"MOD_VERSION = '([^']+)'", (modsim.MOD_DIR / "core.lua").read_text()).group(1)
 # both modes: never the game's cores, no map tiles, and no AI road graph (navgraph: 1.2 s a block in the road processes,
@@ -434,7 +435,7 @@ def start_server(cmd, log_path, timeout=START_S, mode="game", profile=False, pow
     env = dict(os.environ, BNGEARTH_PARENT=str(os.getpid()), PYTHONUNBUFFERED="1", BNE_REVISIT_GENS="bake")
     env.setdefault("BNGE_BUDGET", "bake")
     if profile:
-        env["BNGE_TRACEMALLOC"] = "1"
+        env["BNGE_TRACEMALLOC"] = TRACE_FRAMES    # (the top allocation sites with their callers: blockworker.trace_callers)
     if deps_dir:
         env["BNGE_BAKE_DEPS_DIR"] = deps_dir     # (the builds' dependencies recorded: bakedeps, tools/bake_deps.py)
     env.update(env_extra or {})
@@ -750,6 +751,15 @@ class Drive:
             self.handle(m, now)
 
     # requests
+    def start(self, now):
+        """The drive's first messages: the teleport to the route's start, then (--ahead on) the leg as the GPS route, so
+        the server builds ahead along it (buildahead.py) and sends the anchors it plans (route_anchors)."""
+        lat0, lon0 = self.route.point(0.0)
+        self.teleport(lat0, lon0, now)
+        if getattr(self.a, "ahead", "on") != "off":
+            self.c.send({"type": "route", "id": self.rid(), "points": [[la, lo] for la, lo in self.route.pts],
+                         "pins": True, "rebaseM": self.distance})
+
     def teleport(self, lat, lon, now):
         aLat, aLon = anchor_for(lat, lon, self.anchors, self.pin_m)
         px, py, _ = self.geodesy.EnuFrame(aLat, aLon).geodetic_to_enu(lat, lon, 0.0)
@@ -876,11 +886,7 @@ class Drive:
         clear_at = 0.0          # since when nothing has had to be built (fly)
         free_until = -1.0       # gave up at a spot: on without standing until here (m)
         ground_t0 = None        # since when the ground is not final
-        lat0, lon0 = self.route.point(0.0)
-        self.teleport(lat0, lon0, now)
-        if getattr(self.a, "ahead", "on") != "off":     # the leg as the GPS route: the server builds ahead along it
-            self.c.send({"type": "route", "id": self.rid(), "points": [[la, lo] for la, lo in self.route.pts],
-                         "pins": True, "rebaseM": self.distance})
+        self.start(now)
         samples = open(os.path.join(self.out, "samples.jsonl"), "w", encoding="utf-8") if self.out else None
         try:
             while True:
