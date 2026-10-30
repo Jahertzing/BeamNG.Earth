@@ -192,6 +192,18 @@ MEM_MB = 192        # decoded cell layers kept in memory per process (a road til
                     # at 64 every tile decoded them again, 446 loads for 36 tiles (7.5 s of 87 on a Steam Deck)
 
 
+RULE_RETRY_S = 30.0     # s: a roads layer that went on by the rule for want of the lidar's answers is decoded again
+
+
+def _ruled(layer):
+    """Did decoded layer go on by the rule for want of the lidar's answer more than RULE_RETRY_S ago (roads._lidar_answers:
+    its every level_ranges faults the builds running, revisit.fault)? Then it is not handed out again: a fresh decode
+    asks roadz again, whose answer has most likely come meanwhile. Kept forever, one late answer spoiled every build in
+    the process while that layer lived (Frederick's cold rebuild, 2026-10-30: base photos "not kept" for 30+ min)."""
+    t = layer.__dict__.get("_lidar_rule") if layer is not None and hasattr(layer, "__dict__") else None
+    return bool(t) and time.monotonic() - float(t) > RULE_RETRY_S
+
+
 def _nbytes(arrays):
     """Memory of a layer's arrays (its decoded form is about this, plus the local coordinates)."""
     n = 0
@@ -746,12 +758,15 @@ class MapData:
         with self._mem_lock:
             for layer in layers:
                 got = self._mem.get((str(key), layer))
+                if got is not None and _ruled(got[0]):
+                    self._forget((str(key), layer))
+                    got = None
                 if got is not None:
                     self._mem.move_to_end((str(key), layer))
                     mem[layer] = got
                     continue
                 got = self._shared((str(key), layer))
-                if got is not None:
+                if got is not None and not _ruled(got[0]):
                     mem[layer] = got
                     again.append(((str(key), layer), got))
         for k, got in again:
@@ -831,6 +846,13 @@ class MapData:
                 self._live[k] = layer
         except (TypeError, AttributeError):         # (not weakly referenceable, or no __dict__)
             pass
+
+    def _forget(self, k):
+        """Layer k out of the LRU and the live map (under _mem_lock): decoded again at the next cell()."""
+        old = self._mem.pop(k, None)
+        if old is not None:
+            self._mem_bytes -= old[2]
+        self._live.pop(k, None)
 
     def _shared(self, k):
         """(layer, provenance, bytes) of a decoded layer still held somewhere (_share), or None. Under _mem_lock."""
