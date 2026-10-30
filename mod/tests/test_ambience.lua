@@ -187,7 +187,7 @@ seaV.shores = nil
 
 -- rain: the loop fades in with the weather's rain, out inside a tunnel's space, and goes when the rain stops
 local function rainEm()
-  for _, o in ipairs(S.liveOf('SFXEmitter')) do if o.name == 'bngEarthRain' then return o end end
+  for _, o in ipairs(S.liveOf('SFXEmitter')) do if o.name == 'bngEarthRainSound' then return o end end
 end
 beamngEarth_weather = { rainNow = 1 }
 clock = 400; amb.update(3, seaV)

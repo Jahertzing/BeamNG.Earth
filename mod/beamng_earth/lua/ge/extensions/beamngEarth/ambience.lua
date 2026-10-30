@@ -522,7 +522,7 @@ local function updateRain()
       e:setTransform(MatrixF(true))
       e:setField('track', 0, M.RAIN_TRACK)
       e.canSave = false
-      e:registerObject('bngEarthRain')
+      e:registerObject('bngEarthRainSound')
       e:play()
       rainEm = e
     end
