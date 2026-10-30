@@ -53,6 +53,7 @@ _G.BNGE_GHOST = G
 G.TURN_COS = math.cos(math.rad(%(turn)r))
 G.UP_MIN = 0.8          -- the car's up vector this upright at least, else it is set again
 G.LIFT = 0.5            -- m over the surface the car is set at
+G.DROP_MAX = 200.0     -- m under the car a surface is not believed (a ground not loaded yet: no ground)
 local function ext(n) return rawget(_G, n) end
 
 -- the load state: anchor, pending request, server backlog, far field and road meshes, the frame times
@@ -110,9 +111,12 @@ function G.step(cfg)
   local x, y = a:geodeticToEnu(cfg.lat, cfg.lon, 0)
   local hx, hy = a:geodeticToEnu(cfg.hlat, cfg.hlon, 0)
   local p = veh:getPosition()
+  -- (no ground: the no-hit value, or 0 where the ground ahead is not loaded yet: the car was put at z 0.5 and
+  -- fell through the world north of the Mousetrap, 2026-10-30; anything far under the car is no ground either)
+  local function noGround(h) return not h or h < -1e6 or h == 0 or h < p.z - G.DROP_MAX end
   local z = be:getSurfaceHeightBelow(vec3(x, y, p.z + 4))
-  if not z or z < -1e6 then z = be:getSurfaceHeightBelow(vec3(x, y, p.z + 60)) end   -- (a climb)
-  if not z or z < -1e6 then out.noground = true; return jsonEncode(out) end
+  if noGround(z) then z = be:getSurfaceHeightBelow(vec3(x, y, p.z + 60)) end   -- (a climb)
+  if noGround(z) then out.noground = true; return jsonEncode(out) end
   local dx, dy = hx - x, hy - y
   local L = math.sqrt(dx * dx + dy * dy)
   if L < 0.01 then dx, dy, L = 0, 1, 1 end
