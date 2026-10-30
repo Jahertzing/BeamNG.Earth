@@ -25,6 +25,8 @@ def main():
     ap.add_argument("--cache-dir", default=os.path.expanduser("~/.cache/beamng-earth"))
     ap.add_argument("--out", default=None, help="write the full stats here too")
     ap.add_argument("--top", type=int, default=35)
+    ap.add_argument("--country", default="US", help="the road markings' country (earthd: the nearest airport's)")
+    ap.add_argument("--region", default="US-CO", help="the street lamps' region (ISO 3166-2)")
     ap.add_argument("--no-profile", action="store_true", help="times only (cProfile's overhead off)")
     ap.add_argument("--dump", default=None, help="save the raw profile here (pstats, e.g. for print_callers)")
     a = ap.parse_args()
@@ -35,16 +37,19 @@ def main():
     import earthd
     import geodesy
     import dem as demmod
-    out_dir = os.path.join("/tmp", "bnge_profile")
+    import tempfile
+    import furniture
+    out_dir = os.path.join(tempfile.gettempdir(), "bnge_profile")     # (Windows: no /tmp)
     os.makedirs(out_dir, exist_ok=True)
     zoom = demmod.zoom_for(lat, 2.5)
     times = {}
     cpu = {}
-    prof = cProfile.Profile()
+    profs = {}                  # a profile per job kind (roads_tile, far_buildings, block): each one's own top
 
     def timed(name, fn, *args, **kw):
         t0 = time.perf_counter()
         c0 = time.process_time()
+        prof = profs.setdefault(name.split("(")[0], cProfile.Profile())
         if not a.no_profile:
             prof.enable()
         try:
@@ -56,18 +61,22 @@ def main():
         times.setdefault(name.split("(")[0], []).append(time.perf_counter() - t0)
         cpu.setdefault(name.split("(")[0], []).append(time.process_time() - c0)
 
-    # road tiles (with buildings, sidewalks, furniture)
+    # road tiles (with buildings, sidewalks, furniture), as earthd's build_roads_tile with the launcher's
+    # RECOMMENDED options (near-visual detail, buildings and gas stations on)
+    frame = geodesy.EnuFrame(lat, lon)
+    q = earthd.survey_q(frame, blockworker._s.dem, 1024)
+    country = a.country or None
+    lamp = furniture.lamp_region(country, a.region or None)
     n = a.tiles
     for tx in range(-n, n + 1):
         for ty in range(-n, n + 1):
             timed(f"roads_tile({tx},{ty})", blockworker.roads_tile, 1, lat, lon, zoom, tx, ty, out_dir, "/temp/x",
-                  True, 0.0, True, False, True)
+                  True, earthd.DETAIL_ROAD_LIFT, True, False, True, q, True, 0.0, lamp, country)
     # far building tiles
     for tx in range(-n, n + 1):
-        timed(f"far_buildings({tx},0)", blockworker.far_buildings_tile, 1, lat, lon, zoom, tx, 0, out_dir, "/temp/x")
+        timed(f"far_buildings({tx},0)", blockworker.far_buildings_tile, 1, lat, lon, zoom, tx, 0, out_dir, "/temp/x",
+              lamp)
     # terrain blocks (the 512 block's 128 m grid)
-    frame = geodesy.EnuFrame(lat, lon)
-    q = earthd.survey_q(frame, blockworker._s.dem, 1024)
     for k in range(a.blocks):
         cx = 128.0 * k
         timed(f"block({cx},0)", blockworker.build, 1, lat, lon, zoom, q, cx, 0.0, 512, out_dir, f"hm_{k}.png",
@@ -80,16 +89,25 @@ def main():
               f"{sum(c) / len(c):.2f} s, total {sum(c):.1f} s")
     if a.no_profile:
         return
-    st = pstats.Stats(prof)
+    st = pstats.Stats(*profs.values())
     print("\nby own time (tottime):")
     st.sort_stats("tottime").print_stats(a.top)
     print("\nby cumulative time:")
     st.sort_stats("cumulative").print_stats(a.top)
+    if "roads_tile" in profs and len(profs) > 1:
+        rst = pstats.Stats(profs["roads_tile"])
+        print("\nroads_tile only, by own time (tottime):")
+        rst.sort_stats("tottime").print_stats(a.top)
+        print("\nroads_tile only, by cumulative time:")
+        rst.sort_stats("cumulative").print_stats(a.top)
     if a.dump:
-        prof.dump_stats(a.dump)
+        st.dump_stats(a.dump)
+        base, ext = os.path.splitext(a.dump)
+        for k, p in profs.items():      # (each kind's own too: name.roads_tile.prof)
+            p.dump_stats(f"{base}.{k}{ext}")
     if a.out:
         with open(a.out, "w") as f:
-            pstats.Stats(prof, stream=f).sort_stats("tottime").print_stats(200)
+            pstats.Stats(*profs.values(), stream=f).sort_stats("tottime").print_stats(200)
 
 
 if __name__ == "__main__":
