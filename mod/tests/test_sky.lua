@@ -260,6 +260,7 @@ check(sky.getMode() == 'manual' and near(tod.time, (21.5 / 24 - 0.5) % 1, 1e-9) 
 check(near(sky.shiftLocalHour(1), 22.5, 1e-9) and near(tod.time, (22.5 / 24 - 0.5) % 1, 1e-9), '+1 h: 22:30')
 check(near(sky.shiftLocalHour(2), 0.5, 1e-9) and near(tod.time, (0.5 / 24 - 0.5) % 1, 1e-9), 'past midnight: 00:30')
 check(near(sky.shiftLocalHour(-1), 23.5, 1e-9), '-1 h back over midnight: 23:30')
+check(near(sky.shiftLocalHour(0.25), 23.75, 1e-9) and near(sky.shiftLocalHour(-0.25), 23.5, 1e-9), '+-15 min')
 check(sky.shiftLocalHour('x') == nil, 'no hours: nothing')
 sky.setMode('real')
 

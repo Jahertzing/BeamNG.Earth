@@ -136,7 +136,7 @@ function M.skyNow(which)
   return timeSet(sky.setLocalHour(h, 'a sky key'))
 end
 
--- The clock dh hours on or back from the time it shows (the Stream Deck's +1 h / -1 h keys).
+-- The clock dh hours on or back from the time it shows (the Stream Deck's +-1 h and +-15 min keys).
 function M.skyShift(dh)
   return timeSet(sky.shiftLocalHour(dh, 'a sky key'))
 end
