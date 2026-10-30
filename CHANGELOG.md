@@ -5,6 +5,12 @@ What changed in each release of BeamNG.Earth, newest first.
 ## Unreleased (fork)
 
 ### New
+- **Graphics keys** (2026-10-30): Ctrl+Alt+1 / 2 render scale down / up (5 % steps), Ctrl+Alt+3 / 4 the upscaler's
+  sharpening down / up, Ctrl+Alt+5 the next anti-aliasing the game offers (DLSS, FSR, XeSS, SMAA T2x, SMAA, FXAA),
+  Ctrl+Alt+6 / 7 / 8 / 9 motion blur, depth of field, screen-space reflections and ambient occlusion on / off,
+  Ctrl+Alt+0 the game's Options on the Graphics tab and Ctrl+Alt+Shift+0 the whole Options menu. Each goes through the
+  game's own setting (live, saved like the menu saves it) and says what it did in a toast. With the DLAA key they make
+  the Stream Deck kit's new Graphics page.
 - **DLAA key** (2026-10-29): Ctrl+Alt+U switches the game's DLSS to native resolution (DLAA, the sharpest DLSS) or
   back to the render scale and anti-aliasing you had, through the game's own Options > Graphics settings, with a
   toast. Asked for as a DLSS 5 toggle: DLSS 5's neural rendering needs the game to build it in and BeamNG 0.40 has
