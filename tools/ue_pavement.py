@@ -42,7 +42,7 @@ MIN_HOLE_M2 = 3.0               # m2: smaller holes in it filled
 UNSURVEYED_MATERIAL = {"paved": "road_asphalt_2lane", "cobble": "road_asphalt_2lane", "gravel": "m_dirt_road",
                        "dirt": "m_dirt_road"}
 DROPPED = ("road_asphalt", "m_dirt_road", "m_gm_concrete_plain", "ECA_road_edge_dirt", "italy_cobblestone")
-MATERIALS = ["road_asphalt_2lane", "m_dirt_road", "m_gm_concrete_plain"]
+MATERIALS = ["road_asphalt_2lane", "m_dirt_road", "bne_bridge_concrete"]
 
 
 def material_of(spec):

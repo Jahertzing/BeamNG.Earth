@@ -23,7 +23,7 @@ import ue_export  # noqa: E402  (the world folder, server/ on the path)
 import numpy as np  # noqa: E402
 
 SPEC_FIELDS = ("width", "kind", "urban", "cls", "oneway", "dir", "kmh", "gap", "median", "lanes", "surf", "link", "lanes_f",
-               "lanes_b", "lanes_c", "turns_f", "turns_b", "shoulder", "lsrc")
+               "lanes_b", "lanes_c", "turns_f", "turns_b", "shoulder", "lsrc", "park", "sides", "walk")
 
 
 def load_features(cache_dir, box):
@@ -48,12 +48,19 @@ def load_features(cache_dir, box):
     return cells, frame, (s.surface.urban if s.surface is not None else None), s.widths, keys, s.md
 
 
-def connectors_of(feats, i):
-    """[(connector id, share along feature i)] of its map connectors, in order."""
+def connectors_of(feats, i, frame=None):
+    """[(connector id, share along feature i, x, y)] of its map connectors, in order (x, y: nan without a frame)."""
+    import mapgeom
     t = feats.rules.get("connectors")
     if t is None or not len(t.feature):
         return []
-    return sorted(((str(t.value[j]), float(t.start[j])) for j in t.rows(i)), key=lambda v: v[1])
+    got = sorted(((str(t.value[j]), float(t.start[j])) for j in t.rows(i)), key=lambda v: v[1])
+    ring = next((r for part in feats.parts(i) for r in part if len(r) >= 2), None)
+    if ring is None or frame is None:
+        return [(c, a, float("nan"), float("nan")) for c, a in got]
+    e, n = mapgeom.enu_xy(feats, frame, ring)
+    d = np.r_[0.0, np.cumsum(np.hypot(np.diff(e), np.diff(n)))]
+    return [(c, a, float(np.interp(a * d[-1], d, e)), float(np.interp(a * d[-1], d, n))) for c, a in got]
 
 
 def pieces_of(cells, frame, urban, widths):
@@ -75,7 +82,7 @@ def pieces_of(cells, frame, urban, widths):
                 continue
             seen[fid] = True
             name = feats.attrs["name"][i] if "name" in feats.attrs else ""
-            cons = connectors_of(feats, i)
+            cons = connectors_of(feats, i, frame)
             ranges = roads.level_ranges(feats, i)
             for kind, parts, spec in (("ground", roads.ground_parts(feats, i), sp),
                                       ("bridge", roads.bridge_parts(feats, i), bsp),
@@ -139,7 +146,7 @@ def audit(pieces):
         x = lines[i].intersection(lines[j])
         c = x.representative_point()
         at = [round(c.x, 1), round(c.y, 1)]
-        shared = {k for k, _ in p["connectors"]} & {k for k, _ in q["connectors"]}
+        shared = {c[0] for c in p["connectors"]} & {c[0] for c in q["connectors"]}
         if p["level"] == q["level"]:
             if not shared:
                 phantom.append({"at": at, "a": [p["fid"], p["spec"]["cls"], p["name"]], "b": [q["fid"], q["spec"]["cls"], q["name"]],
@@ -152,13 +159,15 @@ def audit(pieces):
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--km", type=float, default=20.48)
+    ap.add_argument("--box", default=None, help="x0,y0,x1,y1 frame m, in place of --km")
     ap.add_argument("--out", default="C:/beamng-earth/Earth.UE/export/roadnet")
     ap.add_argument("--cache-dir", default=os.environ["BNGE_WORLD_CACHE"])
     a = ap.parse_args()
     os.makedirs(a.out, exist_ok=True)
     half = a.km * 500.0
+    box = tuple(float(v) for v in a.box.split(",")) if a.box else (-half, -half, half, half)
     t0 = time.perf_counter()
-    cells, frame, urban, widths, keys, md = load_features(os.path.abspath(a.cache_dir), (-half, -half, half, half))
+    cells, frame, urban, widths, keys, md = load_features(os.path.abspath(a.cache_dir), box)
     print(f"{len(cells)} cells, {time.perf_counter() - t0:.0f} s", flush=True)
     pieces = pieces_of(cells, frame, urban, widths)
     print(f"{len(pieces)} pieces, {time.perf_counter() - t0:.0f} s", flush=True)
@@ -166,7 +175,7 @@ def main():
     infra, lots = infrastructure(keys, md, frame)
     print({k: len(v) for k, v in infra.items()}, "lots", len(lots), flush=True)
     with open(os.path.join(a.out, "net.pkl"), "wb") as f:
-        pickle.dump({"pieces": pieces, "frame": ue_export.FRAME, "half": half, "infra": infra, "lots": lots}, f)
+        pickle.dump({"pieces": pieces, "frame": ue_export.FRAME, "half": half, "box": box, "infra": infra, "lots": lots}, f)
     with open(os.path.join(a.out, "audit.json"), "w") as f:
         json.dump(found, f, indent=0)
     kinds, classes = {}, {}

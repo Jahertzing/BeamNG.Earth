@@ -29,7 +29,7 @@ CELL = 2048.0
 TOLS = (0.5, 1.0, 2.0)
 ZONE_M = 6.0                    # m: the drawn edge this near a surveyed line counts for precision
 NEAR_M = 12.0                   # m: surveyed lines this close to a drawn road count for recall (not a far parking lot's)
-SURFACE = ("road_asphalt", "m_dirt_road", "bne_bridge_asphalt", "m_gm_concrete_plain")
+SURFACE = ("road_asphalt", "m_dirt_road", "bne_bridge_asphalt", "m_gm_concrete_plain", "bne_bridge_concrete")
 
 
 def fill_tris(mask, xy, T, x0, y0):

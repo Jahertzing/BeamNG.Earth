@@ -28,6 +28,7 @@ CELL_M = 2048.0
 MARGIN_M = 48.0
 NONE_COST = {"service": 0.8, "track": 0.5, "unknown": 1.0}      # the "no pavement measured here" state, by class
 NONE_DEFAULT = 2.5
+WIDTH_COST_CAP = 0.6            # a pavement around the line is never dearer than this for its width
 HALF_COST = 2.0                 # a pavement with one surveyed side, its width the spec's
 MIN_W, MAX_W = 2.5, 42.0        # m a pavement between two lines
 FILL_M = 72.0                   # m a gap (a junction's mouth, under a deck) is bridged from its two sides
@@ -87,7 +88,8 @@ def fit_piece(cands, spec):
         B = np.array([s[1] for s in states])
         half = np.array([s[2] for s in states])
         d0 = np.maximum(np.maximum(A, -B), 0.0)
-        cost = d0 + 0.25 * np.abs(B - A - w0) + HALF_COST * (half == 1)
+        # (a street mapped as a service road is 12 m of curbed pavement: a width off the spec's is capped, the survey wins)
+        cost = d0 + np.minimum(0.25 * np.abs(B - A - w0), WIDTH_COST_CAP) + HALF_COST * (half == 1)
         cost[0] = none
         if prev is None:
             total, bp = cost, np.zeros(len(states), np.int64)
@@ -137,8 +139,8 @@ def main():
     with open(os.path.join(a.dir, "net.pkl"), "rb") as f:
         net = pickle.load(f)
     frame = geodesy.EnuFrame(*ue_export.FRAME)
-    half = net["half"] + 64.0
-    lines, missing = ue_survey.lines_in(frame, (-half, -half, half, half))
+    b = net.get("box") or (-net["half"], -net["half"], net["half"], net["half"])
+    lines, missing = ue_survey.lines_in(frame, (b[0] - 64.0, b[1] - 64.0, b[2] + 64.0, b[3] + 64.0))
     km = sum(float(np.hypot(*np.diff(ln, axis=0).T).sum()) for ln in lines) / 1000
     print(f"{len(lines)} surveyed lines, {km:.0f} km, {missing} cells missing, {time.perf_counter() - t0:.0f} s", flush=True)
     with open(os.path.join(a.dir, "survey.pkl"), "wb") as f:
