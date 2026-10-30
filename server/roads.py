@@ -9254,6 +9254,30 @@ def geo_wanted(frame, x, y, vx=0.0, vy=0.0):
     return want
 
 
+ROADZ_AHEAD_TILES = 32      # the road geotiles next in line whose cells' measured heights are fetched ahead (_warm_roadz)
+ROADZ_AHEAD_M = (1500.0, 3000.0)    # m: and the cells this far ahead along the car's heading (at FAST_MS or more)
+
+
+def _warm_roadz(keys, ahead=()):
+    """The measured road heights (roadz: the lidar's decks and elevated stretches) of the map cells of road geotiles
+    keys and of the points ahead (lat, lon), fetched in the background in that order (RoadZ.warm, after a new place's),
+    so the road processes find them on disk instead of waiting LIDAR_GAPS_WAIT_S and taking the rule for the run."""
+    if not keys and not ahead:
+        return
+    import geotiles
+    import mapcells
+    import roadz
+    if roadz.PROVIDER is None:
+        return
+    cells = [mapcells.CellKey(*geotiles.tile_cell(*k)) for k in keys]
+    for la, lo in ahead:
+        try:
+            cells.append(mapcells.cell_of(la, lo))
+        except ValueError:
+            pass
+    roadz.PROVIDER.warm(list(dict.fromkeys(cells)), front=False)
+
+
 class GeoTracker:
     """Per connection: the road geotiles the mod has. Content is sent once for the connection (kept by the mod across
     anchors, sent: its keys), skins per anchor (skins), exact variants per anchor (shown: the variant's anchor per
@@ -9416,6 +9440,12 @@ class GeoTracker:
                 return (1, seen[k])
             return (2, others.get(k, 1e9))
         jobs.sort(key=order)
+        ahead = []
+        if s >= FAST_MS:                # (and the cells the car is heading into, past the road lead)
+            for d in ROADZ_AHEAD_M:
+                la, lo, _ = frame.enu_to_geodetic(x + vx / s * d, y + vy / s * d, 0.0)
+                ahead.append((float(la), float(lo)))
+        _warm_roadz([k for k, content, _, _ in jobs[:ROADZ_AHEAD_TILES] if content], ahead)
         for k, content, skin, make in jobs[:max(0, BUILD_PER_POSE - len(self.building))]:
             self.building.add(k)
             self.started[k] = now

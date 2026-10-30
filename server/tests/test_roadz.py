@@ -68,6 +68,67 @@ class ParseTest(unittest.TestCase):
         self.assertTrue(np.isnan(back.z[1]))
 
 
+class WarmTest(unittest.TestCase):
+    """RoadZ.warm: each cell once, in one background thread, a new place's before the drive's ahead; nothing it fetches
+    is a revisit fault (2026-10-30: the road geotiles ahead of the car warm their cells, roads._warm_roadz)."""
+
+    def test_each_cell_once_in_order(self):
+        import threading
+        import revisit
+        rz = roadz.RoadZ(None, object())
+        rz.enabled = True
+        got, gate, entered = [], threading.Event(), threading.Event()
+        old_sources = roadz.sources_at
+        roadz.sources_at = lambda la, lo, lidar: ["lidar"]
+
+        def lines(src, key, fault=True):
+            entered.set()
+            gate.wait(5)
+            self.assertFalse(fault, "warm's fetches fault nothing")
+            got.append(key)
+            if key.x == 2:
+                revisit.fault()     # (would the real one: it is not asked to)
+            return None
+        rz.lines = lines
+        try:
+            ks = [mapcells.CellKey(14, x, 100) for x in range(5)]
+            rz.warm(ks[:2], front=False)
+            self.assertTrue(entered.wait(5))        # (the thread on the first cell)
+            rz.warm(ks[1:4], front=False)
+            rz.warm([ks[4], ks[0]])                 # (a new place's: first, the seen one not again)
+            gate.set()
+            for _ in range(200):
+                if len(got) == 5 and not rz._warm_busy:
+                    break
+                threading.Event().wait(0.01)
+        finally:
+            roadz.sources_at = old_sources
+        self.assertEqual(sorted(k.x for k in got), [0, 1, 2, 3, 4], "each once")
+        self.assertEqual(got[0].x, 0)
+        self.assertEqual([k.x for k in got[1:]], [4, 1, 2, 3], "the place's ahead of the drive's still queued")
+        self.assertFalse(rz._warm_busy)
+
+    def test_geotiles_ahead_warm_their_cells(self):
+        calls = []
+
+        class Prov:
+            def warm(self, keys, front=True):
+                calls.append((list(keys), front))
+        old = roadz.PROVIDER
+        roadz.PROVIDER = Prov()
+        try:
+            import geotiles
+            k = (27311, 49595)
+            roads._warm_roadz([k, (27312, 49595)], [(39.79, -104.99)])
+        finally:
+            roadz.PROVIDER = old
+        (keys, front), = calls
+        self.assertFalse(front)
+        self.assertEqual(keys[0], mapcells.CellKey(*geotiles.tile_cell(*k)))
+        self.assertEqual(len(keys), len(set(keys)), "each cell once")
+        self.assertEqual(keys[-1], mapcells.cell_of(39.79, -104.99))
+
+
 class NameTest(unittest.TestCase):
     def test_refs(self):
         self.assertEqual(roadz.refs_of("A 75"), {"a75"})
