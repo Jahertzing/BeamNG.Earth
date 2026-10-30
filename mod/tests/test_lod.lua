@@ -40,4 +40,6 @@ T.check(real.RINGS[1][1] == ring1 * 2 and real.GROUP_MAX_M.door == door * 2 and 
   'trees: rings and props doubled, rocks kept')
 real.setDistanceScale(1)
 T.check(real.RINGS[1][1] == ring1 and real.GROUP_MAX_M.door == door, 'trees: back to the loaded values')
+T.check(type(real.distanceScale) == 'function' and real.distanceScale('max') == 2.2,
+  'trees: distanceScale still the reach function after a scale (a number there broke hello: no terrain, 2026-10-30)')
 T.done('test_lod')

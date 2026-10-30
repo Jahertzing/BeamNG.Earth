@@ -844,7 +844,7 @@ function M.setDistanceScale(scale)
   for i, r in ipairs(M.RINGS) do r[1] = baseDist.rings[i] * scale end
   for i, r in ipairs(M.TILE_CAP) do r[1] = baseDist.caps[i] * scale end
   for g, d in pairs(baseDist.groups) do M.GROUP_MAX_M[g] = M.SCALE_KEEP[g] and d or d * scale end
-  M.distanceScale = scale
+  M.detailScale = scale     -- (not distanceScale: that is the setting's reach function, settings.serverGraphics)
   M.refresh()
 end
 
