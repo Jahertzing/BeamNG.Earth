@@ -5,6 +5,11 @@ What changed in each release of BeamNG.Earth, newest first.
 ## Unreleased (fork)
 
 ### New
+- **DLAA key** (2026-10-29): Ctrl+Alt+U switches the game's DLSS to native resolution (DLAA, the sharpest DLSS) or
+  back to the render scale and anti-aliasing you had, through the game's own Options > Graphics settings, with a
+  toast. Asked for as a DLSS 5 toggle: DLSS 5's neural rendering needs the game to build it in and BeamNG 0.40 has
+  not (its DLSS is Super Resolution 310.9), so this is the nearest thing it does live. On the Stream Deck kit's
+  BeamNG.Earth page.
 - **Route line and clock keys** (2026-10-29): Ctrl+Alt+V hides the GPS route line on the road or shows it again (the
   game's own "Show Inworld Navigation Groundmarkers" option; the route, the turn arrows, the minimap and the autodrive
   go on), Ctrl+Alt+Page Up / Page Down move the clock an hour on or back from the time it shows and

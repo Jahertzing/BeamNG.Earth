@@ -11,6 +11,7 @@
     {"control":"ctrl alt n", "action":"beamngEarth_nightNow"},
     {"control":"ctrl alt s", "action":"beamngEarth_snapshot"},
     {"control":"ctrl alt v", "action":"beamngEarth_routeLine"},
+    {"control":"ctrl alt u", "action":"beamngEarth_dlaaToggle"},
     {"control":"ctrl alt pageup", "action":"beamngEarth_timeForward"},
     {"control":"ctrl alt pagedown", "action":"beamngEarth_timeBack"},
     {"control":"ctrl alt shift pageup", "action":"beamngEarth_timeForward15"},
