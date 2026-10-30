@@ -183,7 +183,8 @@ def digest_arrays(arrays):
 # instead of swapped under memory pressure. At most MIRROR_MB on disk (the least recently read go first); the vector
 # layers' `en` (the cell frame's metres, Features.localize) is kept with them.
 BUILD_WAIT_S = 180.0        # a cell layer another process is building is waited for this long (xproc.once)
-MIRROR_MB = cache.roomy(2048)     # (8 GB with room on the disk: cache.roomy)
+MIRROR_MB = cache.roomy(2048, 16)     # (32 GB with room on the disk, cache.roomy: the Front Range drive's mirror
+                                      # was 25 GB by 2026-10-30, and a cap under it rewrote cells every run)
 MIRROR_PRUNE_S = 120.0  # the mirror pruned at most this often per process (each prune walks it all)
 MIRROR_SMALL = 65536    # bytes: an array this small is read into memory (no mapping)
 MEM_MB = 192        # decoded cell layers kept in memory per process (a road tile reads its ~4 cells, each read by

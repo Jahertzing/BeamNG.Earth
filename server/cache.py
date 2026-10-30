@@ -95,18 +95,18 @@ ROOMY_FREE_GB = 150.0       # free on the home drive at least this: a desktop's 
 ROOMY_SCALE = 4
 
 
-def roomy(mb):
-    """mb, times ROOMY_SCALE on a machine with ROOMY_FREE_GB free on the home drive (where the cache and the world
-    folder live): the uncompressed mirrors' caps were set for a Steam Deck (dem 1 GB, map data 2 GB), and on Jeff's
-    desktop (400 GB free) two places of the drive evicted each other's map data mirror (14 s of rewrites on one cold
-    Denver tile, 2026-10-30). Asked once per process."""
+def roomy(mb, scale=None):
+    """mb, times scale (ROOMY_SCALE) on a machine with ROOMY_FREE_GB free on the home drive (where the cache and the
+    world folder live): the uncompressed mirrors' caps were set for a Steam Deck (dem 1 GB, map data 2 GB), and on
+    Jeff's desktop (400 GB free) two places of the drive evicted each other's map data mirror (14 s of rewrites on one
+    cold Denver tile, 2026-10-30). Asked once per process."""
     if not _roomy:
         try:
             free = shutil.disk_usage(os.path.expanduser("~")).free / GB
         except OSError:
             free = 0.0
         _roomy.append(ROOMY_SCALE if free >= ROOMY_FREE_GB else 1)
-    return mb * _roomy[0]
+    return mb * (_roomy[0] if scale is None or _roomy[0] == 1 else scale)
 
 
 _roomy = []
