@@ -168,6 +168,28 @@ T.check(okS, 'step: no error on the stale ghost: ' .. tostring(errS))
 P.rebalance(-1500, 0)
 T.check(true, 'rebalance: no error')
 
+-- a car's look; the car that takes a ghost's place looks like it
+T.check(P.modelOf('vehicles/simple_traffic/pickup_d15_fleet.pc') == 'pickup', 'modelOf: from the config')
+T.check(P.modelOf('vehicles/simple_traffic/sunburst2_sport.pc') == 'sunburst2' and P.modelOf(nil) == nil, 'modelOf: digits, none')
+T.check(P.nearestColour(0.95, 0.95, 0.9) == 'white' and P.nearestColour(0.02, 0.03, 0.2) == 'darkblue', 'nearestColour')
+do
+  local lg = { id = 1, model = 'van', colour = 'white' }
+  local notWanted = { id = 9 }
+  local looks = { [31] = { 'midsize', 'black' }, [32] = { 'van', 'silver' }, [33] = { 'van', 'white' } }
+  local bound = { [31] = { id = 31 }, [32] = { id = 32 }, [33] = { id = 33 } }
+  local function lookOf(id) local l = looks[id] if l then return l[1], l[2] end end
+  local plan = P.plan({ lg }, bound, {}, {}, function(id) return 100 end, function() return true end,
+    function() return false end, lookOf)
+  T.check(#plan == 1 and plan[1].id == 33, 'plan: the car of the ghost\'s model and paint: ' .. tostring(plan[1] and plan[1].id))
+  looks[33] = { 'pickup', 'white' }
+  plan = P.plan({ lg }, bound, {}, {}, function(id) return 100 end, function() return true end,
+    function() return false end, lookOf)
+  T.check(plan[1].id == 32, 'plan: else its model')
+  plan = P.plan({ lg }, bound, {}, {}, function(id) return 100 end, function(id) return id ~= 31 end,
+    function() return false end, lookOf)
+  T.check(plan[1].id == 31, 'plan: a car off the ground goes first whatever it looks like')
+end
+
 -- the game side with a stubbed game: a player driving east at 30 m/s, 4 traffic cars; they end up on the nearest
 -- ghosts, are placed and pushed, and the stock recycling stays off
 do
@@ -188,6 +210,8 @@ do
     function o:getVelocity() return self.u end
     function o:getDirectionVector() return vec3(1, 0, 0) end
     function o:queueLuaCommand(c) self.lua[#self.lua + 1] = c end
+    function o:applyClusterVelocityScaleAdd(_, _, vx, vy, vz) self.u = vec3(vx, vy, vz) self.started = true end
+    o.partConfig = 'vehicles/simple_traffic/midsize_dx.pc'
     objs[id] = o
     return o
   end
@@ -222,9 +246,10 @@ do
   T.check(st.ghosts and st.ghosts > 20 and st.real == 4, 'update: ghosts about, the 4 cars real: ' .. tostring(st.ghosts) .. ' / ' .. tostring(st.real))
   T.check(placed >= 4 and st.promoted >= 4, 'update: the cars placed on their ghosts: ' .. placed)
   T.check(vars.spawnValue == 0, 'update: the stock recycling off')
-  local pushed = 0
-  for id = 11, 14 do for _, c in ipairs(objs[id].lua) do if c:find('^push ') then pushed = pushed + 1 end end end
-  T.check(pushed >= 1, 'update: placed cars pushed to their ghost speed: ' .. pushed)
+  local started = 0
+  for id = 11, 14 do if objs[id].started then started = started + 1 end end
+  T.check(started >= 1, 'update: placed cars start at their ghost speed: ' .. started)
+  T.check(P.state.look[11] and P.state.look[11].model == 'midsize', 'update: each car looked at')
   for id = 11, 14 do
     local d = (objs[id].p - player.p):length()
     T.check(d <= P.REAL_M + 50, 'update: car ' .. id .. ' near the player: ' .. math.floor(d))

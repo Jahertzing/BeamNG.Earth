@@ -10,7 +10,8 @@ local M = {}
 
 M.FAR_M = 1300
 M.MAX = 64
-M.ONE_COLOUR = true      -- one paint per model: a shape's first load is a hitch, and ten load at once at enable
+M.ONE_COLOUR = false     -- every paint: a ghost wears its car's (population.lua); loaded one by one, PRELOAD_S apart
+M.PRELOAD_S = 0.25       -- a shape's first load is a hitch: all of them, spread out, once the population starts
 M.DYNAMIC = true         -- (farfield.lua: a static object added redraws the cached sun shadow map; dynamic ones do not)
 
 local pool = {}          -- shape -> { free = { obj... } }
@@ -18,6 +19,7 @@ local shown = {}         -- ghost -> { obj, shape }
 local shapes = nil       -- { { path, height } } the car shapes
 local serial = 0
 local enabled = false
+local preloaded, lastPreload = 0, -math.huge
 local stats = { shown = 0, created = 0 }
 
 -- Pure: the car shapes from trees' catalog (car_* groups: { {path without .dae, height}, ... }), one per model when
@@ -41,6 +43,23 @@ end
 function M.shapeFor(id, list)
   if not list or #list == 0 then return nil end
   return list[(math.floor(id or 0) % #list) + 1]
+end
+
+-- Pure: the shape in shapes (shapesFrom's) of a ghost's model and colour: its paint, else another paint of its model, else
+-- by its id. A shape's name is bne_car_<model>_<colour>.
+function M.shapeOf(g, list)
+  if g.model then
+    local other = nil
+    for _, sh in ipairs(list) do
+      local m, c = sh.path:match('bne_car_(%w+)_(%w+)%.dae$')
+      if m == g.model then
+        if c == g.colour then return sh end
+        other = other or sh
+      end
+    end
+    if other then return other end
+  end
+  return M.shapeFor(g.id, list)
 end
 
 -- Pure: the ghosts to draw: not real, within FAR_M of (px, py), the MAX nearest; poseOf(g) -> x, y (nil: none).
@@ -117,6 +136,13 @@ function M.update(pop, now, px, py)
     shapes = okT and M.shapesFrom(trees.CATALOG, M.ONE_COLOUR) or {}
     if #shapes == 0 then enabled = false return end
   end
+  if M.PRELOAD_S and preloaded < #shapes and now - lastPreload >= M.PRELOAD_S then
+    lastPreload = now
+    preloaded = preloaded + 1
+    local sh = shapes[preloaded]
+    local p = pool[sh.path]
+    if not (p and #p.free > 0) then give(sh, take(sh)) end
+  end
   local P = pop.state
   local nodes = P.graph and P.graph.nodes
   if not nodes then return end
@@ -139,7 +165,7 @@ function M.update(pop, now, px, py)
     local g = w.g
     local rec = shown[g]
     if not rec then
-      local shape = M.shapeFor(g.id, shapes)
+      local shape = M.shapeOf(g, shapes)
       local o = shape and take(shape)
       if o then rec = { obj = o, shape = shape } shown[g] = rec end
     end
@@ -170,6 +196,7 @@ end
 function M.reset()
   pool, shown, shapes = {}, {}, nil
   enabled = false
+  preloaded, lastPreload = 0, -math.huge
 end
 
 function M.status()

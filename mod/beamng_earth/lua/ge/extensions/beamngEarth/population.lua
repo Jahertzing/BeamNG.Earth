@@ -137,6 +137,47 @@ function M.pace(u1, u2, u3)
   return math.max(1 - M.SPREAD_MAX, math.min(1 + M.SPREAD_MAX, 1 + z * M.SPREAD))
 end
 
+-- ---- a car's look ----
+-- A ghost keeps the look of the car it was or will be (Jeff's drive 2026-10-30: "cars randomly swap out with other cars,
+-- its like one is traveling and it transforms into another, sometimes reseting to 0 mph"): a car leaving the real zone
+-- became a model of a random make, and one joining it another make again, standing. Now a ghost wears its car's model
+-- and nearest paint (farghosts.lua), a car joining is one of the same model where there is one, and it starts at the
+-- ghost's speed.
+M.COLOURS = { white = { 0.9, 0.9, 0.9 }, black = { 0.03, 0.03, 0.03 }, silver = { 0.55, 0.56, 0.58 },
+              darkblue = { 0.04, 0.08, 0.25 } }
+
+-- Pure: the model of a traffic car's config: 'vehicles/simple_traffic/pickup_d15_fleet.pc' -> 'pickup'.
+function M.modelOf(partConfig)
+  if type(partConfig) ~= 'string' then return nil end
+  local base = partConfig:match('([^/\\]+)%.pc$') or partConfig
+  return base:match('^(%w+)')
+end
+
+-- Pure: the name in M.COLOURS nearest (r, g, b).
+function M.nearestColour(r, g, b)
+  local best, bd = nil, math.huge
+  for name, c in pairs(M.COLOURS) do
+    local d = (c[1] - r) ^ 2 + (c[2] - g) ^ 2 + (c[3] - b) ^ 2
+    if d < bd or (d == bd and name < best) then best, bd = name, d end
+  end
+  return best
+end
+
+-- A game vehicle's look: model, colour name (either nil when it cannot be read).
+function M.lookOf(o)
+  local okM, cfg = pcall(function() return o.partConfig end)
+  local model = okM and M.modelOf(cfg) or nil
+  local colour = nil
+  pcall(function()
+    local c = o.color
+    if c then
+      local r, g, b = c.x or c.r, c.y or c.g, c.z or c.b
+      if r then colour = M.nearestColour(r, g, b) end
+    end
+  end)
+  return model, colour
+end
+
 -- ---- the population ----
 
 local P = { ghosts = {}, adj = nil, graph = nil, nextId = 0, lastTick = -math.huge, lastSwap = -math.huge,
@@ -199,8 +240,10 @@ end
 local function newGhost(from, l, s, v)
   P.nextId = P.nextId + 1
   local rnd = P.rnd
+  local look = P.looks and P.looks[1 + math.floor(rnd() * #P.looks)]   -- (the fleet's: a ghost looks like the real cars)
   return { id = P.nextId, from = from, link = l, s = s, v = v, pace = M.pace(rnd(), rnd(), rnd()),
-           lane = 1 + math.floor(rnd() * l.lanes), drivIn = l.driv }
+           lane = 1 + math.floor(rnd() * l.lanes), drivIn = l.driv,
+           model = look and look.model, colour = look and look.colour }
 end
 
 -- Seed: count ghosts spread over the graph by weight (len * lanes * density), at their road's speed.
@@ -425,9 +468,9 @@ local function place(id, g)
   if not (okF and far.showing(g)) then
     pcall(function() require('beamngEarth/navgraph').fadeIn(id) end)
   end
-  -- pushed to the ghost's speed once landed (navgraph's gentle push)
+  -- at the ghost's speed once landed (not the gentle push from 0 mph: the car was driving, as far as anyone can see)
   P.pushes = P.pushes or {}
-  P.pushes[id] = { v = g.v, at = os.clock() }
+  P.pushes[id] = { v = g.v, at = os.clock(), dx = dx, dy = dy }
   return true
 end
 
@@ -463,8 +506,9 @@ end
 -- dist(id) -> m from the player; ground(id) -> the car is on the physics ground; stuck(id) -> it has stood for long.
 -- Returns { { ghost, id, demote = ghost or nil } } for the wanted ghosts that are not real, nearest first (need: their
 -- order), at most SWAPS_PER: a free car first, then a car whose ghost is not wanted, off the ground or stuck first, then
--- the farthest.
-function M.plan(need, bound, free, want, dist, ground, stuck)
+-- the farthest; among those with the ghost's model and paint first (lookOf(id) -> model, colour; optional), then its
+-- model, so the car that takes a ghost's place looks like it.
+function M.plan(need, bound, free, want, dist, ground, stuck, lookOf)
   local donors = {}
   for _, id in ipairs(free) do donors[#donors + 1] = { id = id, rank = 0 } end
   for id, g in pairs(bound) do
@@ -478,8 +522,20 @@ function M.plan(need, bound, free, want, dist, ground, stuck)
     return (a.d or 0) > (b.d or 0)
   end)
   local out = {}
-  for i = 1, math.min(#need, #donors, M.SWAPS_PER) do
-    out[#out + 1] = { ghost = need[i], id = donors[i].id, demote = donors[i].g }
+  for i = 1, math.min(#need, M.SWAPS_PER) do
+    local g = need[i]
+    if #donors == 0 then break end
+    local pick1, score = 1, -math.huge
+    for k, d in ipairs(donors) do
+      local sc = -10 * d.rank       -- (a free car, then one off the ground or stuck, whatever it looks like)
+      if lookOf and g.model then
+        local m, c = lookOf(d.id)
+        if m == g.model then sc = sc + ((c == g.colour) and 2 or 1) end
+      end
+      if sc > score then pick1, score = k, sc end
+    end
+    local d = table.remove(donors, pick1)
+    out[#out + 1] = { ghost = g, id = d.id, demote = d.g }
   end
   return out
 end
@@ -492,8 +548,30 @@ M.STUCK_S = 60           -- a real car standing this long (40 m or more from the
 M.PLACE_MS = 3.0
 M.PLACE_WAIT_FRAMES = 20
 
+M.LAND_S = 0.15          -- a car put somewhere gets its speed this long after (the teleport has landed)
+M.GIVE_UP_S = 3
+
+-- Cars put somewhere get the ghost's speed, in the car's own frame of the road (every frame: the sooner the better).
+local function startCars(now)
+  for id, push in pairs(P.pushes or {}) do
+    local o = getObjectByID(id)
+    if not o or now - push.at > M.GIVE_UP_S then
+      P.pushes[id] = nil
+    elseif now - push.at > M.LAND_S then
+      local u = o:getVelocity()
+      if u:length() < 3 and push.v > 1 then
+        local z = u.z or 0
+        o:applyClusterVelocityScaleAdd(-1, 0, push.dx * push.v, push.dy * push.v, z)
+        P.stats.pushes = P.stats.pushes + 1
+      end
+      P.pushes[id] = nil
+    end
+  end
+end
+
 function M.update(b, gov)
   local now = os.clock()
+  if P.enabled then pcall(startCars, now) end
   if not P.enabled or not P.graph or now - P.lastTick < M.TICK_S then return end
   local dt = P.lastTick == -math.huge and 0 or math.min(1, now - P.lastTick)
   P.lastTick = now
@@ -509,7 +587,24 @@ function M.update(b, gov)
   P.graphChanged = false
   local ids = trafficIds()
   local idSet = {}
-  for _, id in ipairs(ids) do idSet[id] = true end
+  P.look = P.look or {}
+  local tdata = gameplay_traffic and gameplay_traffic.getTrafficData and gameplay_traffic.getTrafficData() or {}
+  for _, id in ipairs(ids) do
+    idSet[id] = true
+    -- (the stock respawn repaints a car at random when this is set: a car keeps its paint here)
+    if tdata[id] then tdata[id].useRandomPaint = false end
+    if not P.look[id] then
+      local o = getObjectByID(id)
+      if o then
+        local model, colour = M.lookOf(o)
+        if model then
+          P.look[id] = { model = model, colour = colour }
+          P.looks = P.looks or {}
+          P.looks[#P.looks + 1] = P.look[id]
+        end
+      end
+    end
+  end
   -- bindings of cars that are gone are dropped; the real cars' ghosts follow their cars
   local bound = {}
   for _, g in ipairs(P.ghosts) do
@@ -525,17 +620,6 @@ function M.update(b, gov)
     end
   end
   M.step(dt, pp.x, pp.y)
-  -- pushes due (the car has landed: standing after its teleport)
-  for id, push in pairs(P.pushes or {}) do
-    local o = getObjectByID(id)
-    if not o or now - push.at > 3 then
-      P.pushes[id] = nil
-    elseif now - push.at > 0.4 and o:getVelocity():length() < 3 then
-      o:queueLuaCommand(require('beamngEarth/navgraph').pushLua(push.v))
-      P.stats.pushes = P.stats.pushes + 1
-      P.pushes[id] = nil
-    end
-  end
   if now - P.lastSwap < M.SWAP_S then return end
   if gov and gov.roomFor and (P.placeWaited or 0) < M.PLACE_WAIT_FRAMES and not gov:roomFor(M.PLACE_MS) then
     P.placeWaited = (P.placeWaited or 0) + 1
@@ -567,9 +651,13 @@ function M.update(b, gov)
     function(id)
       local p, t = pos(id), P.stillSince[id]
       return t ~= nil and now - t >= M.STUCK_S and p ~= nil and (p - pp):length() >= 40
-    end)
+    end,
+    function(id) local l = P.look[id] if l then return l.model, l.colour end end)
   for _, sw in ipairs(plan) do
     if sw.demote then
+      -- the ghost goes on as what it was: the far model takes the car's make and paint
+      local l = P.look[sw.id]
+      if l then sw.demote.model, sw.demote.colour = l.model, l.colour end
       sw.demote.real = nil
       P.stats.demoted = P.stats.demoted + 1
     end
@@ -623,6 +711,7 @@ function M.reset()
   local okF, far = pcall(require, 'beamngEarth/farghosts')
   if okF then far.clear() end
   P.ghosts, P.graph, P.adj, P.pushes = {}, nil, nil, {}
+  P.look, P.looks = {}, nil
   P.lastTick, P.lastSwap = -math.huge, -math.huge
 end
 

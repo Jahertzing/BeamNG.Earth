@@ -20,6 +20,15 @@ local _, _, qz2, qw2 = F.yawQuat(0, 1)
 T.near(qz2, -math.sin(math.pi / 4), 1e-12, 'yawQuat: north: a quarter turn (conjugated, as setPosRot takes it)')
 T.near(qw2, math.cos(math.pi / 4), 1e-12, '... its w')
 
+-- a ghost wears its car's model and paint
+do
+  local two = F.shapesFrom(catalog, false)
+  T.check(F.shapeOf({ id = 1, model = 'midsize', colour = 'black' }, two).path:find('midsize_black', 1, true), 'shapeOf: its paint')
+  T.check(F.shapeOf({ id = 1, model = 'pickup', colour = 'black' }, two).path:find('pickup_white', 1, true), 'shapeOf: its model, another paint')
+  T.check(F.shapeOf({ id = 1 }, two) == F.shapeFor(1, two), 'shapeOf: no look: by its id')
+  T.check(F.shapeOf({ id = 2, model = 'etkc', colour = 'white' }, two) == F.shapeFor(2, two), 'shapeOf: a model with no shape: by its id')
+end
+
 -- which ghosts are drawn: not real, within FAR_M, the MAX nearest
 local gs = {}
 for i = 1, 10 do gs[i] = { id = i, x = i * 200 } end
@@ -56,6 +65,7 @@ do
                      { id = 3, from = 'a', link = l, s = 1900, v = 30, lane = 1 } }    -- (1.9 km off: not drawn)
   P.state.lastTick = 100
   F.reset()
+  F.PRELOAD_S, F.ONE_COLOUR = nil, true
   F.setEnabled(true)
   F.update(P, 100.5, 0, 0)
   local st = F.status()

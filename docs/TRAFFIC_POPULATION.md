@@ -33,8 +33,11 @@ With the population on:
   one made a ghost again gets a model where it was. No models built on the PC (no cars.json): none drawn.
 - A car's move (respawnVehicle) waits for a frame with PLACE_MS of room (the frame governor), PLACE_WAIT_FRAMES at most.
 
-Not yet: ghosts do not stop for signals or collide; the far models have no lights at night and may not be the same
-model and paint as the real car that takes their place.
+- A ghost keeps its car's look: a car leaving the real zone hands its ghost its model and nearest paint, a car joining is
+  one of the ghost's model where there is one, and it starts at the ghost's speed (the stock random repaint is off).
+
+Not yet: ghosts do not stop for signals or collide; the far models have no lights at night, and with no car of a
+ghost's model free the car that takes its place still looks different.
 
 Measure: `tools/traffic_bench.py ... --population` (report: `pop` promoted / demoted / recycled / spares; ahead and cut
 respawns should be zero), and `tools/traffic_probe.py --watch`. In the game: `navgraph.status().population`.
