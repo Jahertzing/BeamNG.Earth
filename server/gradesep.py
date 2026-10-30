@@ -79,13 +79,20 @@ def hook(md, key):
     return run
 
 
+HELD_CELLS = 48         # neighbour roads layers held strongly per process, the most recently asked (neighbours_hook)
+HELD_MB = 640           # ... and at most this many MB of their arrays
+
+
 def neighbours_hook(md, key):
     """(the cell's lon/lat bounds, a callable: the roads layers of the eight cells round it) that a cell's roads layer
-    carries (roads._bridge_reach: the roads under a bridge at the cell's edge). The layers are remembered weakly: held
-    strongly, every cell's layer kept its eight neighbours' alive, those theirs, and so the whole drive's decoded roads
-    stayed in memory however the layer cache evicted (the server at 3.5 GB of cell arrays after 7 km, every worker
-    growing without a plateau, 2026-10-30). A neighbour the cache let go comes back from it (MapData.cell: its disk
-    copy, milliseconds) when asked again."""
+    carries (roads._bridge_reach: the roads under a bridge at the cell's edge). The layers are remembered weakly by the
+    cell, strongly in one process-wide LRU (_hold: HELD_CELLS, HELD_MB). Held strongly by each cell, every cell's layer
+    kept its eight neighbours' alive, those theirs, and so the whole drive's decoded roads stayed in memory however
+    the layer cache evicted (the server at 3.5 GB of cell arrays after 7 km, every worker growing without a plateau,
+    2026-10-30). Held weakly alone (783574e0), a cold road tile's ~40 cells outran the layer cache (MapData.MEM_MB),
+    the references died at once and every roads._reach_beyond asked all eight again: 24,009 MapData.cell calls on 42
+    cells in 180 s, each a mirror load with its rail and lane joins, and the first tile of a cold place never finished
+    in 20 min (the overnight profile, Denver 20th St, 2026-10-30)."""
     lock = threading.Lock()
     memo = {}
 
@@ -95,11 +102,43 @@ def neighbours_hook(md, key):
             if refs is not None:
                 got = [None if r is None else r() for r in refs]
                 if all(r is None or g is not None for r, g in zip(refs, got)):
+                    _hold(md, got)
                     return got
             got = _neighbours(md, key)
             memo["n"] = [None if f is None else weakref.ref(f) for f in got]
+            _hold(md, got)
             return got
     return key.bounds(), get
+
+
+_held = {}                  # (id(md), id(layer)) -> (layer, MB), oldest first
+_held_mb = [0.0]
+_held_lock = threading.Lock()
+
+
+def _layer_mb(f):
+    """MB of a decoded layer's arrays (its own, its attrs'), roughly."""
+    n = 0
+    for v in list(vars(f).values()) + list(getattr(f, "attrs", {}).values()):
+        n += getattr(v, "nbytes", 0) if isinstance(v, np.ndarray) else 0
+    return n / 1e6
+
+
+def _hold(md, layers):
+    """The layers held strongly as the most recently used (the LRU behind neighbours_hook's weak references)."""
+    with _held_lock:
+        for f in layers:
+            if f is None:
+                continue
+            k = (id(md), id(f))
+            got = _held.pop(k, None)
+            if got is None:
+                got = (f, _layer_mb(f))
+                _held_mb[0] += got[1]
+            _held[k] = got
+        while _held and (len(_held) > HELD_CELLS or _held_mb[0] > HELD_MB):
+            k = next(iter(_held))
+            _held_mb[0] -= _held.pop(k)[1]
 
 
 _POOL = None
