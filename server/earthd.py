@@ -5393,6 +5393,9 @@ async def main_async(args):
                     for st in top))
                 for line in blockworker.trace_callers(snap, top[:3]):     # (BNGE_TRACEMALLOC > 1: who called)
                     log.info("memory: %s", line)
+                holders.tick()                                              # (BNGE_MEM_HOLDERS: who holds it)
+        import memdebug
+        holders = memdebug.Reporter()
         threading.Thread(target=trace_mem, daemon=True, name="trace-mem").start()
 
     async def sessions():

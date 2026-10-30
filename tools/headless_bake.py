@@ -124,7 +124,8 @@ FOLLOW_RETRY_S = 2.0        # after a terrain_error
 CAR_Z = 0.5                 # the car's position over the ground (the pose's z)
 SAMPLE_S = 1.0              # a samples.jsonl line this often
 AHEAD_STARVED_M = 500.0     # a wait with less than this ready ahead (load_progress "ahead") counts as the build-ahead behind
-TRACE_FRAMES = "12"         # --profile: frames tracemalloc keeps per allocation (BNGE_TRACEMALLOC; who holds the memory)
+TRACE_FRAMES = 1            # --profile: frames tracemalloc keeps per allocation (BNGE_TRACEMALLOC); --trace-frames 12 names
+                            # who holds the memory, but slowed every build ~10x (2026-10-30): only for a short leak hunt
 LISTEN_RE = re.compile(r"earthd listening on 127\.0\.0\.1:(\d+)")
 MOD_VERSION = re.search(r"MOD_VERSION = '([^']+)'", (modsim.MOD_DIR / "core.lua").read_text()).group(1)
 # both modes: never the game's cores, no map tiles, and no AI road graph (navgraph: 1.2 s a block in the road processes,
@@ -425,7 +426,7 @@ def priority_class(mode, power="normal"):
 
 
 def start_server(cmd, log_path, timeout=START_S, mode="game", profile=False, power="normal", deps_dir=None,
-                 env_extra=None):
+                 env_extra=None, trace_frames=TRACE_FRAMES, holders=False):
     """(process, port): cmd started at idle priority (mode "alone": below normal; power "max": normal), its output
     to log_path, once it listens; profile: every worker logs its memory each minute (BNGE_TRACEMALLOC); power "cool":
     the server tree pinned to cool_cpus() (its workers inherit the mask); env_extra: more of its environment (cold_env)."""
@@ -435,7 +436,9 @@ def start_server(cmd, log_path, timeout=START_S, mode="game", profile=False, pow
     env = dict(os.environ, BNGEARTH_PARENT=str(os.getpid()), PYTHONUNBUFFERED="1", BNE_REVISIT_GENS="bake")
     env.setdefault("BNGE_BUDGET", "bake")
     if profile:
-        env["BNGE_TRACEMALLOC"] = TRACE_FRAMES    # (the top allocation sites with their callers: blockworker.trace_callers)
+        env["BNGE_TRACEMALLOC"] = str(int(trace_frames))   # (> 1: the top sites' callers too, blockworker.trace_callers)
+        if holders:
+            env["BNGE_MEM_HOLDERS"] = "1"       # (who holds the large arrays: memdebug.py, every few minutes)
     if deps_dir:
         env["BNGE_BAKE_DEPS_DIR"] = deps_dir     # (the builds' dependencies recorded: bakedeps, tools/bake_deps.py)
     env.update(env_extra or {})
@@ -1203,7 +1206,8 @@ def drive_legs(a, legs, lines, routes_file, anchors, pin_m, distance, out, mode,
                 say(f"cold: the server builds everything anew into {cold} (the data caches stay warm)", flush=True)
             proc, port = start_server(cmd, log_path, mode=mode, profile=getattr(a, "profile", False), power=power,
                                       deps_dir=None if getattr(a, "no_record_deps", False) else os.path.join(out, "deps"),
-                                      env_extra=env_extra)
+                                      env_extra=env_extra, trace_frames=getattr(a, "trace_frames", TRACE_FRAMES),
+                                      holders=getattr(a, "mem_holders", False))
             say(f"server listening on {port} (log {log_path})", flush=True)
             if getattr(a, "profile", False):
                 sampler = CpuSampler(proc.pid, os.path.join(out, f"cpu{tag}.jsonl"), say=say).start()
@@ -1274,6 +1278,9 @@ def child_command(a, legs, out, mode, workers, road_processes):
         cmd.append("--no-record-deps")
     if getattr(a, "cold", False):
         cmd.append("--cold")
+    cmd += ["--trace-frames", str(getattr(a, "trace_frames", TRACE_FRAMES))]
+    if getattr(a, "mem_holders", False):
+        cmd.append("--mem-holders")
     if getattr(a, "keep_cold", False):
         cmd.append("--keep-cold")
     cmd += ["--power", getattr(a, "power", None) or "normal", "--fly", str(getattr(a, "fly", FLY_SPEED))]
@@ -1364,6 +1371,12 @@ def main(argv=None):
                          "baked items or planned anchors (the drive follows the anchors the build-ahead plans), the "
                          "subdir removed after the run (what a drive through a fresh area costs)")
     ap.add_argument("--keep-cold", action="store_true", help="--cold: keep the subdir (a second run is warm)")
+    ap.add_argument("--trace-frames", type=int, default=TRACE_FRAMES,
+                    help="--profile: frames tracemalloc keeps per allocation (default %(default)s; 8-12 names who holds "
+                         "the memory in the 'memory:' lines, at ~10x slower builds: a short leak hunt only)")
+    ap.add_argument("--mem-holders", action="store_true",
+                    help="--profile: every few minutes each process logs which objects hold its large arrays "
+                         "(memdebug.py; a few seconds' pause each time)")
     ap.add_argument("--connect", type=int, default=None, help="drive a server already listening on this port")
     ap.add_argument("--cache-dir", default=None, help="the server's cache (default: the launcher's)")
     ap.add_argument("--world-dir", default=None, help="the world folder (default: the server's)")

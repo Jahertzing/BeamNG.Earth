@@ -15,6 +15,7 @@ gradesep_spans; the ground: the DEM at DEM_ZOOM, raw (not graded).
 import logging
 import os
 import threading
+import weakref
 
 import numpy as np
 
@@ -79,16 +80,25 @@ def hook(md, key):
 
 
 def neighbours_hook(md, key):
-    """(the cell's lon/lat bounds, a callable: the roads layers of the eight cells round it, read once) that a cell's
-    roads layer carries (roads._bridge_reach: the roads under a bridge at the cell's edge)."""
+    """(the cell's lon/lat bounds, a callable: the roads layers of the eight cells round it) that a cell's roads layer
+    carries (roads._bridge_reach: the roads under a bridge at the cell's edge). The layers are remembered weakly: held
+    strongly, every cell's layer kept its eight neighbours' alive, those theirs, and so the whole drive's decoded roads
+    stayed in memory however the layer cache evicted (the server at 3.5 GB of cell arrays after 7 km, every worker
+    growing without a plateau, 2026-10-30). A neighbour the cache let go comes back from it (MapData.cell: its disk
+    copy, milliseconds) when asked again."""
     lock = threading.Lock()
     memo = {}
 
     def get():
         with lock:
-            if "n" not in memo:
-                memo["n"] = _neighbours(md, key)
-        return memo["n"]
+            refs = memo.get("n")
+            if refs is not None:
+                got = [None if r is None else r() for r in refs]
+                if all(r is None or g is not None for r, g in zip(refs, got)):
+                    return got
+            got = _neighbours(md, key)
+            memo["n"] = [None if f is None else weakref.ref(f) for f in got]
+            return got
     return key.bounds(), get
 
 

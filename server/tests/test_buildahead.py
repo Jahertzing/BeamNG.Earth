@@ -400,7 +400,8 @@ class ToolTest(unittest.TestCase):
             self.assertNotIn("--build-ahead", hb.server_command(user, 0, "/c", win=True))
         a = types.SimpleNamespace(speed=30, roads_q=1, backlog_q=1, edge_m=1, max_wait=1, ground_wait=1, ahead="off",
                                   cache_dir=None, world_dir=None, user_dir=None, rebase_m=None, profile=False, near=None,
-                                  no_record_deps=False, power=None, fly=200, cold=False, keep_cold=False)
+                                  no_record_deps=False, power=None, fly=200, cold=False, keep_cold=False,
+                                  trace_frames=1, mem_holders=False)
         cmd = hb.child_command(a, [("i25", False, None)], "/out", "alone", 2, 2)
         self.assertEqual(cmd[cmd.index("--ahead") + 1], "off")
         self.assertNotIn("--cold", cmd)
@@ -429,7 +430,8 @@ class ColdRunTest(unittest.TestCase):
             self.assertFalse(os.path.exists(sub))
         a = types.SimpleNamespace(speed=30, roads_q=1, backlog_q=1, edge_m=1, max_wait=1, ground_wait=1, ahead="on",
                                   cache_dir=None, world_dir=None, user_dir=None, rebase_m=None, profile=False, near=None,
-                                  no_record_deps=False, power=None, fly=200, cold=True, keep_cold=False)
+                                  no_record_deps=False, power=None, fly=200, cold=True, keep_cold=False,
+                                  trace_frames=1, mem_holders=False)
         cmd = hb.child_command(a, [("i25", False, None)], "/out", "alone", 2, 2)
         self.assertIn("--cold", cmd)
         self.assertNotIn("--keep-cold", cmd)
@@ -623,3 +625,78 @@ class DriveStartTest(unittest.TestCase):
             tracemalloc.stop()
             if was:
                 tracemalloc.start(1)
+
+
+class NeighbourMemoTest(unittest.TestCase):
+    """gradesep.neighbours_hook remembers the eight neighbour layers weakly: a layer the cache let go is asked again,
+    one still alive is not; strong references chained every cell's layer to the whole drive's (2026-10-30)."""
+
+    def test_neighbours_are_held_weakly_and_asked_again_when_gone(self):
+        import gc
+        import gradesep
+        import mapcells
+        import mapgeom
+        import numpy as np
+
+        def feats(tag):
+            n = np.zeros(0, np.int64)
+            f = mapgeom.Features("roads", np.array([], dtype="U1"), np.zeros(0, np.uint8), n, n, n,
+                                 np.zeros((0, 2), np.float64))
+            f.__dict__["_tag"] = tag
+            return f
+        asked = []
+        alive = {}
+
+        class MD:
+            def cell(self, k, layers, kind):
+                asked.append(str(k))
+                f = alive.get(str(k)) or feats(str(k))
+                alive[str(k)] = f
+                return types.SimpleNamespace(layers={"roads": f})
+        key = mapcells.CellKey(14, 3413, 6217)
+        bounds, get = gradesep.neighbours_hook(MD(), key)
+        self.assertEqual(bounds, key.bounds())
+        got = get()
+        self.assertEqual(len(got), 8)
+        self.assertEqual(len(asked), 8)
+        self.assertEqual(get(), got, "all alive: remembered, nothing asked")
+        self.assertEqual(len(asked), 8)
+        gone = str(got[3].__dict__["_tag"])
+        del alive[gone]
+        got = None
+        gc.collect()
+        again = get()
+        self.assertEqual(len(again), 8)
+        self.assertGreater(len(asked), 8, "a neighbour let go: asked again (from the cache)")
+        self.assertIn(gone, asked[8:])
+
+    def test_mem_holders_names_the_chain(self):
+        import memdebug
+        import numpy as np
+
+        class Holder:
+            pass
+        h = Holder()
+        h.big = {"roads": np.zeros(400000, np.float64)}         # 3.2 MB under Holder.big["roads"]
+        rows = memdebug.holders(min_mb=1.0, top=5)
+        chains = [c for _, _, c in rows]
+        self.assertTrue(any("Holder.big[roads]" in c for c in chains), chains)
+        del h
+        with mock.patch.object(memdebug, "ON", True), mock.patch.object(memdebug, "HOLDERS_S", 0.0):
+            r = memdebug.Reporter("x ")
+            r.last = 0.0
+            with self.assertLogs("earthd.memdebug", level="INFO") as cm:
+                r.tick()
+            self.assertTrue(any("memory holders" in m for m in cm.output))
+
+    def test_headless_tracing_options(self):
+        sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "tools"))
+        import headless_bake as hb
+        self.assertEqual(hb.TRACE_FRAMES, 1, "deep traces slowed every build ~10x: opt-in only")
+        a = types.SimpleNamespace(speed=30, roads_q=1, backlog_q=1, edge_m=1, max_wait=1, ground_wait=1, ahead="on",
+                                  cache_dir=None, world_dir=None, user_dir=None, rebase_m=None, profile=True, near=None,
+                                  no_record_deps=False, power=None, fly=200, cold=False, keep_cold=False,
+                                  trace_frames=8, mem_holders=True)
+        cmd = hb.child_command(a, [("i25", False, None)], "/out", "alone", 2, 2)
+        self.assertEqual(cmd[cmd.index("--trace-frames") + 1], "8")
+        self.assertIn("--mem-holders", cmd)

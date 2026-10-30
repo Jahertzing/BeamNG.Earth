@@ -224,6 +224,9 @@ def _trace_memory(every_s=60.0, top=10):
                                f"{st.size / 1e6:.0f} MB" for st in stats))
             for line in trace_callers(snap, stats[:3]):
                 log.info("memory pid %d: %s", os.getpid(), line)
+            holders.tick()
+    import memdebug
+    holders = memdebug.Reporter(f"pid {os.getpid()}: ")
     threading.Thread(target=loop, daemon=True, name="trace-mem").start()
 
 
