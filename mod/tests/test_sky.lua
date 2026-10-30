@@ -256,6 +256,11 @@ sky.setMode('real')
 check(sky.setLocalHour(21.5) == 21.5, 'set to 21:30')
 check(sky.getMode() == 'manual' and near(tod.time, (21.5 / 24 - 0.5) % 1, 1e-9) and tod.play == true
   and tod.dayLength == sky.REAL_DAY_S, 'manual, 21:30, the clock running')
+-- the +1 h / -1 h keys: from the time shown, wrapping at midnight
+check(near(sky.shiftLocalHour(1), 22.5, 1e-9) and near(tod.time, (22.5 / 24 - 0.5) % 1, 1e-9), '+1 h: 22:30')
+check(near(sky.shiftLocalHour(2), 0.5, 1e-9) and near(tod.time, (0.5 / 24 - 0.5) % 1, 1e-9), 'past midnight: 00:30')
+check(near(sky.shiftLocalHour(-1), 23.5, 1e-9), '-1 h back over midnight: 23:30')
+check(sky.shiftLocalHour('x') == nil, 'no hours: nothing')
 sky.setMode('real')
 
 -- ... live, for now only (2026-10-29: it saved Manual, so every level load came up at a stopped clock)

@@ -221,4 +221,18 @@ do -- the minimap's distance counts the whole planned route, not only the arrows
   G.addRest(rp, 0)
   T.check(rp.path[1].distToTarget == 482700, 'nothing left past the path: unchanged')
 end
+do -- the route line key: the game's ground markers option flipped, the route itself left alone
+  local savedSettings, savedGm, savedMsg = rawget(_G, 'settings'), rawget(_G, 'core_groundMarkers'), rawget(_G, 'ui_message')
+  local values, redrawn, toasts, cleared = {}, 0, {}, 0
+  settings = { getValue = function(k) return values[k] end, setValue = function(k, v) values[k] = v end }
+  core_groundMarkers = { onSettingsChanged = function() redrawn = redrawn + 1 end, setPath = function() cleared = cleared + 1 end }
+  ui_message = function(text) toasts[#toasts + 1] = text end
+  T.check(G.toggleRouteLine() == false and values[G.LINE_SETTING] == false, 'the default (unset, shown): hidden')
+  T.check(redrawn == 0 and toasts[#toasts]:find('hidden', 1, true), 'hidden: nothing redrawn, a toast')
+  T.check(G.toggleRouteLine() == true and values[G.LINE_SETTING] == true and redrawn == 1, 'again: shown, redrawn now')
+  T.check(cleared == 0, 'the route is never cleared')
+  settings = nil
+  T.check(G.toggleRouteLine() == nil, 'no game settings: nothing')
+  settings, core_groundMarkers, ui_message = savedSettings, savedGm, savedMsg
+end
 T.done('test_gps')

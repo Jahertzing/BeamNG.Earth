@@ -5,6 +5,10 @@ What changed in each release of BeamNG.Earth, newest first.
 ## Unreleased (fork)
 
 ### New
+- **Route line and clock keys** (2026-10-29): Ctrl+Alt+V hides the GPS route line on the road or shows it again (the
+  game's own "Show Inworld Navigation Groundmarkers" option; the route, the turn arrows, the minimap and the autodrive
+  go on), and Ctrl+Alt+Page Up / Page Down move the clock an hour on or back from the time it shows (live Manual, like
+  the golden hour and night keys). All three are on the Stream Deck kit's BeamNG.Earth page.
 - **Block swaps without the grass hitch** (the stutter thread, 2026-10-29). Half of the ground block swaps on the
   Frederick to Castle Rock drive were 100-250 ms frames: the grass was made again at a block change (a moved photo
   tint, or cells generated past the old block's edge), and the first draw of each newly made tinted grass Material

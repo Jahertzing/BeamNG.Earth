@@ -218,6 +218,16 @@ function M.setLocalHour(hours, by)
   return hours % 24
 end
 
+-- The clock moved dh hours on (or back, dh < 0) from the time it shows (the Stream Deck's time keys, the user,
+-- 2026-10-29: "move time forward 1 hr and back 1 hr"), live like setLocalHour (past midnight it wraps on today's date).
+-- Returns the hours set, or nil without a TimeOfDay.
+function M.shiftLocalHour(dh, by)
+  local tod = getTod()
+  dh = tonumber(dh)
+  if not tod or not dh then return nil end
+  return M.setLocalHour(((tonumber(tod.time) or 0) + 0.5) % 1.0 * 24 + dh, by)
+end
+
 -- Pure: today's (epoch's) sunset at (lat, lon) in local hours, or nil (polar).
 function M.sunsetToday(epoch, lat, lon)
   local f = M.todFields(epoch, lat, lon, realTz)

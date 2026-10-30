@@ -119,18 +119,26 @@ function M.hoursFor(which, epoch, lat, lon)
   return M.HOURS[which]
 end
 
+local function timeSet(set)
+  if set then
+    msg(string.format('Time set to %d:%02d (Real time again at the next level load, or in the settings)',
+      math.floor(set), math.floor(set % 1 * 60)), 4)
+  end
+  return set ~= nil
+end
+
 -- The sky set to golden hour / midday / night now, wherever the player is (also the Stream Deck's sky keys).
 function M.skyNow(which)
   local here = { places.here() }
   local lat, lon = here[1] or M.START.lat, here[2] or M.START.lon
   local h = M.hoursFor(which, os.time(), lat, lon)
   if not h then return false end
-  local set = sky.setLocalHour(h, 'a sky key')
-  if set then
-    msg(string.format('Time set to %d:%02d (Real time again at the next level load, or in the settings)',
-      math.floor(set), math.floor(set % 1 * 60)), 4)
-  end
-  return set ~= nil
+  return timeSet(sky.setLocalHour(h, 'a sky key'))
+end
+
+-- The clock dh hours on or back from the time it shows (the Stream Deck's +1 h / -1 h keys).
+function M.skyShift(dh)
+  return timeSet(sky.shiftLocalHour(dh, 'a sky key'))
 end
 
 ------------------------------------------------------------------------------------------

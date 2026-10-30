@@ -257,6 +257,23 @@ local function metric()
 end
 M.metric = metric
 
+-- The route line on the road on or off (the user, 2026-10-29: a Stream Deck key that "toggles only the visibility of the
+-- GPS/navigation route line"): the game's own option (Options > Gameplay > Navigation, "Show Inworld Navigation
+-- Groundmarkers", saved like it), so the route, the turn arrows, the minimap and the autodrive go on. Returns the state
+-- now, or nil without the game's settings.
+M.LINE_SETTING = 'showNavigationGroundmarkers'
+function M.toggleRouteLine()
+  local st = rawget(_G, 'settings')
+  if not (st and st.getValue and st.setValue) then return nil end
+  local on = st.getValue(M.LINE_SETTING) == false            -- (nil: the default, shown)
+  pcall(st.setValue, M.LINE_SETTING, on)
+  local gm = rawget(_G, 'core_groundMarkers')                -- (drawn again now, not after the next metre)
+  if on and gm and gm.onSettingsChanged then pcall(gm.onSettingsChanged) end
+  local m = rawget(_G, 'ui_message')
+  if m then pcall(m, on and 'Route line shown' or 'Route line hidden (the GPS goes on)', 3, 'beamngEarthGps') end
+  return on
+end
+
 function M.status()
   if not dest then return nil end
   local via = dest.vias[1]
