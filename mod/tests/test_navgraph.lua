@@ -440,4 +440,24 @@ do
   jsonDecode, readFile = jd, rf
 end
 
+-- crashes: only the car's own, and no fleeing or chasing
+do
+  local onOther = function() return 'stock' end
+  local r = setmetatable({ name = 'standard', driver = { damageAction = 'fleePostCrash' } },
+                         { __index = { onOtherCrashDamage = onOther, onOtherCollision = onOther } })
+  N.calm({ role = r })
+  T.check(r:onOtherCrashDamage() == nil and r:onOtherCollision() == nil, 'calm: a crash near a car is not its business')
+  T.check(r.driver.damageAction == 'stop', 'calm: no fleeing: ' .. r.driver.damageAction)
+  r.driver.damageAction = 'followPostCrash'
+  N.calm({ role = r })
+  T.check(r.driver.damageAction == 'stop', 'calm: no chasing, after a refresh too')
+  local cop = { name = 'police', driver = { damageAction = 'followPostCrash' } }
+  N.calm({ role = cop })
+  T.check(cop.driver.damageAction == 'followPostCrash' and not rawget(cop, 'onOtherCollision'), 'calm: police as they are')
+  local player = { name = 'standard', driver = { damageAction = 'none' } }
+  N.calm({ role = player })
+  T.check(player.driver.damageAction == 'none', 'calm: not an AI: none stays')
+  N.calm({}) N.calm(nil)
+end
+
 T.done('test_navgraph')

@@ -29,11 +29,13 @@ M.IDM = { T = 1.4, a = 1.4, b = 2.0, s0 = 4, len = 5 }
 M.DENSITY = { { 27, 1.9 }, { 20, 1.5 }, { 15, 1.0 }, { 11, 0.5 }, { 0, 0.2 } }
 -- ... per REAL_REF real cars: more of them, more ghosts, the real zone stays this size (the traffic mode sets their number)
 M.REAL_REF = 10
--- A ghost driving the other way on a divided road (a one-way edge, against the player's way) counts this many times its
--- distance when choosing the real cars: it passes at twice the speed, so it took a real car for ~15 s and gave it back,
--- half the swaps; and across a median it needs no physics, its far model is enough.
-M.ONCOMING_FACTOR = 3
-M.ONCOMING_MS = 15       -- ... with the player faster than this
+-- A ghost driving the other way on a divided road (a one-way edge, against the player's way) is not made real while the
+-- player is faster than this: across a median its far model is enough, and at twice the speed it took a real car for
+-- seconds and gave it back. Counting it 3 times its distance (bench12) only made them land later: 115 of the 154 swaps
+-- under 100 m of the player were these.
+M.ONCOMING_MS = 15
+M.WRONG_WAY_SIDE_M = 4   -- ... but one this near the player's line, this near, is on the player's own road (wrong way)
+M.WRONG_WAY_NEAR_M = 150
 M.MIN_DRIVABILITY = 0.5  -- (alleys and living streets carry none: they are a way through, not a home)
 
 -- ---- the graph ----
@@ -396,12 +398,18 @@ function M.step(dt, px, py)
   end
 end
 
+-- Pure: is a ghost on edge link heading (dx, dy), (rx, ry) from the player, one to leave as a far model (ONCOMING_MS)?
+function M.oncoming(link, dx, dy, rx, ry, vx, vy)
+  local vl = vx and math.sqrt(vx * vx + vy * vy) or 0
+  if vl <= M.ONCOMING_MS or not link.oneWay or (dx * vx + dy * vy) / vl >= -0.5 then return false end
+  return math.abs(rx * vy - ry * vx) / vl > M.WRONG_WAY_SIDE_M or rx * rx + ry * ry > M.WRONG_WAY_NEAR_M ^ 2
+end
+
 -- Pure: which ghosts should be real: the k nearest (px, py) that stand on the physics ground box b (GROUND_IN_M inside)
 -- within REAL_M; a ghost that is real now stays so while it is within KEEP_FACTOR of the k-th one's distance and on the
--- ground. (vx, vy): the player's velocity (optional): ONCOMING_FACTOR. Returns a set { ghost = true }.
+-- ground. (vx, vy): the player's velocity (optional): M.oncoming. Returns a set { ghost = true }.
 function M.chooseReal(ghosts, nodes, k, px, py, b, left, vx, vy)
   local cand = {}
-  local vl = vx and math.sqrt(vx * vx + vy * vy) or 0
   for _, g in ipairs(ghosts) do
     local x, y = M.pose(nodes, g.from, g.link, g.s, g.lane, left)
     local onGround = x ~= nil and (not b or (x >= b[1] + M.GROUND_IN_M and x <= b[3] - M.GROUND_IN_M and
@@ -409,10 +417,7 @@ function M.chooseReal(ghosts, nodes, k, px, py, b, left, vx, vy)
     local d2 = x and (x - px) ^ 2 + (y - py) ^ 2 or math.huge
     if onGround and d2 <= M.REAL_M ^ 2 then
       local _, _, _, dx, dy = M.pose(nodes, g.from, g.link, g.s, g.lane, left)
-      if vl > M.ONCOMING_MS and g.link.oneWay and (dx * vx + dy * vy) / vl < -0.5 then
-        d2 = d2 * M.ONCOMING_FACTOR ^ 2
-      end
-      cand[#cand + 1] = { g = g, d2 = d2 }
+      if not M.oncoming(g.link, dx, dy, x - px, y - py, vx, vy) then cand[#cand + 1] = { g = g, d2 = d2 } end
     end
   end
   table.sort(cand, function(a, b2) return a.d2 < b2.d2 end)
@@ -572,6 +577,60 @@ M.GOT_IT = 0.6           -- quarter of the cars crawling after they joined), to 
 M.HOLD_S = 0.6           -- ... and watched this long though it had it at once (it is the reset that takes it away)
 
 -- Cars put somewhere get the ghost's speed, in the car's own frame of the road (every frame: the sooner the better).
+-- Traffic cars that lose STOP_MS of speed within STOP_DT_S, with every vehicle near them at that moment (parked cars are
+-- not in tools/traffic_probe.py's rows, and it looks only every 2 s): M.WATCH_STOPS is set by the probe. The list is
+-- P.stops, at most STOP_MAX.
+M.WATCH_STOPS = false
+M.STOP_MS = 9
+M.STOP_DT_S = 0.4
+M.STOP_NEAR_M = 45
+M.STOP_MAX = 200
+
+-- Pure: a car's speed v at time now against its recent speeds seen = { { t, v } ... } (oldest first, trimmed to STOP_DT_S
+-- here): the speed lost if that is a sudden stop, else nil.
+function M.suddenStop(seen, now, v)
+  while seen[1] and now - seen[1][1] > M.STOP_DT_S do table.remove(seen, 1) end
+  local top = 0
+  for _, s in ipairs(seen) do top = math.max(top, s[2]) end
+  seen[#seen + 1] = { now, v }
+  if top - v >= M.STOP_MS then
+    for i = #seen, 1, -1 do seen[i] = nil end
+    return top - v
+  end
+end
+
+local function watchStops(now)
+  P.seen = P.seen or {}
+  P.stops = P.stops or {}
+  local data = gameplay_traffic.getTrafficData() or {}
+  local me = be:getPlayerVehicleID(0)
+  for id in pairs(data) do
+    local o = id ~= me and getObjectByID(id)
+    if o then
+      local p, u = o:getPosition(), o:getVelocity()
+      P.seen[id] = P.seen[id] or {}
+      local lost = M.suddenStop(P.seen[id], now, u:length())
+      if lost and #P.stops < M.STOP_MAX then
+        local near = {}
+        for _, n in ipairs(getAllVehicles()) do
+          local q = n:getPosition()
+          local d = (q - p):length()
+          if n:getID() ~= id and d <= M.STOP_NEAR_M then
+            local w = n:getVelocity()
+            near[#near + 1] = { id = n:getID(), x = q.x, y = q.y, z = q.z, d = d, v = w:length(),
+                                kind = n:getID() == me and 'player' or data[n:getID()] and 'traffic' or 'other',
+                                on = n:getActive() }
+          end
+        end
+        local t = data[id]
+        local r = t and t.role
+        P.stops[#P.stops + 1] = { t = now, id = id, x = p.x, y = p.y, z = p.z, lost = lost, v = u:length(), vz = u.z,
+                                  dmg = t and t.damage, state = r and r.state, action = r and r.actionName, near = near }
+      end
+    end
+  end
+end
+
 local function startCars(now)
   for id, push in pairs(P.pushes or {}) do
     local o = getObjectByID(id)
@@ -594,6 +653,7 @@ end
 function M.update(b, gov)
   local now = os.clock()
   if P.enabled then pcall(startCars, now) end
+  if P.enabled and M.WATCH_STOPS then pcall(watchStops, now) end
   if not P.enabled or not P.graph or now - P.lastTick < M.TICK_S then return end
   local dt = P.lastTick == -math.huge and 0 or math.min(1, now - P.lastTick)
   P.lastTick = now

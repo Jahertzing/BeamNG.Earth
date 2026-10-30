@@ -96,7 +96,7 @@ gs[3].real = 77      -- ghost 3 is real now, a little farther than the 2nd
 local want2 = P.chooseReal(gs, g.nodes, 2, -1500, 0, box, false)
 T.check(want2[gs[3]] and want2[gs[1]] and not want2[gs[2]], 'chooseReal: a real one near the edge of the set stays')
 
--- a ghost the other way on a divided road counts ONCOMING_FACTOR times its distance: the same-way cars farther are real
+-- a ghost the other way on a divided road stays a far model at speed, whatever else there is
 do
   local gn = { nodes = { a = { 0, 0, 0, 5 }, b = { 2000, 0, 0, 5 }, c = { 2000, 40, 0, 5 }, d = { 0, 40, 0, 5 } },
                edges = { { 'a', 'b', 1, 3, 0, 31, 1, 5 }, { 'c', 'd', 1, 3, 0, 31, 1, 5 } } }
@@ -108,8 +108,24 @@ do
   T.check(w0[opp] and not w0[same], 'chooseReal: no velocity: the nearest')
   local w1 = P.chooseReal({ same, opp }, gn.nodes, 1, 500, 0, nil, false, 30, 0)
   T.check(w1[same] and not w1[opp], 'chooseReal: at speed: the car going the same way, not the one across the median')
+  local w3 = P.chooseReal({ same, opp }, gn.nodes, 2, 500, 0, nil, false, 30, 0)
+  T.check(w3[same] and not w3[opp], 'chooseReal: at speed: not with a real car to spare either')
+  local ox, oy = P.pose(gn.nodes, opp.from, opp.link, opp.s, opp.lane, false)
+  local w4 = P.chooseReal({ opp }, gn.nodes, 1, ox - 100, oy + 1, nil, false, 30, 0)
+  T.check(w4[opp], 'chooseReal: one on the player\'s own line, near: the player is on the wrong side, it is real')
   local w2 = P.chooseReal({ same, opp }, gn.nodes, 1, 500, 0, nil, false, 5, 0)
   T.check(w2[opp], 'chooseReal: at a crawl: nearest again')
+end
+
+-- a sudden stop: the speed lost within STOP_DT_S, once
+do
+  local seen = {}
+  T.check(P.suddenStop(seen, 0, 33) == nil and P.suddenStop(seen, 0.1, 32) == nil, 'suddenStop: at speed: none')
+  T.check(P.suddenStop(seen, 0.2, 31) == nil, 'suddenStop: braking: none')
+  T.check(P.suddenStop(seen, 0.3, 15) == 18, 'suddenStop: 18 m/s gone in 0.3 s')
+  T.check(P.suddenStop(seen, 0.35, 14) == nil, 'suddenStop: once')
+  local slow = {}
+  for i = 0, 40 do T.check(P.suddenStop(slow, i * 0.1, 33 - i * 0.6) == nil, 'suddenStop: hard braking is not one') end
 end
 
 -- the swaps: free cars first, then cars off the ground or stuck, then the farthest

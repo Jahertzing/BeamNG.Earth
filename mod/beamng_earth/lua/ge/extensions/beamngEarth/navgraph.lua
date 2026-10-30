@@ -800,6 +800,21 @@ local putAhead = {}     -- car id -> true: its last respawn was ours, ahead alon
 local pushes = {}       -- car id -> { v = m/s, at = os.clock() }: a car put ahead, to be pushed to v once it has landed
 M.PUSH_WAIT_S = 3       -- a teleport not seen this long after: no push
 local lastTeleport = {} -- car id -> os.clock() it was last teleported
+-- The stock standard role reacts to crashes as in a town. A car within 60 m of a crash, on any road, in front of or
+-- looking at it, stops: pullOver is ai.setStopPoint in its lane (the stock note says it may not pull over) with the
+-- braking distance at 1.5 times its aggression, at 75 mph on I-25 too, for up to 30 s (bench12's 345 samples of cars in
+-- traffic mode with a 0 target, the 45 s stop at 40.0746, and the crashes behind them). A car hit a few times flees with
+-- ai.driveInLane off and aggression up to 1 (burnouts, cars going sideways: the user's drive notes) or follows and
+-- chases what hit it. Here a car reacts only to its own crash, and only by pulling over.
+local function ignore() end
+function M.calm(tv)
+  local r = tv and tv.role
+  if not r or r.name ~= 'standard' then return end
+  r.onOtherCrashDamage, r.onOtherCollision = ignore, ignore
+  local d = r.driver
+  if d and d.damageAction and d.damageAction ~= 'none' then d.damageAction = 'stop' end
+end
+
 local function guard(b, all)
   local gt = gameplay_traffic
   if not gt or gt.getState() ~= 'on' then return end
@@ -810,8 +825,9 @@ local function guard(b, all)
   -- paused: nothing moves, nobody is stuck (the clocks start again after it)
   local paused = simTimeAuthority and simTimeAuthority.getPause and simTimeAuthority.getPause()
   if paused then table.clear(stillSince) end
-  for id in pairs(gt.getTrafficData() or {}) do
+  for id, tv in pairs(gt.getTrafficData() or {}) do
     if id ~= me then
+      M.calm(tv)
       local o = getObjectByID(id)
       if o and o.queueLuaCommand and M.dueInstall(installedAt[id], now, o:getActive()) then
         paced[id] = paced[id] or M.paceFactor(math.random(), math.random(), math.random())

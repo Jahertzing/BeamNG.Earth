@@ -18,7 +18,7 @@ With the population on:
   It sets the size of the real zone: about 450 m round the player on I-25 at 10 cars. At twice that (bench11) the zone
   was 200 m and cars swapped 45 times a minute, in plain sight. No ghost on a road of drivability under 0.5.
 - The **nearest K ghosts on the ground** (K: the game's traffic cars) are real, a ghost the other way on a divided road
-  counting `ONCOMING_FACTOR` times its distance at speed: those stay far models. A car swaps between ghost and real where
+  stays a far model while the player is at speed (`ONCOMING_MS`). A car swaps between ghost and real where
   it is: a demoted car's ghost carries on from the car's place and speed; a promoted ghost's car is put on its spot
   (`gameplay_traffic.respawnVehicle`) and given its speed, again until it holds (`GOT_IT`, `HOLD_S`, `GIVE_UP_S`: the
   vehicle reset can land after the first go). Hysteresis (`KEEP_FACTOR`)

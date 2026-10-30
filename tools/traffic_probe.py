@@ -144,6 +144,10 @@ def flags(r):
     return out
 
 
+# the population's list of sudden stops (population.lua WATCH_STOPS)
+STOPS = "return jsonEncode(require('beamngEarth/population').state.stops or {})"
+
+
 def snapshot():
     run(ASK)
     time.sleep(0.5)
@@ -162,6 +166,7 @@ def watch(every, minutes, path):
     end = time.time() + minutes * 60
     counts, where = collections.Counter(), collections.Counter()
     n = 0
+    run("require('beamngEarth/population').WATCH_STOPS = true")
     with open(path, "a", encoding="utf-8") as f:
         while time.time() < end:
             t0 = time.time()
@@ -180,6 +185,10 @@ def watch(every, minutes, path):
                     where[(k, road_of(r))] += 1
             time.sleep(max(0.0, every - (time.time() - t0)))
     print(f"{n} car rows in {path}")
+    stops = json.loads(run(STOPS))
+    with open(path + ".stops.json", "w", encoding="utf-8") as f:
+        json.dump(stops, f, indent=1)
+    print(f"{len(stops)} sudden stops in {path}.stops.json")
     for k, v in counts.most_common():
         print(f"  {k:9} {v:5}  " + ", ".join(f"{road} {c}" for (kk, road), c in where.most_common() if kk == k))
 
