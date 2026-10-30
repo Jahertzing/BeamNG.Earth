@@ -272,9 +272,44 @@ do -- dryNow while the rain fades out: held dry until it stopped; steady or new 
   W.rainNow, W.rainT = 0.3, 1      -- (a new rain chosen while the old one fades)
   for _ = 1, 60 do F.update(0.5, true) end
   check(F.surface().wet > 0, 'a new rain building up: wet again: ' .. F.surface().wet)
+  -- 9 then W while a forced rain still falls: the weather chosen just after holds the road dry again
+  W.rainNow, W.rainT = 1, 1
+  F.dryNow()
+  for _ = 1, 20 do F.update(0.5, true) end          -- (10 s: the forced rain goes on, the hold lets go)
+  local wetBefore = F.surface().wet
+  F.dryNow()
+  F.real()
+  W.rainT = 0
+  for i = 1, 180 do W.rainNow = 0.97 ^ i; F.update(0.5, true) end
+  check(wetBefore > 0 and F.surface().wet == 0, 'dry key then real weather mid-rain: held dry while it fades: '
+    .. F.surface().wet)
   W.rainNow, W.rainT = 0, 0
   F.dryNow()
   F.update(0.5, true)
+end
+do -- setSurface(nil): the weather's own state back, not the fixed one
+  F.update(0.5, true)
+  local before = F.surface()
+  F.setSurface({ snow = 1, wet = 0.4 })
+  F.update(0.5, true)
+  check(F.surface().snow == 1, 'fixed: snow')
+  F.setSurface(nil)
+  F.update(0.5, true)
+  check(F.surface().snow == before.snow and F.surface().wet <= before.wet + 1e-9, 'setSurface(nil): back as before ('
+    .. F.surface().snow .. ')')
+end
+do -- the snow's albedo: eased toward the night's under the street lights
+  package.loaded['beamngEarth/nightlights'] = { night = true }
+  F.setSurface({ snow = 0.5 })
+  for _ = 1, 80 do F.update(0.25, true) end
+  local a = tonumber(consts['$bneWx4']:match('^(%S+)'))
+  near(a, F.LOOK.snowAlbedoNight, 0.01, 'night: the night albedo')
+  package.loaded['beamngEarth/nightlights'].night = false
+  F.update(0.25, true)
+  local b = tonumber(consts['$bneWx4']:match('^(%S+)'))
+  check(b > a and b < F.LOOK.snowAlbedo, 'day again: eased, not jumped (' .. b .. ')')
+  package.loaded['beamngEarth/nightlights'] = nil
+  F.setSurface(nil)
 end
 do -- deep snow buries the 3D grass; it comes back once the snow thinned
   local calls = {}
@@ -311,7 +346,7 @@ do -- a thunderstorm: strikes flash, thunder plays later
   local played = {}
   Engine = { Audio = { playOnce = function(_, path, o) played[#played + 1] = { path = path, v = o.volume } end } }
   FS = { fileExists = function() return true end }
-  W.storm, W.rainNow = true, 1
+  W.storm, W.rainNow, W.rainT = true, 1, 1
   F.setSurface({ wet = 1 })
   local flashes = 0
   for _ = 1, 240 * 4 do

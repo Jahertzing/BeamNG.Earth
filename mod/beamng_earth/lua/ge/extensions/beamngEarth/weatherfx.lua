@@ -181,6 +181,8 @@ end
 ------------------------------------------------------------------------------------------
 -- runtime state
 
+M.HOLD_AFTER_S = 60       -- a weather chosen this soon after dryNow keeps the roads held dry while the old one fades
+M.ALBEDO_EASE_S = 5
 M.HOLD_FADE = 0.01        -- dryNow's hold: the fall counts as fading while its target is this far under it
 M.BURY_AT, M.UNBURY_AT = 0.6, 0.35  -- the 3D grass goes under the snow at this cover, comes back under this
 M.CHECK_S = 0.5           -- the state, the grip and the effect's switch (the shader constants: every frame)
@@ -189,6 +191,9 @@ local surface = { wet = 0, puddle = 0, snow = 0, ice = 0 }
 local seeded = false      -- the state started from the weather at this level's start
 local override = nil      -- setSurface's fixed state (the probe's, the console's)
 local dryHold = false     -- dryNow: the rain still fading out wets nothing (until it stops, or a new one comes)
+local dryAt = -math.huge  -- (when dryNow was pressed: the clock)
+local beforeOverride = nil  -- the weather's state when setSurface fixed one (back with setSurface(nil))
+local albedoNow = nil     -- the snow albedo eased between day and night
 local active = false      -- in our level, the weather on
 local clock, checkAt = 0, 0
 local opts = { grip = true, surfaces = true }
@@ -309,7 +314,9 @@ M.LOOK = {
   reflect = 0.9,          -- reflection strength (times the Fresnel term)
   reflectM = 350,         -- reflections out to this far (m)
   snowGain = 1.6,         -- the snow's ambient share: times the brightness of what it covers (in the shade, at night)
-  snowAlbedo = 0.75,      -- ... plus the light buffer (the sun, the lamps) times this (fresh snow ~0.8)
+  snowAlbedo = 0.75,      -- ... plus the light buffer (the sun, the lamps) times this (fresh snow ~0.8) ...
+  snowAlbedoNight = 0.5,  -- ... at night this (the builder's retest 2026-10-30: 0.75 under the lamps was very bright,
+                          -- 0.5 kept the road's texture near them); eased between the two over ALBEDO_EASE_S
   snowLight = 1.0,        -- the light buffer's weight (0: the ambient share only; was all of it before 2026-10-30, and
                           -- the snow on a dark road stayed dark grey: the builder's first drive)
   wetDark = 0.55,         -- a soaked rough surface's brightness factor
@@ -393,7 +400,7 @@ end
 
 -- Pure: the shader's constants for state s, the camera (x, y, z), time t (s), rain now (0..1), lightning flash
 -- (0..), in a tunnel or not, debug view. Strings as setShaderConst takes them.
-function M.shaderConsts(s, cam, t, rain, flash, tunnel, dbg, look)
+function M.shaderConsts(s, cam, t, rain, flash, tunnel, dbg, look, albedo)
   look = look or M.LOOK
   local fmt = function(a, b, c, d) return string.format('%.6g %.6g %.6g %.6g', a, b, c, d) end
   local wet, puddle, snow = s.wet, s.puddle, s.snow
@@ -404,7 +411,7 @@ function M.shaderConsts(s, cam, t, rain, flash, tunnel, dbg, look)
     ['$bneWx1'] = fmt(cam[1], cam[2], cam[3], tunnel and 0 or rain),
     ['$bneWx2'] = fmt(flash, look.reflect, look.reflectM, dbg and 1 or 0),
     ['$bneWx3'] = fmt(look.snowGain, look.wetDark, look.skyFlash, look.groundFlash),
-    ['$bneWx4'] = fmt(look.snowAlbedo or 0.75, look.snowLight or 1, 0, 0),
+    ['$bneWx4'] = fmt(albedo or look.snowAlbedo or 0.75, look.snowLight or 1, 0, 0),
   }
 end
 
@@ -522,6 +529,7 @@ function M.update(dt, inOurLevel)
       seeded = true
     end
   end
+  local falling = e.rain   -- (what the sky does: the storm and the rings go on while the road is held dry)
   if dryHold then
     -- held dry only while what falls is fading out: let go once it stopped, or when it holds steady or builds up
     -- again (a weather chosen with rain, the real rain going on: the roads get wet again as they would)
@@ -538,7 +546,7 @@ function M.update(dt, inOurLevel)
     M.stepSurface(surface, e, dt)
   end
   updateBuried(surface)
-  local flash = opts.surfaces and updateStorm(w.stormNow and w.stormNow() and e.rain > 0, dt) or updateStorm(false, dt)
+  local flash = opts.surfaces and updateStorm(w.stormNow and w.stormNow() and falling > 0, dt) or updateStorm(false, dt)
   if clock >= checkAt then
     checkAt = clock + M.CHECK_S
     local ok, err = pcall(updateGrip, surface)
@@ -549,7 +557,11 @@ function M.update(dt, inOurLevel)
     local x, y, z = cameraXYZ()
     local pfx = scenetree.findObject(M.PFX)
     if pfx and x then
-      local consts = M.shaderConsts(surface, { x, y, z }, clock, e.rain, flash, inTunnel(x, y, z), debugView)
+      local nl = package.loaded['beamngEarth/nightlights']
+      local want = (nl and nl.night == true) and M.LOOK.snowAlbedoNight or M.LOOK.snowAlbedo
+      albedoNow = albedoNow and (albedoNow + (want - albedoNow) * math.min(1, dt / M.ALBEDO_EASE_S)) or want
+      local consts = M.shaderConsts(surface, { x, y, z }, clock, falling, flash, inTunnel(x, y, z), debugView, nil,
+        albedoNow)
       for k, v in pairs(consts) do pfx:setShaderConst(k, v) end
     end
   end
@@ -569,7 +581,8 @@ function M.onLevel()
   M.restore()
   surface = { wet = 0, puddle = 0, snow = 0, ice = 0 }
   seeded, grip.saved, grip.typeIds, grip.at = false, {}, {}, -math.huge
-  buried, dryHold = false, false     -- (the grass's own state went with the level: groundcover.reset)
+  buried, dryHold, dryAt = false, false, -math.huge  -- (the grass's own state went with the level: groundcover.reset)
+  override, beforeOverride, albedoNow = nil, nil, nil
   storm.thunder = {}
   clock, checkAt = 0, 0
   pfxOn = false                     -- (the level's objects went with it)
@@ -584,6 +597,9 @@ M.NAMES = { clear = 'Clear', cloudy = 'Cloudy', drizzle = 'Drizzle', rain = 'Rai
 local function chosen(name)
   local w = weather()
   if not (w and w.force) then return nil end
+  -- (9 then W while a forced rain still fell: the rain went on wetting for the seconds between, the hold let go, and
+  -- the road was 53 % wet after W, the builder's retest; a weather chosen just after dryNow holds again)
+  if clock - dryAt < M.HOLD_AFTER_S then dryHold = true end
   local now = w.force(name)
   if now then toast('Weather: ' .. (M.NAMES[now] or now) .. ' (Ctrl+Alt+Shift+W: real weather again)')
   else toast('Weather: real weather where you are') end
@@ -605,13 +621,21 @@ function M.real() return chosen(nil) end
 -- 23 % in the 90 s after this, and then take half an hour to dry.
 function M.dryNow()
   surface = { wet = 0, puddle = 0, snow = 0, ice = 0 }
-  dryHold = true
+  override, beforeOverride = nil, nil
+  dryHold, dryAt = true, clock
   toast('Roads dry again')
 end
 
 -- A fixed ground state (the look probe's, the console's): { wet, puddle, snow, ice } 0..1, nil = the weather's again.
 function M.setSurface(s)
-  if s == nil then override = nil; return end
+  if s == nil then
+    -- the weather's own state again, as it was before (the fixed one does not stay on the ground: the builder's
+    -- retest left 'snow 99 %' after setSurface(nil))
+    if override and beforeOverride then surface = beforeOverride end
+    override, beforeOverride = nil, nil
+    return
+  end
+  if not override then beforeOverride = M.surface() end
   override = {}
   for _, k in ipairs({ 'wet', 'puddle', 'snow', 'ice' }) do override[k] = clamp(num(s[k], 0), 0, 1) end
 end
