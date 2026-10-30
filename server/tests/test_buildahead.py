@@ -700,3 +700,24 @@ class NeighbourMemoTest(unittest.TestCase):
         cmd = hb.child_command(a, [("i25", False, None)], "/out", "alone", 2, 2)
         self.assertEqual(cmd[cmd.index("--trace-frames") + 1], "8")
         self.assertIn("--mem-holders", cmd)
+
+
+class StagesTest(unittest.TestCase):
+    def test_a_slow_tile_logs_its_stages_at_info_a_quick_one_at_debug(self):
+        import logging
+        import blockworker
+        st = blockworker.Stages()
+        st.mark("cells")
+        st.mark("build_tile")
+        self.assertEqual([n for n, _ in st.parts], ["cells", "build_tile"])
+        self.assertTrue(all(dt >= 0 for _, dt in st.parts))
+        lg = logging.getLogger("test.stages")
+        with self.assertLogs(lg, level="DEBUG") as cm:
+            st.report("road tile 1_2", lg)
+        self.assertTrue(cm.output[0].startswith("DEBUG"), cm.output)
+        self.assertIn("road tile 1_2 stages (", cm.output[0])
+        self.assertIn("cells ", cm.output[0])
+        st.t0 -= blockworker.SLOW_TILE_S + 1.0                # (as if it had taken that long)
+        with self.assertLogs(lg, level="INFO") as cm:
+            st.report("road tile 1_2", lg)
+        self.assertTrue(cm.output[0].startswith("INFO"), cm.output)

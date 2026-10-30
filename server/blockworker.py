@@ -121,6 +121,33 @@ class _State:
 
 ANCHORS_KEPT = 3                # (the car's anchor, the build-ahead's phantom one ahead, and one more)
 SIGNALS_MARGIN_M = 60.0         # m around a road tile its junctions' mapped traffic signals are taken from
+SLOW_TILE_S = 5.0               # a road tile slower than this logs its stages at INFO (Stages; debug otherwise)
+
+
+class Stages:
+    """Where a build's time went: mark(name) closes a stage; report(what) logs them (INFO when the whole took more
+    than SLOW_TILE_S, debug otherwise): "road tile 3_-2 stages (18.2 s): cells 2.1 plans 9.4 ...". The cold road tiles
+    of 2026-10-30 took ~18 s each against 0.5 s warm, and the worker's CPU-by-kind line could not say which stage."""
+
+    def __init__(self):
+        self.t0 = self.last = time.perf_counter()
+        self.parts = []
+
+    def mark(self, name):
+        now = time.perf_counter()
+        self.parts.append((name, now - self.last))
+        self.last = now
+
+    def total(self):
+        return time.perf_counter() - self.t0
+
+    def text(self):
+        return " ".join(f"{n} {dt:.1f}" for n, dt in self.parts)
+
+    def report(self, what, log_=None):
+        total = self.total()
+        (log_ or log).log(logging.INFO if total >= SLOW_TILE_S else logging.DEBUG, "%s stages (%.1f s): %s", what,
+                          total, self.text())
 BARRIER_HOMES_MARGIN_M = 150.0  # m around a road tile its residential land use is taken from (barriers.py: noise walls)
 WATER_BED_M = 0.05           # ground carved deeper than this under the water gets the bed layer (MUD)
 
@@ -664,6 +691,7 @@ def _roads_tile(aid, lat, lon, zoom, tx, ty, out_dir, vfs_dir, sidewalks, lift, 
     import roadmesh as roadmeshmod
     import roads as roadsmod
     frame = geodesy.EnuFrame(lat, lon)
+    stages = Stages()                   # (where a slow tile's time went: the cold tiles of 2026-10-30 took ~18 s)
     # everything the tile will ask for, fetched at once (one after another, a fresh place's first tile took ~1 min)
     _s.md.warm(roadsmod.tile_needs(frame, tx, ty, buildings, _s.widths is not None,
                                    1 + seacarvemod.LINE_CELLS if _s.sea is not None else 0))
@@ -676,10 +704,15 @@ def _roads_tile(aid, lat, lon, zoom, tx, ty, out_dir, vfs_dir, sidewalks, lift, 
     pkeys = roadsmod.cells_of_tile(frame, tx, ty, roadsmod.POCKET_REACH_M)
     pocket_cells = cells if list(pkeys) == list(keys) else \
         [_s.md.cell(k, layers=("roads",), kind="demand").layers.get("roads") for k in pkeys]
+    stages.mark("cells")
 
     def elev(la, lo):           # the physics ground (lifted under roads: grading.ROAD_LIFT)
         z = ground(frame, la, lo, _s.dem.sample(la, lo, zoom))
         return g.apply(la, lo, z, gradingmod.ROAD_LIFT) if g is not None else z
+    if g is not None and hasattr(g, "warm"):     # (the cells' road plans, the cold start's cost, counted apart)
+        for k in keys:
+            g.warm(k)
+        stages.mark("plans")
     bridges = _bridges(aid, frame, elev)
     tunnels = tunnel_profiles(aid, frame, elev, g)
     walks = []
@@ -700,6 +733,7 @@ def _roads_tile(aid, lat, lon, zoom, tx, ty, out_dir, vfs_dir, sidewalks, lift, 
         items = buildingsmod.road_tile_items(frame, tx, ty, _s.md, elev, decks=_tile_decks(bridges, cells, tx, ty),
                                              skip=skip)
         town = buildingsmod.coverage(items) < buildingsmod.POLES_COVERAGE
+    stages.mark("profiles+items")
     rwalls = []
     rbars = []                          # highway barriers (barriers.py), drawn with the retaining walls
     import barriers as barriersmod
@@ -732,6 +766,7 @@ def _roads_tile(aid, lat, lon, zoom, tx, ty, out_dir, vfs_dir, sidewalks, lift, 
                                  barrier_homes=barriersmod.residential_for(
                                      _s.md, frame, roadsmod.cells_of_tile(frame, tx, ty, BARRIER_HOMES_MARGIN_M)),
                                  signs=signs)
+    stages.mark("build_tile")
     chunks += railsmod.tile_chunks(frame, tx, ty, cells)     # railway and tram tracks on the ground
     if _s.airports is not None:         # runway markings, drawn by the road mesh like the lane lines
         chunks += _s.airports.tile_chunks(frame, tx, ty, elev, roadsmod.tile_bbox)
@@ -760,6 +795,7 @@ def _roads_tile(aid, lat, lon, zoom, tx, ty, out_dir, vfs_dir, sidewalks, lift, 
             props.extend(cars)
         buildingsmod.brick_walks(walks, items, lat, lon)
     chunks += parkingmod.finish_markings(frame, tx, ty, _s.md, elev, items, marks)
+    stages.mark("props")
     # Share the bridge mesh's exact parapet geometry with the tile builder.
     parapets = roadmeshmod.parapet_runs(chunks, ctx, ground=cover)
     import guardrails as guardrailsmod
@@ -824,10 +860,14 @@ def _roads_tile(aid, lat, lon, zoom, tx, ty, out_dir, vfs_dir, sidewalks, lift, 
         import industry
         garage_sound = (garage_sound + industry.refinery_sound_rows(frame, tx, ty, _s.md, elev)
                         + industry.power_plant_sound_rows(frame, tx, ty, _s.md, elev))
-    return roadsmod.write_tile(out_dir, vfs_dir, aid, tx, ty, chunks, walks if sidewalks else None, mesh, dmesh,
+    stages.mark("rails+meshes")
+    out = roadsmod.write_tile(out_dir, vfs_dir, aid, tx, ty, chunks, walks if sidewalks else None, mesh, dmesh,
                                bld, props, wires, park, tunnel_mesh=tmesh, fuel=fuel, rail_mesh=rmesh,
                                garage_sound=garage_sound, wells=oil_wells, signs=signs[0] if signs else None,
-                               guardrail_rows=guardrail_rows) + (fuel_pads,)
+                               guardrail_rows=guardrail_rows)
+    stages.mark("write")
+    stages.report(f"road tile {tx}_{ty}")
+    return out + (fuel_pads,)
 
 
 def _median_rows(frame, near_roads, box, elev, left_hand, country, mapped, tx, ty, decks=()):
