@@ -9221,7 +9221,7 @@ BLD_PARTS_MAX = 4               # building meshes per road tile ("bld", "bld2"..
 # ~1000 triangles 53 ms, a railway's 112 ms, a building collision mesh 1.3 s), so a piece stays under ~20 ms.
 COLLIDER_PIECE_TRIS = 400
 COLLIDER_PIECES_MAX = 12
-PIECE_KINDS = ("deck", "tunnel", "rail", "bldcol", "walkcol")
+PIECE_KINDS = ("deck", "tunnel", "rail", "railcol", "bldcol", "walkcol")
 
 
 # --- road geotiles (phase 1c, .claude/work/geotiles_plan.md) -------------------------------------------------------
@@ -9683,14 +9683,23 @@ def write_tile(out_dir, vfs_dir, aid, tx, ty, chunks, walks=None, road_mesh=None
         import railways
         x0, y0, _, _ = tile_bbox(tx, ty)
         shape = f"rail_{aid}_{tx}_{ty}.cdae"
-        roadmesh.write(os.path.join(out_dir, shape), rail_mesh)
-        data["rail"] = {"shape": f"{vfs_dir}/{shape}", "pos": [x0, y0, 0.0]}
+        # (in pieces too: a track's tile in one unit cost the game 105-125 ms each time it was made, I-25 at
+        # 40.059 N on every pass, 2026-10-30)
+        names = roadmesh.write_pieces(os.path.join(out_dir, shape), rail_mesh, COLLIDER_PIECE_TRIS, COLLIDER_PIECES_MAX)
+        _pieces(data, "rail", vfs_dir, names, [x0, y0, 0.0])
         col = railways.collision_mesh(rail_mesh)
         if col is not None:         # the lean physics-only mesh (the mod then only draws "rail"): its bed and decks
-            shape = f"railcol_{aid}_{tx}_{ty}.cdae"
-            cdae.write(os.path.join(out_dir, shape), col[0], col[1], uvs=col[2], material=col[3],
-                       tri_materials=col[4], collision_only=True)
-            data["railcol"] = {"shape": f"{vfs_dir}/{shape}", "pos": [x0, y0, 0.0]}
+            import meshpieces
+            first = os.path.join(out_dir, f"railcol_{aid}_{tx}_{ty}.cdae")
+            cP, cUV, cM = np.asarray(col[0]), np.asarray(col[2]), np.asarray(col[4])
+            names = []
+            for i, ((lo, hi), ids, Ti) in enumerate(meshpieces.split(col[1], COLLIDER_PIECE_TRIS,
+                                                                    COLLIDER_PIECES_MAX), 1):
+                piece = meshpieces.piece_path(first, i)
+                cdae.write(piece, cP[ids], Ti, uvs=cUV[ids], material=col[3], tri_materials=cM[lo:hi],
+                           collision_only=True)
+                names.append(os.path.basename(piece))
+            _pieces(data, "railcol", vfs_dir, names, [x0, y0, 0.0])
     if walks:
         x0, y0, _, _ = tile_bbox(tx, ty)
         b = sidewalks.Builder((x0, y0, 0.0), collision=True)
