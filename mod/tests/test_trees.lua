@@ -497,6 +497,7 @@ trees.FRAME_MS, trees.POOL_SPARE = FRAME_MS, POOL_SPARE
 do
   trees.reset()
   trees.POOL_SPARE = 0
+  trees.FRAME_MS = 1e9      -- (a whole tile in one pass even on a busy machine: the skips are what is counted)
   trees.onTile({ anchorId = 13, key = '0_0', path = '/t/v.json', n = 100 }, 13)
   for _ = 1, 4 do trees.update(13, { x = 128, y = 128 }) end
   local s0 = trees.skipped or 0
@@ -510,5 +511,6 @@ do
   T.check((trees.skipped or 0) == s0 + 2 and count() == 200, 'a new tile: a pass at once')
   trees.update(13, { x = 128 + trees.RECHECK_M + 1, y = 128 })
   T.check((trees.skipped or 0) == s0 + 3, 'then skipped again')
+  trees.FRAME_MS = FRAME_MS
 end
 T.done('test_trees')
