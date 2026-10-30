@@ -245,6 +245,7 @@ AHEAD_LAYERS = ("roads", "buildings", "building_parts", "infrastructure", "water
 ROUTE_AHEAD_ON = True            # --route-prefetch
 ROUTE_AHEAD_MAX_M = 20000.0      # --route-prefetch-km * 1000 (15-25 km is sane; the user, 2026-10-22)
 BUILD_AHEAD_ON = True            # --build-ahead: the near tier built live ahead of the car (buildahead.py)
+ROUTE_ELEV_S = 20.0              # s the route_result waits for its elevation profile at most (Connection.route)
 BUILD_AHEAD_MAX_M = buildaheadmod.MAX_M  # --ahead-km * 1000: its horizon at most
 BUILD_AHEAD_JOBS = buildaheadmod.ROAD_JOBS   # --ahead-jobs: its road tiles building at once
 PHANTOM_BASE = 1000000           # Server.phantom_anchor ids (a mod's grow from 1; blockworker keeps the highest)
@@ -753,7 +754,8 @@ class Server:
         self.ahead_last = None          # (anchor id, x, y) of the last round
         self.ahead_stats = {"dem": 0, "cells": 0, "deferred": 0}
         self.route_pool = ThreadPoolExecutor(1, thread_name_prefix="route-download")   # Connection.route_download
-        self.ahead_pool = ThreadPoolExecutor(max(1, BUILD_AHEAD_JOBS), thread_name_prefix="build-ahead")  # build_ahead_roads
+        self.ahead_pool = ThreadPoolExecutor(max(1, BUILD_AHEAD_JOBS) + buildaheadmod.PLAN_JOBS,
+                                             thread_name_prefix="build-ahead")   # build_ahead_roads, build_ahead_plans
         self.horizon_grids = {}             # anchorId -> farfield.HorizonGrid
         self.horizon_inflight = {}          # anchorId -> (future, half-size)
         self.horizon_failed = {}            # anchorId -> monotonic time of the last failed build
@@ -1408,6 +1410,15 @@ class Server:
             return "empty"
         self.discard_tile_files(res[0].rsplit("/", 1)[-1])
         return "built"
+
+    def build_ahead_plans(self, anchor, key):
+        """The build-ahead's cell plans (buildahead.plan_items): map cell key planned in a road process ahead of the
+        road tiles that need it (blockworker.plan_cells). -> "built" | "cached" (planned already) | "empty" (no road
+        processes). Worker threads (ahead_pool)."""
+        if self.road_pool is None:
+            return "empty"
+        n = self.road_pool.submit(blockworker.plan_cells, anchor.id, anchor.lat, anchor.lon, [tuple(key)]).result()
+        return "built" if n else "cached"
 
     def discard_tile_files(self, name):
         """A road tile's session files (name: its JSON in out_dir, and the shapes it names) removed: a build-ahead's
@@ -3369,9 +3380,10 @@ class Connection:
         # ahead of the car, instead of baked (--build-ahead; needs the revisit cache)
         self.ahead = None
         if BUILD_AHEAD_ON and buildaheadmod.ON and revisitmod.ON and server.mapdata is not None:
-            self.ahead = buildaheadmod.Cursor(self._ahead_follow, road_jobs=BUILD_AHEAD_JOBS if server.road_pool is not None
-                                              else 0, max_m=BUILD_AHEAD_MAX_M,
-                                              pins=revisitmod.pinned_anchors(server.cache_dir))
+            roads_on = server.road_pool is not None
+            self.ahead = buildaheadmod.Cursor(self._ahead_follow, road_jobs=BUILD_AHEAD_JOBS if roads_on else 0,
+                                              max_m=BUILD_AHEAD_MAX_M, pins=revisitmod.pinned_anchors(server.cache_dir),
+                                              plan_jobs=buildaheadmod.PLAN_JOBS if roads_on else 0)
         self.ahead_sent = 0                     # planned anchors sent to the mod (route_anchors)
         self.sea_busy = False                   # a water-tile plan is running (sea_tiles)
         self.sea_checked = None                 # (anchor id, 512 m square, monotonic, complete) of the last plan
@@ -3438,24 +3450,29 @@ class Connection:
             out.update(r)
         except Exception as e:          # offline, no route, rate limited: the mod falls back to steering
             out["error"] = f"{type(e).__name__}: {e}"[:200]
-        if "error" not in out and self.s.dem is not None and out["points"]:
-            try:                        # the map's elevation profile: a nice-to-have, the route works without it
-                out["elev"] = await asyncio.get_running_loop().run_in_executor(
-                    self.s.ui_pool, self._route_elevation, out["points"])
-            except Exception as e:
-                log.debug("route elevation: %s: %s", type(e).__name__, e)
         log.info("route %d (%s, %s -> %s, %s%s): %d points, %.1f km%s", int(msg.get("id") or 0), msg.get("lat0"),
                  msg.get("lon0"), msg.get("lat1"), msg.get("lon1"),
                  f", {len(routingmod.clean_via(msg.get('via')))} via" if msg.get("via") else "", len(out["points"]),
                  out["dist"] / 1000,
                  (" (" + out["error"] + ")") if "error" in out else "")
-        self.send(out)
+        # the line is known: the corridor's download and the build-ahead start now, before the elevation profile (a
+        # cold DEM fetch for it held the route, and with it the build-ahead, for a whole run: 2026-10-29)
         self.route_download(version, out["points"])
         if self.ahead is not None:
             self.ahead.set_route(out["points"] if "error" not in out else None, pinned_rule=bool(msg.get("pins")),
                                  rebase_m=msg.get("rebaseM"))
             self.ahead_sent = 0
             self.ahead_plan()
+        if "error" not in out and self.s.dem is not None and out["points"]:
+            try:                        # the map's elevation profile: a nice-to-have, the route works without it
+                out["elev"] = await asyncio.wait_for(asyncio.get_running_loop().run_in_executor(
+                    self.s.ui_pool, self._route_elevation, out["points"]), ROUTE_ELEV_S)
+            except asyncio.TimeoutError:
+                log.info("route %d: its elevation profile is not ready after %.0f s: the route goes without it",
+                         int(msg.get("id") or 0), ROUTE_ELEV_S)
+            except Exception as e:
+                log.debug("route elevation: %s: %s", type(e).__name__, e)
+        self.send(out)
 
     def _route_elevation(self, points):
         """The route's elevation profile for the map (routing.resample onto even steps, dem.sample): [[dist_m,
@@ -4822,6 +4839,8 @@ class Connection:
             return False
         if it.kind == "roads":
             return it.key in self.roads.sent or it.key in self.roads.building or it.key in self.roads.empty
+        if it.kind == "plans":
+            return False
         return self.s.terrain_cached((a.id, it.key[0], it.key[1]))
 
     def ahead_tick(self, aid):
@@ -4853,6 +4872,8 @@ class Connection:
             loop = asyncio.get_running_loop()
             if it.kind == "roads":
                 how = await loop.run_in_executor(s.ahead_pool, s.build_ahead_roads, anchor, *it.key)
+            elif it.kind == "plans":
+                how = await loop.run_in_executor(s.ahead_pool, s.build_ahead_plans, anchor, it.key)
             else:
                 how = await loop.run_in_executor(s.hm_pool, s.build_ahead_block, anchor, *it.key)
             log.debug("build ahead: %s %s of %s: %s", it.kind, it.key, it.anchor, how)

@@ -29,6 +29,7 @@ from dataclasses import dataclass, field
 import numpy as np
 
 import geodesy
+import mapcells
 import roads as roadsmod
 
 log = logging.getLogger("earthd.ahead")
@@ -49,6 +50,9 @@ OFF_ROUTE_M = 300.0     # m from the route the car counts as off it (the heading
 REPLAN_M = 2000.0       # the route plan is made again once the car moved this far along it (it reaches MAX_M + this)
 ROAD_JOBS = 2           # road tiles building at once (--ahead-jobs)
 BLOCK_JOBS = 1          # blocks building at once
+PLAN_JOBS = 2           # map cells planning at once (the road processes; plan_items)
+PLAN_LEAD_M = 1500.0    # a cell's plans are due this far before the first tile that needs them
+PLAN_REACH_M = 900.0    # m round a sample whose cells a road tile there plans (SEND_M + the grading's neighbours)
 SPEED_MIN = 15.0        # m/s: the horizon and the block prediction are for at least this speed
 TICK_S = 0.5            # the cursor looks for work at most this often
 LOG_S = 30.0            # the status line in the log at most this often
@@ -220,6 +224,24 @@ def road_items(anchor, xs, ys, s, send_m=None):
     return list(out.values())
 
 
+def plan_items(anchor, lats, lons, s, reach_m=PLAN_REACH_M, lead_m=PLAN_LEAD_M):
+    """The map cells the road tiles along the samples (lats, lons, due at s) have planned (grading's cell plans, the
+    cold start's cost: one process planned a cell while every other tile waited on its lock): each cell once, due
+    lead_m before the first sample that reaches it. Keyed by the mapcells key (regions plan them: the frame is only
+    where the job runs)."""
+    out = {}
+    lats = np.asarray(lats, dtype=float)
+    lons = np.asarray(lons, dtype=float)
+    for la, lo, d in zip(lats, lons, s):
+        dlat = reach_m / 111320.0
+        dlon = reach_m / (111320.0 * max(0.05, math.cos(math.radians(float(la)))))
+        for k in mapcells.cells_for_bbox(float(la) - dlat, float(lo) - dlon, float(la) + dlat, float(lo) + dlon):
+            kk = (int(k.z), int(k.x), int(k.y))
+            if kk not in out:
+                out[kk] = Item("plans", anchor, kk, max(0.0, float(d) - lead_m))
+    return list(out.values())
+
+
 def block_items(anchor, xs, ys, s, speed, follow, start=None, step=BLOCK_STEP_M):
     """The terrain blocks the mod's terrain-follow asks for along the samples (xs, ys) of anchor's frame at speed
     (m/s): the line walked in steps of step m with the car's velocity along it, follow(px, py, vx, vy, cx, cy) telling
@@ -287,9 +309,9 @@ class Cursor:
     which to start now, started()/done() account them. follow: block_items' rule. pins: the planned anchors the mod
     knows (routepins; this cursor's planned ones are added as it sends them)."""
 
-    def __init__(self, follow, road_jobs=ROAD_JOBS, block_jobs=BLOCK_JOBS, max_m=MAX_M, pins=()):
+    def __init__(self, follow, road_jobs=ROAD_JOBS, block_jobs=BLOCK_JOBS, max_m=MAX_M, pins=(), plan_jobs=None):
         self.follow = follow
-        self.jobs = {"roads": road_jobs, "block": block_jobs}
+        self.jobs = {"roads": road_jobs, "block": block_jobs, "plans": PLAN_JOBS if plan_jobs is None else plan_jobs}
         self.max_m = float(max_m)
         self.pins = {(round(float(a[0]), 7), round(float(a[1]), 7)) for a in pins}
         self.route = None           # [(lat, lon), ...] the GPS route from the car, or None (the heading)
@@ -363,10 +385,13 @@ class Cursor:
             fr = geodesy.EnuFrame(a[0], a[1])
             e, n, _ = fr.geodetic_to_enu(la_s[sel], lo_s[sel], 0.0)
             xs, ys, ss = np.asarray(e, float), np.asarray(n, float), s_s[sel]
-            items += road_items(a, xs, ys, ss)
+            if self.jobs.get("roads", 0) > 0:        # (no road processes: tiles are not cached, none ahead)
+                items += road_items(a, xs, ys, ss)
             start = block if (ai == 0 and block is not None) else None
             items += block_items(a, xs, ys, ss, speed, self.follow, start)
-        items.sort(key=lambda it: (it.due, it.kind != "block"))
+            if self.jobs.get("plans", 0) > 0:
+                items += plan_items(a, la_s[sel], lo_s[sel], ss)
+        items.sort(key=lambda it: (it.due, {"plans": 0, "block": 1, "roads": 2}[it.kind]))
         ids = set()
         self.items = []
         for it in items:
@@ -431,10 +456,10 @@ class Cursor:
         return min(self.max_m, max(MIN_M, v * (LATENCY_K * self.stats.latency + MARGIN_S)))
 
     def front(self):
-        """The ready front: m along the line up to which every item is done (the first undone's due; the plan's end
-        when all are)."""
+        """The ready front: m along the line up to which every item the car needs is done (the first undone block or
+        tile's due; the plan's end when all are). Cell plans are a means, not a tier: they do not hold the front."""
         for it in self.items:
-            if it.id not in self.done:
+            if it.kind != "plans" and it.id not in self.done:
                 return it.due
         return self.items[-1].due + STEP_M if self.items else self.s_car
 
@@ -504,7 +529,7 @@ class Cursor:
         line = (f"{self.ready_m() / 1000:.1f} km ready of {self.horizon() / 1000:.1f} km ahead "
                 f"({'off the route, ' if self.off_route else ''}{self.speed:.0f} m/s, {len(self.items)} items planned, "
                 f"{len(self.active)} building, {st.built} built, {st.cached} cached, {st.failed} failed; "
-                f"latency {st.latency:.1f} s")
+                f"by kind {dict(sorted(st.by_kind.items()))}; latency {st.latency:.1f} s")
         r = st.rate
         if r is not None:
             line += f"; build rate {r * 60 / 1000:.2f} km/min = keeps up to {r * 2.23694:.0f} mph"

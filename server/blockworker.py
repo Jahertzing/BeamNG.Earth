@@ -26,6 +26,7 @@ import dem as demmod
 import farfield
 import furniture
 import geodesy
+import mapcells
 import grading as gradingmod
 import heightmap
 import mapdata as mapdatamod
@@ -1010,6 +1011,23 @@ def skyline_cell_tile(aid, lat, lon, key, tier, out_dir, vfs_dir):
 def base_entry(user_dir, base_vfs, ao_vfs, rgb, ao_value):
     """terraincache.base_entry here (its BC7 encode is the base photo's main cost)."""
     return terraincache.base_entry(user_dir, base_vfs, ao_vfs, rgb, ao_value)
+
+
+def plan_cells(aid, lat, lon, keys):
+    """The build-ahead's cell plans (buildahead.plan_items, earthd Connection._ahead_build): the map cells keys
+    ((z, x, y)) planned by this process's region graders ahead of the road tiles that need them (grading's shared plan
+    cache then hands them to every other process). -> how many were planned here (0: all were planned already)."""
+    g, _ = _s.anchor(aid, lat, lon)
+    if g is None:
+        return 0
+    n = 0
+    for k in keys:
+        key = mapcells.CellKey(int(k[0]), int(k[1]), int(k[2]))
+        if g.planned(key):
+            continue
+        g.warm(key)
+        n += 1
+    return n
 
 
 def far_geometry(aid, lat, lon, tile, zoom, q, ref_zoom, with_sink, layout):

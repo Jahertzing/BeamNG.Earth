@@ -135,7 +135,7 @@ def follow_simple(px, py, vx, vy, cx, cy):
 
 class CursorTest(unittest.TestCase):
     def cursor(self, route_km=12.0, pinned=True):
-        c = ba.Cursor(follow_simple, road_jobs=2, block_jobs=1)
+        c = ba.Cursor(follow_simple, road_jobs=2, block_jobs=1, plan_jobs=0)     # (cell plans: PlansAheadTest)
         c.set_route(north(A, route_km), pinned_rule=pinned, rebase_m=15000.0)
         fr = geodesy.EnuFrame(*A)
         return c, fr
@@ -444,3 +444,119 @@ class ColdRunTest(unittest.TestCase):
             self.assertEqual(revisit.pin_dir("/c"), "/p")
         importlib.reload(revisit)
         self.assertEqual(revisit.SUBDIR, "revisit")
+
+
+class PlansAheadTest(unittest.TestCase):
+    """The map cells the road tiles need, planned ahead of them (plan_items; earthd build_ahead_plans through
+    blockworker.plan_cells): due before their tiles, never holding the ready front."""
+
+    def test_plan_items_cover_the_cells_round_the_line_once_due_early(self):
+        la, lo, s = ba.resample(north(A, 3.0), 128.0)
+        items = ba.plan_items(A, la, lo, s)
+        self.assertTrue(items)
+        self.assertTrue(all(it.kind == "plans" and len(it.key) == 3 and it.key[0] == 14 for it in items))
+        self.assertEqual(len({it.key for it in items}), len(items), "each cell once")
+        self.assertEqual(min(it.due for it in items), 0.0, "the first cells are due at once")
+        far = max(items, key=lambda it: it.due)
+        self.assertLessEqual(far.due, 3000.0 - ba.PLAN_LEAD_M + 1.0, "PLAN_LEAD_M before the sample that reaches it")
+        import mapcells
+        here = mapcells.cell_of(*A)
+        self.assertIn((here.z, here.x, here.y), {it.key for it in items})
+
+    def test_plans_come_first_and_do_not_hold_the_front(self):
+        c = ba.Cursor(follow_simple, road_jobs=2, block_jobs=1, plan_jobs=2)
+        c.set_route(north(A, 12.0), pinned_rule=True, rebase_m=15000.0)
+        fr = geodesy.EnuFrame(*A)
+        c.plan(A, fr, 0.0, 0.0, 0.0, 30.0, block=(0.0, 0.0))
+        kinds = [it.kind for it in c.items]
+        self.assertIn("plans", kinds)
+        self.assertEqual(kinds[0], "plans", "the cells under the car first")
+        start = c.tick(0.0, 0.0, 30.0)
+        self.assertEqual(sorted(it.kind for it in start), ["block", "plans", "plans", "roads", "roads"])
+        front0 = c.front()
+        for it in c.items:
+            if it.kind == "plans":
+                c.done_item(it, 1.0, "built")
+        self.assertEqual(c.front(), front0, "plans done: the front is the first block or tile still")
+        first_tile = next(it for it in c.items if it.kind != "plans")
+        self.assertEqual(c.front(), first_tile.due)
+        self.assertIn("by kind", c.status())
+        c2 = ba.Cursor(follow_simple, road_jobs=0, plan_jobs=0)
+        c2.set_route(north(A, 3.0))
+        c2.plan(A, fr, 0.0, 0.0, 0.0, 30.0)
+        self.assertEqual({it.kind for it in c2.items}, {"block"}, "no road processes: blocks alone")
+
+    def test_server_plans_through_the_road_pool(self):
+        import earthd
+        a = types.SimpleNamespace(id=1000001, lat=A[0], lon=A[1])
+        calls = []
+
+        class Pool:
+            def submit(self, fn, *args):
+                calls.append((fn, args))
+                return types.SimpleNamespace(result=lambda: 1 if len(calls) == 1 else 0)
+        s = types.SimpleNamespace(road_pool=Pool())
+        self.assertEqual(earthd.Server.build_ahead_plans(s, a, (14, 3413, 6217)), "built")
+        self.assertEqual(earthd.Server.build_ahead_plans(s, a, (14, 3413, 6218)), "cached")
+        import blockworker
+        self.assertIs(calls[0][0], blockworker.plan_cells)
+        self.assertEqual(calls[0][1], (1000001, A[0], A[1], [(14, 3413, 6217)]))
+        s = types.SimpleNamespace(road_pool=None)
+        self.assertEqual(earthd.Server.build_ahead_plans(s, a, (14, 3413, 6217)), "empty")
+
+    def test_worker_plan_cells_warms_the_unplanned(self):
+        import blockworker
+        planned, warmed = {(14, 1, 1)}, []
+
+        class G:
+            def planned(self, key):
+                return tuple(key) in planned
+
+            def warm(self, key):
+                warmed.append(tuple(key))
+        with mock.patch.object(blockworker, "_s", types.SimpleNamespace(anchor=lambda aid, la, lo: (G(), None))):
+            n = blockworker.plan_cells(5, A[0], A[1], [(14, 1, 1), (14, 1, 2)])
+        self.assertEqual((n, warmed), (1, [(14, 1, 2)]))
+        with mock.patch.object(blockworker, "_s", types.SimpleNamespace(anchor=lambda aid, la, lo: (None, None))):
+            self.assertEqual(blockworker.plan_cells(5, A[0], A[1], [(14, 1, 1)]), 0)
+
+
+class RouteOrderTest(unittest.TestCase):
+    def test_the_route_result_waits_for_its_elevation_at_most_route_elev_s(self):
+        """The cursor and the corridor download get the line before the elevation profile (a cold DEM fetch for the
+        profile held both for a whole run)."""
+        import earthd
+        from test_gasstations import _Writer
+        import surface as sf
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        sur = sf.Surface(None)
+        self.addCleanup(sur.close)
+        md = types.SimpleNamespace(has=lambda key, layer: False, versions=lambda: "v")
+        s = earthd.Server(tmp.name, os.path.join(tmp.name, "cache"), imagery=None, cells=64, block=512, surface=sur,
+                          mapdata=md)
+        self.addCleanup(s.hm_pool.shutdown)
+        self.addCleanup(s.tile_pool.shutdown)
+        self.addCleanup(s.ahead_pool.shutdown)
+        order = []
+
+        async def go():
+            with mock.patch.object(earthd.revisitmod, "ON", True), mock.patch.object(earthd, "ROUTE_ELEV_S", 0.2):
+                w = _Writer()
+                c = earthd.Connection(s, None, w)
+                c.route_download = lambda version, points: order.append("download")
+                c.ahead_plan = lambda: order.append("plan")
+                s.dem = object()                      # (an elevation profile would be made ...)
+
+                def slow(points):                     # ... but its DEM read hangs
+                    import time as t
+                    t.sleep(1.0)
+                    return [[0.0, 1.0]]
+                c._route_elevation = slow
+                await c.route({"id": 3, "points": north(A, 2.0), "pins": True})
+                return w.msgs
+        msgs = asyncio.run(go())
+        self.assertEqual(order, ["download", "plan"], "the line's users run before the profile")
+        res = [m for m in msgs if m["type"] == "route_result"][0]
+        self.assertNotIn("elev", res, "the profile timed out: the route goes without it")
+        self.assertEqual(len(res["points"]), len(north(A, 2.0)))
