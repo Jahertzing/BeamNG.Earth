@@ -5246,6 +5246,7 @@ async def main_async(args):
                if "on" in (args.surface, args.roads, args.sea, args.trees) else None)
     pacer.DUTY = args.background_duty
     global DETAIL_RING_M, AHEAD_ON, ROUTE_AHEAD_ON, ROUTE_AHEAD_MAX_M, PROGRESS_S
+    global BUILD_AHEAD_ON, BUILD_AHEAD_MAX_M, BUILD_AHEAD_JOBS
     DETAIL_RING_M = args.detail_ring
     PROGRESS_S = max(0.02, float(args.progress_s))
     roadsmod.BUILD_PER_POSE = max(1, int(args.roads_per_pose))     # (roads.Tracker reads it when made and per pose)

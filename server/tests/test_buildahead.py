@@ -560,3 +560,15 @@ class RouteOrderTest(unittest.TestCase):
         res = [m for m in msgs if m["type"] == "route_result"][0]
         self.assertNotIn("elev", res, "the profile timed out: the route goes without it")
         self.assertEqual(len(res["points"]), len(north(A, 2.0)))
+
+
+class OptionsTest(unittest.TestCase):
+    def test_the_build_ahead_options_reach_the_module(self):
+        """--build-ahead off / --ahead-km / --ahead-jobs set module globals in main_async: a name assigned there without
+        a global declaration is a local, and the flag is silently ignored (every "ahead off" run of 2026-10-29 had it
+        on)."""
+        import earthd
+        code = earthd.main_async.__code__
+        for name in ("BUILD_AHEAD_ON", "BUILD_AHEAD_MAX_M", "BUILD_AHEAD_JOBS", "ROUTE_AHEAD_MAX_M", "PROGRESS_S"):
+            self.assertIn(name, code.co_names, f"{name} is assigned in main_async")
+            self.assertNotIn(name, code.co_varnames, f"{name} must be declared global in main_async")
