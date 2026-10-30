@@ -38,6 +38,7 @@ M.FREEZE_C = -1.0         -- a wet road below this freezes ...
 M.FREEZE_S = 900          -- ... over this long (water to ice) ...
 M.THAW_S = 300            -- ... and thaws back to wet above THAW_C over this long
 M.THAW_C = 0.5
+M.WET_MIN = 0.03         -- less falling than this (a shower's last drops) dries the road, as no rain
 M.FORCED_SPEED = 8        -- a weather chosen with the keys builds up and clears this much faster (minutes, not hours)
 M.DEPTH_FULL_M = 0.05     -- snow depth (m, the server's) that covers the ground fully
 
@@ -66,7 +67,7 @@ function M.stepSurface(s, e, dt)
     wet = wet + melt * 2
   end
   -- wetting and drying
-  if water > 0 then
+  if water > M.WET_MIN then
     wet = wet + math.min(water, 1) * dt / M.WET_IN_S
   else
     local rate = clamp(0.4 + t / (M.DRY_REF_C * 1.67), 0.15, 2) * (1 + wind / 10)
@@ -180,11 +181,14 @@ end
 ------------------------------------------------------------------------------------------
 -- runtime state
 
+M.HOLD_FADE = 0.01        -- dryNow's hold: the fall counts as fading while its target is this far under it
+M.BURY_AT, M.UNBURY_AT = 0.6, 0.35  -- the 3D grass goes under the snow at this cover, comes back under this
 M.CHECK_S = 0.5           -- the state, the grip and the effect's switch (the shader constants: every frame)
 M.SEED_WAIT_S = 60        -- the ground starts dry when no weather arrived within this long of the level's start
 local surface = { wet = 0, puddle = 0, snow = 0, ice = 0 }
 local seeded = false      -- the state started from the weather at this level's start
 local override = nil      -- setSurface's fixed state (the probe's, the console's)
+local dryHold = false     -- dryNow: the rain still fading out wets nothing (until it stops, or a new one comes)
 local active = false      -- in our level, the weather on
 local clock, checkAt = 0, 0
 local opts = { grip = true, surfaces = true }
@@ -304,7 +308,10 @@ M.SHADER = 'shaders/beamngEarth/weatherSurface.cs.hlsl'
 M.LOOK = {
   reflect = 0.9,          -- reflection strength (times the Fresnel term)
   reflectM = 350,         -- reflections out to this far (m)
-  snowGain = 3.6,         -- snow brightness over the brightness of what it covers (~0.75 albedo over ~0.2)
+  snowGain = 1.6,         -- the snow's ambient share: times the brightness of what it covers (in the shade, at night)
+  snowAlbedo = 0.75,      -- ... plus the light buffer (the sun, the lamps) times this (fresh snow ~0.8)
+  snowLight = 1.0,        -- the light buffer's weight (0: the ambient share only; was all of it before 2026-10-30, and
+                          -- the snow on a dark road stayed dark grey: the builder's first drive)
   wetDark = 0.55,         -- a soaked rough surface's brightness factor
   skyFlash = 4.0,         -- lightning: the sky's brightness times 1 + flash * this ...
   groundFlash = 1.2,      -- ... the ground's 1 + flash * this
@@ -323,6 +330,7 @@ local function stateBlock()
   sb:setField('samplerStates', 0, 'SamplerClampLinear')
   sb:setField('samplerStates', 1, 'SamplerClampPoint')
   sb:setField('samplerStates', 2, 'SamplerClampPoint')
+  sb:setField('samplerStates', 3, 'SamplerClampPoint')
   sb:registerObject(name)
   return name
 end
@@ -332,7 +340,10 @@ end
 -- glass) come after.
 local function createPfx()
   local pfx = scenetree.findObject(M.PFX)
-  if pfx then return pfx end
+  if pfx then
+    pfx:setField('texture', 3, '#lightinfo')   -- (one an older module instance made, before the light buffer)
+    return pfx
+  end
   if not scenetree.findObject('BeamNGEarthWeatherShader') then
     local sh = createObject('ShaderData')
     sh.DXComputShaderName = M.SHADER
@@ -346,6 +357,7 @@ local function createPfx()
   pfx:setField('texture', 0, '$backBuffer')
   pfx:setField('texture', 1, '#prepass[RT0]')
   pfx:setField('texture', 2, '#prepass[Depth]')
+  pfx:setField('texture', 3, '#lightinfo')      -- the light at each pixel (lua/ge/client/lighting/advanced/lightViz.lua)
   pfx:setField('target', 0, '$backBuffer')
   pfx:setField('isEnabled', 0, '0')
   pfx:setField('renderTime', 0, 'PFXBeforeBin')
@@ -392,6 +404,7 @@ function M.shaderConsts(s, cam, t, rain, flash, tunnel, dbg, look)
     ['$bneWx1'] = fmt(cam[1], cam[2], cam[3], tunnel and 0 or rain),
     ['$bneWx2'] = fmt(flash, look.reflect, look.reflectM, dbg and 1 or 0),
     ['$bneWx3'] = fmt(look.snowGain, look.wetDark, look.skyFlash, look.groundFlash),
+    ['$bneWx4'] = fmt(look.snowAlbedo or 0.75, look.snowLight or 1, 0, 0),
   }
 end
 
@@ -460,6 +473,21 @@ end
 ------------------------------------------------------------------------------------------
 -- update
 
+-- The 3D grass under deep snow (groundcover.setBuried: gone at once, back only at a stop); the shader cannot put
+-- snow on the blades (they face every way), so without this the fields stayed green under a white ground.
+local buried = false
+local function updateBuried(s)
+  local want = buried
+  if not opts.surfaces then want = false
+  elseif s.snow >= M.BURY_AT then want = true
+  elseif s.snow < M.UNBURY_AT then want = false end
+  if want == buried then return end
+  local gc = package.loaded['beamngEarth/groundcover']
+  if not (gc and gc.setBuried) then return end
+  local ok, err = pcall(gc.setBuried, want)
+  if ok then buried = want else log('W', 'beamngEarth', 'weatherfx: grass under the snow: ' .. tostring(err)) end
+end
+
 local function weatherNow()
   local w = weather()
   local e = { rain = 0, snow = 0, tempC = 10, windMs = 0, speed = 1 }
@@ -494,11 +522,22 @@ function M.update(dt, inOurLevel)
       seeded = true
     end
   end
+  if dryHold then
+    -- held dry only while what falls is fading out: let go once it stopped, or when it holds steady or builds up
+    -- again (a weather chosen with rain, the real rain going on: the roads get wet again as they would)
+    local tr, ts = nil, nil
+    if w.targetPrecip then tr, ts = w.targetPrecip() end
+    local now = e.rain + e.snow
+    local target = tr and (num(tr, 0) + num(ts, 0)) or 0
+    if now < M.WET_MIN or target >= now - M.HOLD_FADE then dryHold = false
+    else e.rain, e.snow = 0, 0 end
+  end
   if override then
     for k, v in pairs(override) do surface[k] = v end
   else
     M.stepSurface(surface, e, dt)
   end
+  updateBuried(surface)
   local flash = opts.surfaces and updateStorm(w.stormNow and w.stormNow() and e.rain > 0, dt) or updateStorm(false, dt)
   if clock >= checkAt then
     checkAt = clock + M.CHECK_S
@@ -520,6 +559,7 @@ end
 function M.restore()
   active = false
   if grip.written then pcall(writeGrip, nil) end
+  if buried then updateBuried({ snow = 0 }) end
   setPfx(false)
   updateStorm(false, 0)
 end
@@ -529,6 +569,7 @@ function M.onLevel()
   M.restore()
   surface = { wet = 0, puddle = 0, snow = 0, ice = 0 }
   seeded, grip.saved, grip.typeIds, grip.at = false, {}, {}, -math.huge
+  buried, dryHold = false, false     -- (the grass's own state went with the level: groundcover.reset)
   storm.thunder = {}
   clock, checkAt = 0, 0
   pfxOn = false                     -- (the level's objects went with it)
@@ -559,9 +600,12 @@ end
 function M.choose(name) return chosen(name) end
 function M.real() return chosen(nil) end
 
--- Dry roads at once (the snow and the ice gone too); the weather goes on.
+-- Dry roads at once (the snow and the ice gone too); the weather goes on, but the rain still fading out (the forced
+-- weather's lerp, the real one's slower one) wets nothing: the builder's test, 2026-10-30, saw the wet creep back to
+-- 23 % in the 90 s after this, and then take half an hour to dry.
 function M.dryNow()
   surface = { wet = 0, puddle = 0, snow = 0, ice = 0 }
+  dryHold = true
   toast('Roads dry again')
 end
 
@@ -595,6 +639,7 @@ end
 
 function M.status()
   return { surface = M.surface(), override = override, grip = opts.grip, surfaces = opts.surfaces, pfx = pfxOn,
+    grassBuried = buried, dryHold = dryHold,
     written = grip.written, storm = storm.nextAt ~= nil, line = M.statusLine() }
 end
 

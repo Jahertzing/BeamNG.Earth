@@ -6,8 +6,10 @@
 //           ray march (a rough, jittered reflection the upscaler's temporal pass smooths; Fresnel: strong at grazing
 //           angles, as a wet road in front of a car), puddles in the dips of a world-space noise mirror sharper, rings
 //           in them while it rains. Glossy surfaces (car paint, metal, glass) are left alone.
-//   snow    up-facing rough surfaces turn white in patches that close as it piles up; the snow is lit like the
-//           surface it covers (its brightness from the scene's own, so shadows, night and street lights still hold).
+//   snow    up-facing surfaces (not glass or a mirror finish) turn white in patches that close as it piles up. The
+//           snow is lit by the light buffer (#lightinfo: the sun, the street lights and the headlights at that
+//           pixel, before any surface colour), times a snow albedo, plus a bluish share of the ambient the covered
+//           surface shows: a dark road under snow is as bright as the snow, not as the road.
 //   flash   lightning: the sky and, less, the ground brighten for a moment.
 //
 //   bneWx0  x: wetness 0..1, y: puddles 0..1, z: snow cover 0..1, w: time (s)
@@ -15,6 +17,7 @@
 //   bneWx2  x: flash, y: reflection strength, z: reflections out to (m), w: debug (1: masks, wet r / snow g / puddle b)
 //   bneWx3  x: snow gain (snow brightness / scene brightness), y: wet darkening (multiplier at full wet), z: sky flash
 //           gain, w: ground flash gain
+//   bneWx4  x: snow albedo (times the light buffer), y: the light buffer's weight (0: the ambient share only)
 #define PFX_COMPUTE 1
 
 #include "shaders/common/postFx/postFx.h.hlsl"
@@ -22,6 +25,7 @@
 uniform_sampler2D(backBuffer, 0);
 uniform_sampler2D(prepassTex, 1);
 uniform_sampler2D(prepassDepthTex, 2);
+uniform_sampler2D(lightInfoTex, 3);
 
 cbuffer perDraw : register(b0)
 {
@@ -29,6 +33,7 @@ cbuffer perDraw : register(b0)
     uniform float4 bneWx1;
     uniform float4 bneWx2;
     uniform float4 bneWx3;
+    uniform float4 bneWx4;
 
     POSTFX_UNIFORMS
 };
@@ -38,6 +43,7 @@ cbuffer perDraw : register(b0)
 
 static const float3 BNE_LUMA = float3(0.2126f, 0.7152f, 0.0722f);
 static const float3 BNE_SNOW_TINT = float3(0.93f, 0.96f, 1.0f);
+static const float3 BNE_SNOW_SHADE = float3(0.80f, 0.88f, 1.0f);   // (snow in the shade: lit by the blue sky)
 static const int BNE_STEPS = 20;
 
 float bneHash(float2 p)
@@ -203,10 +209,14 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
         const float fine = bneNoise(pw.xy * 3.1f);
         const float field = up * 0.55f + coarse * 0.35f + fine * 0.10f;
         const float th = 1.05f - snow * 1.15f;
-        cover = smoothstep(th - 0.06f, th + 0.06f, field) * smoothstep(0.30f, 0.62f, up) * porous;
+        // (only glass and mirror finishes stay clear: the rough asphalt is ~0.4-0.6, the grass and dirt more)
+        cover = smoothstep(th - 0.06f, th + 0.06f, field) * smoothstep(0.30f, 0.62f, up) * smoothstep(0.12f, 0.30f, rough);
         const float lum = dot(c, BNE_LUMA);
         const float sparkle = step(0.985f, bneHash(floor(pw.xy * 40.0f))) * saturate(1.0f - dist / 25.0f);
-        const float3 snowC = BNE_SNOW_TINT * lum * bneWx3.x * (1.0f + sparkle * 1.5f);
+        const float3 direct = max(lightInfoTexTex.SampleLevel(lightInfoTex_sampler_,
+            viewportCoordToRenderTarget(uv, rtParams3), 0).rgb, 0.0f) * saturate(bneWx4.y);
+        const float3 lit = direct * bneWx4.x * (1.0f + flash * bneWx3.w) + BNE_SNOW_SHADE * lum * bneWx3.x;
+        const float3 snowC = BNE_SNOW_TINT * lit * (1.0f + sparkle * 1.5f);
         c = lerp(c, snowC, cover);
     }
 

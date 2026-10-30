@@ -136,6 +136,13 @@ do
   local tn = F.shaderConsts({ wet = 1, puddle = 1, snow = 1, ice = 0 }, { 0, 0, 0 }, 0, 1, 0, true, false)
   check(tn['$bneWx0']:match('^0.25 0 0 '), 'in a tunnel: a little wet, no puddles, no snow: ' .. tn['$bneWx0'])
   check(tn['$bneWx1']:match(' 0$'), 'no rain rings in a tunnel')
+  check(c['$bneWx4'] == string.format('%.6g %.6g 0 0', F.LOOK.snowAlbedo, F.LOOK.snowLight),
+    'snow lit by the light buffer: ' .. c['$bneWx4'])
+  -- a shower's last drops dry the road (the wet crept back after dryNow, the builder's test 2026-10-30)
+  local d = run({ wet = 0.5, puddle = 0, snow = 0, ice = 0 }, { rain = F.WET_MIN * 0.9, tempC = 15 }, 60)
+  check(d.wet < 0.5, 'a trace of rain dries: ' .. d.wet)
+  local r = run({ wet = 0.5, puddle = 0, snow = 0, ice = 0 }, { rain = F.WET_MIN * 2, tempC = 15 }, 60)
+  check(r.wet > 0.5, 'a light rain still wets: ' .. r.wet)
 end
 
 ------------------------------------------------------------------------------------------
@@ -244,6 +251,53 @@ do -- dryNow, setSurface, the debug view
   check(consts['$bneWx2']:match(' 1$'), 'debug view in the constants')
   F.setDebug(false)
   F.setSurface(nil)
+end
+do -- dryNow while the rain fades out: held dry until it stopped; steady or new rain wets again
+  F.setSurface(nil)
+  W.rainNow, W.rainT = 0.6, 0
+  F.dryNow()
+  for i = 1, 180 do                  -- (90 s: the rain fades as weather.lua's lerp does)
+    W.rainNow = 0.6 * 0.97 ^ i
+    F.update(0.5, true)
+  end
+  check(F.surface().wet == 0, 'held dry while the rain faded: ' .. F.surface().wet)
+  check(F.status().dryHold == false, 'and let go once it stopped')
+  W.rainNow, W.rainT = 0.5, 0.5
+  F.dryNow()
+  for _ = 1, 60 do F.update(0.5, true) end
+  check(F.surface().wet > 0, 'steady rain: wet again after dryNow: ' .. F.surface().wet)
+  F.dryNow()
+  W.rainNow, W.rainT = 0.5, 0.2
+  F.update(0.5, true)
+  W.rainNow, W.rainT = 0.3, 1      -- (a new rain chosen while the old one fades)
+  for _ = 1, 60 do F.update(0.5, true) end
+  check(F.surface().wet > 0, 'a new rain building up: wet again: ' .. F.surface().wet)
+  W.rainNow, W.rainT = 0, 0
+  F.dryNow()
+  F.update(0.5, true)
+end
+do -- deep snow buries the 3D grass; it comes back once the snow thinned
+  local calls = {}
+  package.loaded['beamngEarth/groundcover'] = { setBuried = function(on) calls[#calls + 1] = on; return on end }
+  F.setSurface({ snow = 0.5 })
+  F.update(0.5, true)
+  check(#calls == 0, 'thin snow: the grass stays')
+  F.setSurface({ snow = F.BURY_AT })
+  F.update(0.5, true)
+  F.update(0.5, true)
+  check(#calls == 1 and calls[1] == true and F.status().grassBuried, 'deep snow: the grass goes under, once')
+  F.setSurface({ snow = 0.5 })
+  F.update(0.5, true)
+  check(#calls == 1, 'between the two: no change (hysteresis)')
+  F.setSurface({ snow = 0.1 })
+  F.update(0.5, true)
+  check(#calls == 2 and calls[2] == false, 'little snow left: the grass back')
+  F.setSurface({ snow = 1 })
+  F.update(0.5, true)
+  F.update(0.5, false)
+  check(calls[#calls] == false and not F.status().grassBuried, 'out of our level: the grass back')
+  F.setSurface(nil)
+  package.loaded['beamngEarth/groundcover'] = nil
 end
 do -- keys: the round, a weather directly, real weather; toasts say which
   local n = #toasts

@@ -248,6 +248,20 @@ do
     'at a stop: the new colour, one new copy')
   gc.rebuild()
   T.check(gc.noteBlock(0, 0, 10, 10, { x = 5000, y = 5000 }) == false, 'after a rebuild (another frame): only recorded')
+  -- under deep snow (weatherfx): the grass goes at once, a block import makes none, it comes back only at a stop
+  gc.setBuried(true)
+  T.check(gc.status().objects == 0 and gc.status().buried, 'buried: the grass gone')
+  T.check(gc.ensure() == false and gc.status().objects == 0, 'buried: a block import makes none')
+  gc.setBuried(false)
+  gc.update(40)
+  T.check(gc.status().objects == 0 and gc.status().unburyPending, 'the snow gone while driving: the grass waits for a stop')
+  gc.setBuried(true)
+  gc.update(0)
+  T.check(gc.status().objects == 0 and not gc.status().unburyPending, 'snow again before the stop: still buried')
+  gc.setBuried(false)
+  local fl4 = flushes
+  gc.update(0)
+  T.check(gc.status().objects == #gc.DEFS and not gc.status().buried and flushes == fl4 + 1, 'at a stop: the grass back')
   gc.reset()
   _G.readFile, _G.jsonDecode = realRead, realDecode
 end

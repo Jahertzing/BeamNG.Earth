@@ -314,10 +314,15 @@ local function makeObject(i, keepMaterial)
   return name
 end
 
+-- Under deep snow (weatherfx.lua, M.setBuried): no grass. Removed at once (nothing is made, so no first-draw hitch),
+-- made again only once the car is slow (TINT_APPLY_V), like a moved tint.
+M.buried = false
+local unburyPending = false
+
 -- Create the GroundCovers (once per level; the surface layers exist). Returns true if made.
 function M.ensure()
   layered = true
-  if not M.enabled or #created > 0 then return #created > 0 end
+  if not M.enabled or M.buried or #created > 0 then return #created > 0 end
   if not scenetree.MissionGroup then return false end
   maxRadius = 0
   local ok, err = pcall(function()
@@ -367,6 +372,11 @@ end
 -- Once a frame (core onUpdate, after the world's update): a staged remake's next object; a moved tint's remake
 -- started once the car is slow (TINT_APPLY_V). speed: the player's (m/s; nil: standing).
 function M.update(speed)
+  if unburyPending and (speed or 0) <= M.TINT_APPLY_V then
+    unburyPending, M.buried = false, false
+    if layered and M.ensure() then M.afterBlockChange(speed) end
+    return
+  end
   if #created == 0 then staged = nil; return end
   if staged then stepStaged(speed); return end
   if tintPending and (speed or 0) <= M.TINT_APPLY_V then
@@ -570,6 +580,18 @@ function M.setEnabled(on)
   return M.enabled
 end
 
+-- The grass under snow (on) or back (off: at the next stop, M.update). Returns the wish.
+function M.setBuried(on)
+  on = on and true or false
+  if on then
+    unburyPending = false
+    if not M.buried then M.buried = true; removeAll() end
+  elseif M.buried then
+    unburyPending = true
+  end
+  return on
+end
+
 -- Density (the settings page): 'low' / 'normal' / 'high' or a factor; existing objects are made
 -- again with it.
 function M.setDensity(v)
@@ -608,6 +630,7 @@ function M.reset()
   blockBox, maxRadius, remake, nStale = nil, 0, false, 0
   tintUsed = {}
   tintPending = false
+  M.buried, unburyPending = false, false
   stockJson = {}
   defsCache = {}
   loadedMaterials = {}
@@ -634,7 +657,7 @@ function M.status()
   return { enabled = M.enabled, density = M.density, reach = M.reach, distance = M.distance, objects = #created,
     materialsLoaded = next(loadedMaterials) ~= nil, error = lastError, tint = M.TINT and tintRgb or nil,
     tintMaterials = mats, radius = maxRadius, staleRemakes = nStale,
-    tintPending = tintPending, staged = staged and staged.why or nil, remakes = remakes, lastChange = M.lastChange }
+    tintPending = tintPending, staged = staged and staged.why or nil, buried = M.buried, unburyPending = unburyPending, remakes = remakes, lastChange = M.lastChange }
 end
 
 return M
