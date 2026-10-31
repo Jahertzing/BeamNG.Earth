@@ -428,10 +428,10 @@ def build_cell(pieces, lines, i, j, in_dir, out_dir, lots=(), road_dir=None):
         WP, WT = sidewalks(cell_mask, z, x0, y0, wm)
         if len(WT):
             WP = WP - (x0, y0, 0.0)
-            for kind, mat in (("walks", "sidewalk1"), ("walkcol", "curbs")):
-                w = ue_export.Glb()
-                w.add(WP, WT, WP[:, :2] / 2.0, [mat], None, np.full((len(WP), 4), 255, np.uint8))
-                w.write(os.path.join(out_dir, f"{kind}_{i}_{j}.glb"), f"{kind}_{i}_{j}", (0.0, 0.0, 0.0))
+            # (one file: it collides too, the importer's collision copy as for a road; no walkcol beside it)
+            w = ue_export.Glb()
+            w.add(WP, WT, WP[:, :2] / 2.0, ["sidewalk1"], None, np.full((len(WP), 4), 255, np.uint8))
+            w.write(os.path.join(out_dir, f"walks_{i}_{j}.glb"), f"walks_{i}_{j}", (0.0, 0.0, 0.0))
     return {"cell": [i, j], "pavement_tris": int(len(T)), "pavement_m2": int(mask[m:m + n, m:m + n].sum() * PX * PX),
             "from_curbs": round(surveyed, 3), "polys": len(polys), "s": round(time.perf_counter() - t0, 1)}
 
@@ -472,7 +472,7 @@ def main():
     ap.add_argument("--out", default=None)
     ap.add_argument("--builder", default=None, help="the builders' road and walks meshes, once --dir holds the finished ones")
     ap.add_argument("--cell", default=None, help="i,j;i,j (all the cells with a ground mesh in --dir if left out)")
-    ap.add_argument("--jobs", type=int, default=3)
+    ap.add_argument("--jobs", type=int, default=10, help="each peaks at 2.9 GB")
     a = ap.parse_args()
     if a.cell:
         cells = [tuple(int(v) for v in c.split(",")) for c in a.cell.split(";")]

@@ -15,7 +15,7 @@ import ue_export  # noqa: E402,F401
 
 import ue_survey  # noqa: E402
 
-KINDS = ("road", "walks", "walkcol")
+KINDS = ("road", "walks")
 
 
 def main():
@@ -26,6 +26,8 @@ def main():
     with open(path) as f:
         doc = json.load(f)
     n = 0
+    gone = [e["file"] for e in doc["meshes"] if not os.path.exists(os.path.join(a.dir, e["file"]))]
+    doc["meshes"] = [e for e in doc["meshes"] if e["file"] not in gone]     # (walkcol: ue_pavement's walks collide themselves)
     for e in doc["meshes"]:
         if e["kind"] in KINDS:
             prims = ue_survey.read_glb(os.path.join(a.dir, e["file"]))
@@ -35,7 +37,7 @@ def main():
             n += 1
     with open(path, "w") as f:
         json.dump(doc, f, indent=1)
-    print(n, "entries")
+    print(n, "entries,", len(gone), "gone")
 
 
 if __name__ == "__main__":

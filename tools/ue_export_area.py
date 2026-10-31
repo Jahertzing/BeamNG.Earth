@@ -3,7 +3,7 @@
 tiles merged into one .glb per kind (road, bld, deck, ...), so Unreal sees a few files a cell and not one for every
 tile. Cells run in processes at low priority, and a finished cell is skipped on a rerun.
 
-    .venv\\Scripts\\python tools\\ue_export_area.py --km 20 --jobs 5 --out C:/beamng-earth/Earth.UE/export/frederick
+    .venv\\Scripts\\python tools\\ue_export_area.py --km 20 --jobs 10 --out C:/beamng-earth/Earth.UE/export/frederick
     .venv\\Scripts\\python tools\\ue_export_area.py --cells -2,-1;-2,0 ...     (only these cells)
 
 The manifest has the shape tools/ue_export.py writes, so scripts/import_slice.py reads either.
@@ -118,13 +118,11 @@ def tile_props(path, names, rows):
 
 
 def export_cell(job):
-    i, j, out_dir, props_only = job
+    i, j, out_dir = job
     t0 = time.perf_counter()
     done_mark = os.path.join(out_dir, "cells", f"{i}_{j}.json")
     props_path = os.path.join(out_dir, f"props_{i}_{j}.json")
-    if props_only and os.path.exists(props_path):
-        return {"cell": [i, j], "entries": [], "failed": [], "props": 0, "seconds": 0.0}
-    if os.path.exists(done_mark) and not props_only:
+    if os.path.exists(done_mark):
         with open(done_mark) as f:
             return json.load(f)
     b, catch, heights = _w["blockworker"], _w["catch"], _w["heights"]
@@ -156,10 +154,6 @@ def export_cell(job):
                 groups.setdefault(ue_export.kind_of(name), []).append((name, got[0], got[1], got[2], off))
     with open(props_path, "w") as f:
         json.dump({"groups": prop_names, "items": prop_rows}, f, separators=(",", ":"))
-    if props_only:
-        shutil.rmtree(scratch, ignore_errors=True)
-        return {"cell": [i, j], "entries": [], "failed": failed, "props": len(prop_rows),
-                "seconds": round(time.perf_counter() - t0, 1)}
     entries = []
     for kind, shapes in groups.items():
         P, T, UV, C, names, M = merged(shapes)
@@ -240,12 +234,11 @@ def write_manifest(out_dir, results, km):
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--km", type=float, default=20.0, help="side of the square round the frame's origin")
-    ap.add_argument("--jobs", type=int, default=5)
+    ap.add_argument("--jobs", type=int, default=10)
     ap.add_argument("--cells", default=None, help="i,j;i,j: only these cells")
     ap.add_argument("--out", default="C:/beamng-earth/Earth.UE/export/frederick")
     ap.add_argument("--cache-dir", default=os.environ["BNGE_WORLD_CACHE"])
     ap.add_argument("--fit", default=None, help="corrections file (tools/ue_fit.py)")
-    ap.add_argument("--props-only", action="store_true", help="only each cell's props_<i>_<j>.json; meshes and manifest left alone")
     a = ap.parse_args()
     out_dir = a.out
     os.makedirs(out_dir, exist_ok=True)
@@ -259,7 +252,7 @@ def main():
     t0 = time.perf_counter()
     results = []
     with concurrent.futures.ProcessPoolExecutor(a.jobs, initializer=init_worker, initargs=(os.path.abspath(a.cache_dir), a.fit)) as pool:
-        futures = {pool.submit(export_cell, (i, j, out_dir, a.props_only)): (i, j) for i, j in cells}
+        futures = {pool.submit(export_cell, (i, j, out_dir)): (i, j) for i, j in cells}
         for k, fut in enumerate(concurrent.futures.as_completed(futures), 1):
             cell = futures[fut]
             try:
@@ -270,12 +263,9 @@ def main():
             results.append(r)
             print(f"{k}/{len(cells)} cell {cell}: {r['seconds']:.0f} s, {len(r['entries'])} meshes, "
                   f"{len(r['failed'])} failed tiles, {time.perf_counter() - t0:.0f} s in", flush=True)
-            if not a.props_only:
-                write_manifest(out_dir, results, a.km)
-    shutil.rmtree(os.path.join(out_dir, "_tiles"), ignore_errors=True)
-    if a.props_only:
-        return
+            write_manifest(out_dir, results, a.km)
     m = write_manifest(out_dir, results, a.km)
+    shutil.rmtree(os.path.join(out_dir, "_tiles"), ignore_errors=True)
     print(json.dumps({k: m[k] for k in ("by_kind", "props_skipped")}), "failed", len(m["failed_tiles"]),
           f"{time.perf_counter() - t0:.0f} s", flush=True)
 
