@@ -180,7 +180,10 @@ COLOR_NAMES = {
 
 RESIDENTIAL_PITCHED = False     # surveyed residential footprints pitched even when attached or big: Unreal's world, where
 RESIDENTIAL_PITCHED_FLOORS = 5  # most DRCOG Residential over 600 m2 came out flat and Street View shows them pitched
-RESIDENTIAL_PITCHED_CLASSES = {"residential", "apartments", "terrace", "dormitory"}
+RESIDENTIAL_PITCHED_CLASSES = {"residential", "apartments", "terrace", "dormitory", "house", "detached",
+                               "semidetached_house", "bungalow"}
+RESIDENTIAL_SIMPLIFY_M = (0.3, 0.6, 1.0, 1.5)   # m: outlines simplified by these, in turn, until they take a skeleton roof
+RESIDENTIAL_RISE_M = 3.5        # m a big residential roof rises at most
 RESIDENTIAL_WIDE_M = 30.0       # m: half width up to which such a roof is still built (the skeleton roof)
 
 
@@ -665,12 +668,30 @@ def plan(ring, attrs, neighbours=0, lat=None, lon=None, look=None, town=False, d
                              RESIDENTIAL_WIDE_M if RESIDENTIAL_PITCHED and cls in RESIDENTIAL_PITCHED_CLASSES else 14.0)
     if roof != "flat" and not curved and not church and not wide and box_fill >= SKEL_MIN_FILL:
         skel = skeleton_of(ring, roof)
+    residential_pitched = RESIDENTIAL_PITCHED and cls in RESIDENTIAL_PITCHED_CLASSES and roof in ("gabled", "hipped")
+    if residential_pitched and not skel and not wide:
+        # (a surveyed roofprint has 40-70 corners, every bay and step traced: past roofskel.MAX_CORNERS. Walls and roof
+        # both on the outline with its jogs taken out, not a flat roof)
+        for tol in RESIDENTIAL_SIMPLIFY_M:
+            simpler = _simpler_ring(ring, tol)
+            got = skeleton_of(simpler, roof) if simpler is not None else False
+            if got:
+                ring, skel = simpler, got
+                break
     flattened = False
     if curved == "barrel" and box_fill < BOX_FILL:     # (a vault on its oriented box: a near-rectangular outline)
         roof, curved = "flat", None
         flattened = True
-    if roof != "flat" and not curved and not skel and (box_fill < (0.6 if church else BOX_FILL) or wide):
+    if roof != "flat" and not curved and not skel and (box_fill < (0.6 if church or residential_pitched else BOX_FILL) or wide):
         roof, flattened = "flat", True
+    roof_pitch = style.pitch
+    if residential_pitched and roof in ("gabled", "hipped"):
+        # (a block 26 m across at a house's pitch would be two storeys of roof over two of wall: a low roof, as on the real
+        # ones)
+        run = (max(skel[2]) - EAVE_M) if skel else hw
+        full = roof_pitch or PITCH[roof]
+        if run > 0 and run * math.tan(math.radians(full)) > RESIDENTIAL_RISE_M:
+            roof_pitch = math.degrees(math.atan(RESIDENTIAL_RISE_M / run))
     # a city tower's ground floor is shops or a lobby (Midtown, 2026-10-14: most towers have no class, and their
     # curtain wall came down to the pavement)
     tall = (nf or (h or 0) / FLOOR_M) >= TOWER_SHOP_FLOORS
@@ -693,7 +714,8 @@ def plan(ring, attrs, neighbours=0, lat=None, lon=None, look=None, town=False, d
         elif roof != "flat":
             # the mapped height is the ridge's: the walls stop the drawn roof's rise under it (a skeleton roof's
             # ridge is its outline's innermost point, lower than the oriented box's half width on an L or a T)
-            h = max(2.5, h - (skeleton_rise(skel, style.pitch or PITCH[roof]) if skel else hw * tp))
+            h = max(2.5, h - (skeleton_rise(skel, roof_pitch or PITCH[roof]) if skel else
+                              hw * math.tan(math.radians(roof_pitch)) if roof_pitch != style.pitch else hw * tp))
         elif flattened and h <= FLATTENED_MAX_M:
             # a pitched roof the outline cannot carry, drawn flat: at the mapped roof's mean height (its eave plus
             # half the rise over the footprint's mean half width), not its ridge
@@ -883,7 +905,7 @@ def plan(ring, attrs, neighbours=0, lat=None, lon=None, look=None, town=False, d
                 facade=facade,
                 band=band, shop=shop and not shed and nf >= 1, plain=plain, seed=seed, min_h=0.0, wall=wall,
                 windows=windows, steeple=church and area < 2500 and not curved, porch=porch, cls=cls,
-                deck=garage and roof == "flat", pitch=style.pitch, skel=skel if roof != "flat" else None, rise=rise,
+                deck=garage and roof == "flat", pitch=roof_pitch, skel=skel if roof != "flat" else None, rise=rise,
                 lantern=tuple(attrs["lantern"]) if attrs.get("lantern") else None)
 
 
@@ -1247,6 +1269,18 @@ def roof_skeleton(spec):
         got = skeleton_of(spec.ring, spec.roof)
     spec.skel = got
     return got or None
+
+
+def _simpler_ring(ring, tol):
+    """Local ring (n, 2) counter-clockwise, simplified by tol m and left counter-clockwise, or None."""
+    from shapely.geometry import Polygon
+    from shapely.geometry.polygon import orient
+    p = Polygon(np.asarray(ring, np.float64)).buffer(0)
+    if p.is_empty or p.geom_type != "Polygon":
+        return None
+    q = orient(p.simplify(tol, preserve_topology=True), 1.0)
+    out = np.asarray(q.exterior.coords, np.float64)[:-1]
+    return out if len(out) >= 4 else None
 
 
 def skeleton_of(ring, roof):
