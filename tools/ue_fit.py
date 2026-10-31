@@ -194,6 +194,8 @@ def install(path):
     tags = roads.has_lane_tags
     roads.has_lane_tags = lambda spec: tags(spec) and spec.cls in painted
     _real_street_signs()
+    import buildings
+    buildings.RESIDENTIAL_PITCHED = True
     infra = fit.get("infra") or {}
     if len(infra.get("crossing", ())):
         _mapped_crosswalks_only(infra)

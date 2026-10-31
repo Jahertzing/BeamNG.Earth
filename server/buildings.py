@@ -178,6 +178,11 @@ COLOR_NAMES = {
 }
 
 
+RESIDENTIAL_PITCHED = False     # surveyed residential footprints pitched even when attached or big: Unreal's world, where
+RESIDENTIAL_PITCHED_FLOORS = 4  # most DRCOG Residential over 600 m2 came out flat and Street View shows them pitched
+RESIDENTIAL_WIDE_M = 30.0       # m: half width up to which such a roof is still built (the skeleton roof)
+
+
 def parse_color(val):
     """Parse an OSM/Overture color (hex or CSS name) into an (r, g, b) float tuple in [0, 1], or None."""
     if not val or not isinstance(val, str):
@@ -635,6 +640,9 @@ def plan(ring, attrs, neighbours=0, lat=None, lon=None, look=None, town=False, d
             low = (nf or (h or 0) / FLOOR_M or 3) <= 6
             roof = "gabled" if (style.attached and low and not industrial and not shop
                                 and _hash01(seed, "attached roof") < style.attached) else "flat"
+            if (RESIDENTIAL_PITCHED and cls == "residential" and not industrial and not shop
+                    and (nf or (h or 0) / FLOOR_M or 3) <= RESIDENTIAL_PITCHED_FLOORS):
+                roof = "gabled"             # (apartments and townhouses, a footprint that touches its garages)
         elif barn:
             roof = "gabled"
         elif shed and area < 80:
@@ -652,7 +660,8 @@ def plan(ring, attrs, neighbours=0, lat=None, lon=None, look=None, town=False, d
     # a mapped height (DRCOG's and OSM's are the roof's top) all of it went to the walls: a third of Frederick's
     # houses came out flat-topped boxes a storey too tall (fix/house-heights, 2026-10-28; Jeff's report)
     skel = None
-    wide = hw < 2.0 or hw > (18.0 if barn else 20.0 if church else 14.0)
+    wide = hw < 2.0 or hw > (18.0 if barn else 20.0 if church else
+                             RESIDENTIAL_WIDE_M if RESIDENTIAL_PITCHED and cls == "residential" else 14.0)
     if roof != "flat" and not curved and not church and not wide and box_fill >= SKEL_MIN_FILL:
         skel = skeleton_of(ring, roof)
     flattened = False
