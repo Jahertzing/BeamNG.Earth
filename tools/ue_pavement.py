@@ -49,10 +49,13 @@ PAINT_OFF_M = 0.5               # m past the pavement's edge paint is still kept
 WALK_W_M = 1.6                  # m: a sidewalk's width, along the curb
 WALK_UP_M = 0.15                # m over the pavement: the curb's height
 WALK_NEAR_M = 4.0               # m from the builders' sidewalks the curb gets one
-MATERIALS = ["road_asphalt_2lane", "m_dirt_road", "bne_bridge_concrete"]
+MATERIALS = ["road_asphalt_2lane", "m_dirt_road", "bne_bridge_concrete", "road_asphalt_worn"]
+READ_MATERIAL = {"asphalt": 0, "gravel": 1, "concrete": 2, "faded": 3}      # tools/ue_surface.py's names
 
 
 def material_of(spec):
+    if spec.get("read") in READ_MATERIAL:
+        return READ_MATERIAL[spec["read"]]
     if spec["kind"] == "paved" and spec["surf"] == "concrete":
         return 2
     return MATERIALS.index(UNSURVEYED_MATERIAL.get(spec["kind"], "road_asphalt_2lane"))
@@ -444,6 +447,12 @@ def init_worker(net_dir):
         pass
     with open(os.path.join(net_dir, "stations.pkl"), "rb") as f:
         _w["pieces"] = pickle.load(f)
+    surface = os.path.join(net_dir, "surface.pkl")
+    if os.path.exists(surface):
+        with open(surface, "rb") as f:
+            read = pickle.load(f)
+        for p in _w["pieces"]:
+            p["spec"]["read"] = read.get((p["fid"], p["k"]))
     with open(os.path.join(net_dir, "survey.pkl"), "rb") as f:
         _w["lines"] = pickle.load(f)
     with open(os.path.join(net_dir, "net.pkl"), "rb") as f:
