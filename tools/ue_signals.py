@@ -21,6 +21,7 @@ import ue_export  # noqa: E402
 
 import numpy as np  # noqa: E402
 
+import ue_furniture  # noqa: E402
 import ue_roadnet_out  # noqa: E402
 
 CELL = 2048.0
@@ -29,7 +30,7 @@ POLE_TOP_R = 0.12
 ARM_R = 0.09
 ARM_Z = 6.1                     # m over the road, at the pole
 ARM_RISE = 0.5                  # m the arm rises to its tip
-ARM_MAX_M = 15.0
+ARM_MAX_M = 18.0
 HEAD_W, HEAD_H = 0.34, 1.02     # the three-lens head (12 inch lenses)
 PLATE_W, PLATE_H = 0.86, 1.42   # its backplate
 HEAD_DEPTH = 0.22
@@ -37,6 +38,9 @@ HEAD_BOTTOM_Z = 5.1             # m over the road
 LENS_R = 0.15
 KERB_CLEAR_M = 1.6              # m from the outer lane's edge to the pole
 FAR_DEFAULT_M = (12.0, 48.0)    # m from the stop line to the far side, at least and at most
+SLIDE_M = (0.0, 1.5, -1.5, 3.0, -3.0, 4.5, 6.0, 8.0, 10.0, 12.0)    # m along the road the pole may stand off its place
+KERB_SEARCH_M = 16.0            # m past the lanes' side to look for the curb
+POLE_CLEAR_M = 0.7              # m off the pavement
 MATERIALS = ["bne_gsign_steel", "bne_gsign_textk", "bne_signal_red", "bne_signal_yellow", "bne_signal_green"]
 
 
@@ -99,24 +103,43 @@ def end_dir(points, reach=15.0):
     return u / max(np.linalg.norm(u), 1e-6)
 
 
+def corner(world, F, t, n, kerb):
+    """(F, kerb) with the pole's foot on free ground: the far right corner as the drawn pavement has it, moved along the road
+    and out past the curb as little as will do; None when no ground is near. The arm stays square to the lanes."""
+    best, score = None, 1e9
+    for da in SLIDE_M:
+        G = F + t * da
+        extra = np.arange(0.0, KERB_SEARCH_M, 0.5)
+        Q = G + n[None] * (kerb - extra)[:, None]
+        sd, fl = world.at(Q)
+        free = np.isfinite(sd) & (sd >= POLE_CLEAR_M) & ((fl & (ue_furniture.F_BLD | ue_furniture.F_DECK)) == 0)
+        if not free.any():
+            continue
+        k = int(np.argmax(free))
+        cost = abs(da) * 0.7 + float(extra[k]) + (1.0 if fl[k] & ue_furniture.F_WALK else 0.0)
+        if cost < score:
+            best, score = (G, kerb - float(extra[k])), cost
+    return best
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--net", default="C:/beamng-earth/Earth.UE/export/roadnet")
     ap.add_argument("--export", default="C:/beamng-earth/Earth.UE/export/frederick-r2")
     ap.add_argument("--out", default=None)
     ap.add_argument("--manifest", action="store_true")
+    ap.add_argument("--jobs", type=int, default=6)
     a = ap.parse_args()
     out_dir = a.out or a.export
     with open(os.path.join(a.net, "roadnet.json")) as f:
         net = json.load(f)
     links = net["links"]
     heights = ue_roadnet_out.Heights(a.export)
-    by_from, carriage = {}, []
+    cells = sorted((int(f.split("_")[1]), int(f.split("_")[2].split(".")[0])) for f in os.listdir(a.export) if f.startswith("ground_") and f.endswith(".glb"))
+    world = ue_furniture.World(a.export, cells, a.jobs)
+    by_from = {}
     for lk in links:
         by_from.setdefault(lk["from"], []).append(lk)
-        if lk["level"] == 0 and lk["class"] not in ("service", "track"):
-            p = np.array(lk["points"])[:, :2]
-            carriage.append((p, float(lk["width"]) / 2 if lk["oneway"] else float(lk["width"]) / 2))
     node_junction = {k: v.get("junction") for k, v in net["nodes"].items()}
     junctions = {j["id"]: j for j in net["junctions"]}
     # (a slip lane past the corner has no head of its own: a ramp counts only where a through road stops too)
@@ -154,20 +177,10 @@ def main():
         offs = sorted(float(v) for v in lk["lanes"]) or [0.0]
         lw = float(lk["lane_width"] or 3.6)
         kerb = offs[0] - lw / 2 - KERB_CLEAR_M
-        # (past any other carriageway's edge at the corner)
-        for _ in range(6):
-            P = F + n * kerb
-            bad = False
-            for p, h in carriage:
-                if abs(p[:, 0] - P[0]).min() > 40 or abs(p[:, 1] - P[1]).min() > 40:
-                    continue
-                d = np.hypot(*(p - P).T).min()
-                if d < h + 0.6:
-                    bad = True
-                    break
-            if not bad:
-                break
-            kerb -= 1.2
+        got = corner(world, F, t, n, kerb)
+        if got is None:
+            continue
+        F, kerb = got
         P = F + n * kerb
         z0 = float(heights.ground(P[None])[0])
         zr = float(heights.ground(F[None])[0])
