@@ -9,8 +9,8 @@ What stands where:
 - OpenStreetMap's mapped street lamps and power poles first, as mapped, only pushed off the pavement (the map's points are
   a few metres out; 13% of the lamps fall on the drawn road) and their arms turned to the road.
 - Mapped poles a span apart are joined into lines, with wires.
-- Lamps where the map has none only where they are as good as sure: signals, a through road's built-up junctions, a ramp's
-  ends. Nothing along a block and nothing on a subdivision's own streets: a lamp that isn't there reads worse than one
+- Lamps where the map has none only where they are as good as sure: signals, a through road's built-up junctions, the old
+  towns' corners, a ramp's ends. Nothing along a block and nothing on a subdivision's own streets: a lamp that isn't there reads worse than one
   missing (the owner's street has none; rule-made lamps on residential streets had no evidence behind them).
 - Poles where the map has none: country roads, one side, a rural span; the old towns' alleys; a built-up street only with
   mapped poles along it: the power in the area's subdivisions is buried.
@@ -623,7 +623,8 @@ def place_junctions(w, links, at, urban_tree, urban_of, places):
             ang = sorted(ang)
             gaps = [(ang[(k + 1) % len(ang)] - ang[k]) % (2 * math.pi) for k in range(len(ang))]
             corners = [ang[k] + gaps[k] / 2 for k in range(len(ang)) if math.radians(40) < gaps[k]]
-            if not any(s["cls"] in MAJOR for s in legs):
+            old = any(x0 <= c[0] < x1 and y0 <= c[1] < y1 for x0, y0, x1, y1 in OLD_TOWNS)
+            if not old and not any(s["cls"] in MAJOR for s in legs):
                 continue        # (a subdivision's own streets: dark but for the lamps the map has)
             major = sum(s["cls"] in MAJOR for s in legs) >= 3
             want = 2 if lk["control"] == "signal" else 1
