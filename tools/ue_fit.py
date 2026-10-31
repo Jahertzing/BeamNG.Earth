@@ -170,6 +170,7 @@ def _real_street_signs():
     guidesigns.ROUTE_STATE_PREFIX = "CO-"
     guidesigns.ROUTE_US_NUMBERS = frozenset((6, 24, 34, 36, 40, 50, 85, 87, 160, 285, 287, 385, 400, 491, 550))
     guidesigns.mast_arm_signs = lambda *a, **k: 0
+    guidesigns.DELINEATOR_EVERY_M = 160.0       # (MUTCD 3F: 200-530 ft on a tangent)
 
 
 def _lanes_kept(roads, sp):

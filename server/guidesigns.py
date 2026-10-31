@@ -1603,7 +1603,7 @@ def delineators(mesh, roads, box, barriers=None, left_hand=False):
                 if any(_inside(q, ol, hw) for ol, hw in others):
                     continue
                 z = float(p[2])
-                mesh.box((q[0], q[1], z - 0.2), (q[0], q[1], z + 1.15), 0.05, 0.025, M_PANEL, POST)
+                mesh.box((q[0], q[1], z - 0.2), (q[0], q[1], z + 1.15), 0.05, 0.025, M_WHITE, POST)
                 n = -t
                 c = np.array([q[0] + n[0] * 0.03, q[1] + n[1] * 0.03])
                 r = R * 0.04
