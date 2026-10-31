@@ -125,7 +125,7 @@ def corner(world, F, t, n, kerb):
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--net", default="C:/beamng-earth/Earth.UE/export/roadnet")
-    ap.add_argument("--export", default="C:/beamng-earth/Earth.UE/export/frederick-r2")
+    ap.add_argument("--export", default="C:/beamng-earth/Earth.UE/export/frederick-r4")
     ap.add_argument("--out", default=None)
     ap.add_argument("--manifest", action="store_true")
     ap.add_argument("--jobs", type=int, default=6)

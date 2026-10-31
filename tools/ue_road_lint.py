@@ -38,7 +38,7 @@ def mask_of(path, x0, y0, n, want=None, skip=None):
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--dir", default="C:/beamng-earth/Earth.UE/export/frederick-r2")
+    ap.add_argument("--dir", default="C:/beamng-earth/Earth.UE/export/frederick-r4")
     ap.add_argument("--cell", default="0,-1")
     ap.add_argument("--png", default=None)
     a = ap.parse_args()

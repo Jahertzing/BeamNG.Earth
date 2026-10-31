@@ -58,7 +58,7 @@ def draw_tris(d, P, T, x0, y1, px, fill):
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--dir", default="C:/beamng-earth/Earth.UE/export/frederick-r2")
+    ap.add_argument("--dir", default="C:/beamng-earth/Earth.UE/export/frederick-r4")
     ap.add_argument("--box", required=True)
     ap.add_argument("--png", required=True)
     ap.add_argument("--px", type=float, default=0.25)

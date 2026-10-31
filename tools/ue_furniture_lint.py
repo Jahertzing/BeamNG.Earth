@@ -114,7 +114,7 @@ def check_cell(job):
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--dir", default="C:/beamng-earth/Earth.UE/export/frederick-r2")
+    ap.add_argument("--dir", default="C:/beamng-earth/Earth.UE/export/frederick-r4")
     ap.add_argument("--lamps", default="C:/beamng-earth/Earth.UE/game/Plugins/EarthSky/Data/lamps.csv")
     ap.add_argument("--out", default=None)
     ap.add_argument("--cells", default=None)
