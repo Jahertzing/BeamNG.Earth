@@ -7,6 +7,8 @@ tile. Cells run in processes at low priority, and a finished cell is skipped on 
     .venv\\Scripts\\python tools\\ue_export_area.py --cells -2,-1;-2,0 ...     (only these cells)
 
 The manifest has the shape tools/ue_export.py writes, so scripts/import_slice.py reads either.
+
+Every run also writes props_<i>_<j>.json, the cell's prop rows: {"groups": [...], "items": [[group index, x, y, z, ...]]}.
 """
 import argparse
 import concurrent.futures
@@ -103,11 +105,26 @@ def full_heights(frame, heightmap, elev, u, x0, y0):
     return out
 
 
+def tile_props(path, names, rows):
+    """A tile's prop rows into a cell's: rows hold an index into their tile's groups, here into the cell's names."""
+    with open(path, encoding="utf-8") as f:
+        got = json.load(f).get("props") or {}
+    groups = got.get("groups", [])
+    for g in groups:
+        if g not in names:
+            names.append(g)
+    index = [names.index(g) for g in groups]
+    rows.extend([index[r[0]]] + list(r[1:]) for r in got.get("items", []))
+
+
 def export_cell(job):
-    i, j, out_dir = job
+    i, j, out_dir, props_only = job
     t0 = time.perf_counter()
     done_mark = os.path.join(out_dir, "cells", f"{i}_{j}.json")
-    if os.path.exists(done_mark):
+    props_path = os.path.join(out_dir, f"props_{i}_{j}.json")
+    if props_only and os.path.exists(props_path):
+        return {"cell": [i, j], "entries": [], "failed": [], "props": 0, "seconds": 0.0}
+    if os.path.exists(done_mark) and not props_only:
         with open(done_mark) as f:
             return json.load(f)
     b, catch, heights = _w["blockworker"], _w["catch"], _w["heights"]
@@ -118,6 +135,7 @@ def export_cell(job):
     os.makedirs(scratch, exist_ok=True)
     catch.shapes.clear()
     groups, failed, props = {}, [], 0
+    prop_names, prop_rows = [], []
     for a in range(TILES):
         for c in range(TILES):
             tx, ty = i * TILES + a, j * TILES + c
@@ -125,6 +143,7 @@ def export_cell(job):
                 b.roads_tile(1, lat0, lon0, _w["zoom"], tx, ty, scratch, "/temp/x", True, ue_export.GROUND_LIFT_M, True,
                              False, True, _w["q"], False, 0.0)
                 shapes, n_props, _ = ue_export.tile_shapes(os.path.join(scratch, f"roads_1_{tx}_{ty}.json"), catch)
+                tile_props(os.path.join(scratch, f"roads_1_{tx}_{ty}.json"), prop_names, prop_rows)
             except Exception as e:      # reported, the rest goes on
                 failed.append([tx, ty, f"{type(e).__name__}: {e}"])
                 continue
@@ -135,6 +154,12 @@ def export_cell(job):
                     continue
                 off = np.array([origin[0] - x0, origin[1] - y0, origin[2]])
                 groups.setdefault(ue_export.kind_of(name), []).append((name, got[0], got[1], got[2], off))
+    with open(props_path, "w") as f:
+        json.dump({"groups": prop_names, "items": prop_rows}, f, separators=(",", ":"))
+    if props_only:
+        shutil.rmtree(scratch, ignore_errors=True)
+        return {"cell": [i, j], "entries": [], "failed": failed, "props": len(prop_rows),
+                "seconds": round(time.perf_counter() - t0, 1)}
     entries = []
     for kind, shapes in groups.items():
         P, T, UV, C, names, M = merged(shapes)
@@ -220,6 +245,7 @@ def main():
     ap.add_argument("--out", default="C:/beamng-earth/Earth.UE/export/frederick")
     ap.add_argument("--cache-dir", default=os.environ["BNGE_WORLD_CACHE"])
     ap.add_argument("--fit", default=None, help="corrections file (tools/ue_fit.py)")
+    ap.add_argument("--props-only", action="store_true", help="only each cell's props_<i>_<j>.json; meshes and manifest left alone")
     a = ap.parse_args()
     out_dir = a.out
     os.makedirs(out_dir, exist_ok=True)
@@ -233,7 +259,7 @@ def main():
     t0 = time.perf_counter()
     results = []
     with concurrent.futures.ProcessPoolExecutor(a.jobs, initializer=init_worker, initargs=(os.path.abspath(a.cache_dir), a.fit)) as pool:
-        futures = {pool.submit(export_cell, (i, j, out_dir)): (i, j) for i, j in cells}
+        futures = {pool.submit(export_cell, (i, j, out_dir, a.props_only)): (i, j) for i, j in cells}
         for k, fut in enumerate(concurrent.futures.as_completed(futures), 1):
             cell = futures[fut]
             try:
@@ -244,9 +270,12 @@ def main():
             results.append(r)
             print(f"{k}/{len(cells)} cell {cell}: {r['seconds']:.0f} s, {len(r['entries'])} meshes, "
                   f"{len(r['failed'])} failed tiles, {time.perf_counter() - t0:.0f} s in", flush=True)
-            write_manifest(out_dir, results, a.km)
-    m = write_manifest(out_dir, results, a.km)
+            if not a.props_only:
+                write_manifest(out_dir, results, a.km)
     shutil.rmtree(os.path.join(out_dir, "_tiles"), ignore_errors=True)
+    if a.props_only:
+        return
+    m = write_manifest(out_dir, results, a.km)
     print(json.dumps({k: m[k] for k in ("by_kind", "props_skipped")}), "failed", len(m["failed_tiles"]),
           f"{time.perf_counter() - t0:.0f} s", flush=True)
 
