@@ -19,6 +19,7 @@ WIDTH_CLASSES_OUT = {"track", "raceway"}
 CROSSWALK_NEAR_M = 15.0         # m from a mapped crossing a painted one stays
 SIGNAL_NEAR_M = 45.0            # m from a mapped signal
 M_LAT = 111132.0
+LANE_MIN_M, LANE_MAX_M = 3.0, 3.9     # m a carriageway's lanes stay within, the rest shoulder
 
 
 def _key(ll):
@@ -140,6 +141,16 @@ def _real_street_signs():
     guidesigns.mast_arm_signs = lambda *a, **k: 0
 
 
+def _lanes_kept(roads, sp):
+    """A measured width goes to the shoulders, not into the lanes: the lanes of a road with a count and a shoulder keep
+    a real width (I-25's pavement is 19.6 m and three 4.8 m lanes is not what is there)."""
+    if not sp.lanes or sp.shoulder is None or not sp.oneway:
+        return sp
+    n = int(sp.lanes)
+    lw = float(np.clip((sp.width - 2 * float(sp.shoulder)) / n, LANE_MIN_M, LANE_MAX_M))
+    return sp._replace(shoulder=max(0.0, (sp.width - n * lw) / 2))
+
+
 def install(path):
     import blockworker
     import roads
@@ -164,7 +175,7 @@ def install(path):
                 if sp is not None:
                     w = widths.get(str(feats.ids[i]))
                     if w is not None:
-                        out[i] = sp._replace(width=w)
+                        out[i] = _lanes_kept(roads, sp._replace(width=w))
             return out
         return wrapped
     # lane tags on a local street or a lot's aisle are not painted lines: a residential street here has no centre line

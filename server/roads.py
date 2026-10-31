@@ -4226,7 +4226,9 @@ def extras(spec, pts, lon, left_hand=False, wid=None, country=None, osm=None):
         ew = st.edge_motorway if motorway else st.edge
         travel_left = 1 if getattr(spec, "dir", 0) >= 0 else -1      # (dir < 0: one way against the line)
         for side in (1, -1):
-            inset = motorway_shoulder(spec) if rural_motorway(spec) else EDGE_LINE["inset"]
+            # (at the lanes' edge, the shoulder outside it: a town's motorway with a measured shoulder had its lines on the
+            # pavement's edge, the outer lanes twice as wide as the rest)
+            inset = max(EDGE_LINE["inset"], float(spec.shoulder)) if spec.shoulder is not None else                 motorway_shoulder(spec) if rural_motorway(spec) else EDGE_LINE["inset"]
             mat = st.left_edge if (st.left_edge and spec.oneway and side == travel_left) else "line_white"
             mark("edge", mat, ew, op(pts, side * (w / 2 - inset)), side=side)
     return out
