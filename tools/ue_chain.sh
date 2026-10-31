@@ -34,10 +34,15 @@ mkdir -p "$E/$NAME-builder"
 mv "$E/$NAME"/road_*.glb "$E/$NAME"/walks_*.glb "$E/$NAME-builder/"
 rm -f "$E/$NAME"/walkcol_*.glb
 ln "$E/$NAME-pave"/road_*.glb "$E/$NAME-pave"/walks_*.glb "$E/$NAME/"
+stage "dashes cut, sidewalks only where the aerial has them"
+$PY tools/ue_dashes.py --dir "$OUT" | tail -1
+$PY tools/ue_walks.py --dir "$OUT" | tail -1
 $PY tools/ue_manifest_sync.py --dir "$OUT"
 stage "signals, sign posts, furniture"
 $PY tools/ue_signals.py --export "$OUT" --manifest | tail -1
 $PY tools/ue_settle.py --dir "$OUT" | tail -1 | cut -c1-200
 $PY tools/ue_furniture.py --dir "$OUT" --lamps "$W/_qa/lamps-$NAME.csv" --apply | tail -1 | cut -c1-200
+$PY tools/ue_mask.py --dir "$OUT" | tail -1
+$PY tools/ue_road_qa.py --dir "$OUT" --out "$W/_qa/$NAME" | tail -14 | cut -c1-200 || true
 stage "done"
 du -sh "$E/$NAME"
