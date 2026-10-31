@@ -179,7 +179,8 @@ COLOR_NAMES = {
 
 
 RESIDENTIAL_PITCHED = False     # surveyed residential footprints pitched even when attached or big: Unreal's world, where
-RESIDENTIAL_PITCHED_FLOORS = 4  # most DRCOG Residential over 600 m2 came out flat and Street View shows them pitched
+RESIDENTIAL_PITCHED_FLOORS = 5  # most DRCOG Residential over 600 m2 came out flat and Street View shows them pitched
+RESIDENTIAL_PITCHED_CLASSES = {"residential", "apartments", "terrace", "dormitory"}
 RESIDENTIAL_WIDE_M = 30.0       # m: half width up to which such a roof is still built (the skeleton roof)
 
 
@@ -640,9 +641,6 @@ def plan(ring, attrs, neighbours=0, lat=None, lon=None, look=None, town=False, d
             low = (nf or (h or 0) / FLOOR_M or 3) <= 6
             roof = "gabled" if (style.attached and low and not industrial and not shop
                                 and _hash01(seed, "attached roof") < style.attached) else "flat"
-            if (RESIDENTIAL_PITCHED and cls == "residential" and not industrial and not shop
-                    and (nf or (h or 0) / FLOOR_M or 3) <= RESIDENTIAL_PITCHED_FLOORS):
-                roof = "gabled"             # (apartments and townhouses, a footprint that touches its garages)
         elif barn:
             roof = "gabled"
         elif shed and area < 80:
@@ -654,6 +652,9 @@ def plan(ring, attrs, neighbours=0, lat=None, lon=None, look=None, town=False, d
                 roof = "gabled" if seed < 1.0 - style.hipped else "hipped"
         else:
             roof = "flat"
+        if (RESIDENTIAL_PITCHED and roof == "flat" and cls in RESIDENTIAL_PITCHED_CLASSES and not industrial and not shop
+                and (nf or (h or 0) / FLOOR_M or 3) <= RESIDENTIAL_PITCHED_FLOORS):
+            roof = "gabled"                 # (apartments and townhouses, touching their garages or not)
     # pitched roofs on near-rectangular footprints (the oriented box's roof; a church's nave keeps its gable beside a
     # tower or an apse), and on any other outline the straight skeleton roofs (skeleton_of: an L, a T, a tract
     # house's bays and bump-outs). Before the skeleton roofs a footprint under BOX_FILL of its box was flat, and with
@@ -661,7 +662,7 @@ def plan(ring, attrs, neighbours=0, lat=None, lon=None, look=None, town=False, d
     # houses came out flat-topped boxes a storey too tall (fix/house-heights, 2026-10-28; Jeff's report)
     skel = None
     wide = hw < 2.0 or hw > (18.0 if barn else 20.0 if church else
-                             RESIDENTIAL_WIDE_M if RESIDENTIAL_PITCHED and cls == "residential" else 14.0)
+                             RESIDENTIAL_WIDE_M if RESIDENTIAL_PITCHED and cls in RESIDENTIAL_PITCHED_CLASSES else 14.0)
     if roof != "flat" and not curved and not church and not wide and box_fill >= SKEL_MIN_FILL:
         skel = skeleton_of(ring, roof)
     flattened = False

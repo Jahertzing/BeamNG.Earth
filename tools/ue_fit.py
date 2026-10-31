@@ -125,6 +125,37 @@ def _mapped_crosswalks_only(infra):
     junctions.find = mapped
 
 
+def _surveyed_classes(md):
+    """Map cells whose DRCOG roofprints have their survey's class where the Overture building each replaced had none (the
+    stored cells were merged without it: most of them are classless, so a surveyed apartment block read as nothing).
+    Mapped to the cells as they come out of md.cell; a stored cell is left as it is."""
+    import drcog
+    cell = md.cell
+
+    def classed(key, *a, **kw):
+        got = cell(key, *a, **kw)
+        layer = got.layers.get("buildings") if hasattr(got, "layers") else None
+        if layer is None or not len(layer) or layer.__dict__.get("_ue_classes") or md.drcog() is None:
+            return got
+        layer.__dict__["_ue_classes"] = True
+        try:
+            roof = md.drcog().roofprints(key)
+        except Exception:
+            return got
+        by_oid = {int(o): str(t) for o, t in zip(roof["oid"], roof["type"])}
+        cls = [str(v) for v in layer.attrs["class"]]
+        for i, fid in enumerate(layer.ids):
+            fid = str(fid)
+            if not cls[i] and fid.startswith("zdrcog-"):
+                try:
+                    cls[i] = drcog.TYPE_CLASS.get(by_oid.get(int(fid[7:].split("-")[0]), ""), "")
+                except ValueError:
+                    pass
+        layer.attrs["class"] = np.array(cls)
+        return got
+    md.cell = classed
+
+
 def _real_street_signs():
     """Street name signs at their real size for a world seen at true scale: MUTCD D3-1, 8" capitals on major streets and
     6" on the rest, one post to a crossing, route names as signs spell them. Blades on signal mast arms are left out: they
@@ -196,6 +227,7 @@ def install(path):
     _real_street_signs()
     import buildings
     buildings.RESIDENTIAL_PITCHED = True
+    _surveyed_classes(blockworker._s.md)
     infra = fit.get("infra") or {}
     if len(infra.get("crossing", ())):
         _mapped_crosswalks_only(infra)
