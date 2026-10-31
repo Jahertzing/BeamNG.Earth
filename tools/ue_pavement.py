@@ -419,7 +419,7 @@ def build_cell(pieces, lines, i, j, in_dir, out_dir, lots=(), road_dir=None):
     g.add(np.concatenate(allP), np.concatenate(allT), np.concatenate(allUV), names, np.concatenate(allM), np.concatenate(allC))
     os.makedirs(out_dir, exist_ok=True)
     g.write(os.path.join(out_dir, f"road_{i}_{j}.glb"), f"road_{i}_{j}", (0.0, 0.0, 0.0))
-    walk_path = os.path.join(in_dir, f"walks_{i}_{j}.glb")
+    walk_path = os.path.join(road_dir or in_dir, f"walks_{i}_{j}.glb")
     if os.path.exists(walk_path):
         import ue_road_eval
         wm = np.zeros(cell_mask.shape, bool)
@@ -460,8 +460,8 @@ def init_worker(net_dir):
 
 
 def run_cell(job):
-    i, j, in_dir, out_dir = job
-    return build_cell(_w["pieces"], _w["lines"], i, j, in_dir, out_dir, _w["lots"])
+    i, j, in_dir, out_dir, builder = job
+    return build_cell(_w["pieces"], _w["lines"], i, j, in_dir, out_dir, _w["lots"], builder)
 
 
 def main():
@@ -470,6 +470,7 @@ def main():
     ap.add_argument("--net", default="C:/beamng-earth/Earth.UE/export/roadnet")
     ap.add_argument("--dir", default="C:/beamng-earth/Earth.UE/export/roads-a")
     ap.add_argument("--out", default=None)
+    ap.add_argument("--builder", default=None, help="the builders' road and walks meshes, once --dir holds the finished ones")
     ap.add_argument("--cell", default=None, help="i,j;i,j (all the cells with a ground mesh in --dir if left out)")
     ap.add_argument("--jobs", type=int, default=3)
     a = ap.parse_args()
@@ -480,7 +481,7 @@ def main():
                  if f.startswith("ground_") and f.endswith(".glb")]
     out = a.out or a.dir + "-pave"
     with concurrent.futures.ProcessPoolExecutor(a.jobs, initializer=init_worker, initargs=(a.net,)) as pool:
-        for got in pool.map(run_cell, [(i, j, a.dir, out) for i, j in cells]):
+        for got in pool.map(run_cell, [(i, j, a.dir, out, a.builder) for i, j in cells]):
             print(json.dumps(got), flush=True)
 
 
