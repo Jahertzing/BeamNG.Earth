@@ -12,8 +12,9 @@ What stands where:
 - Lamps where the map has none only where they are as good as sure: signals, a through road's built-up junctions, a ramp's
   ends. Nothing along a block and nothing on a subdivision's own streets: a lamp that isn't there reads worse than one
   missing (the owner's street has none; rule-made lamps on residential streets had no evidence behind them).
-- Poles where the map has none: country roads, one side, a rural span; a built-up street only with mapped poles along it:
-  the power in the area's subdivisions is buried.
+- Poles where the map has none: country roads, one side, a rural span; the old towns' alleys; a built-up street only with
+  mapped poles along it: the power in the area's subdivisions is buried.
+- Lattice towers and conductors along the mapped high voltage lines (tower_<i>_<j>.glb, towercol_<i>_<j>.glb).
 
 --apply writes wire_<i>_<j>.glb over the builders' and puts them in the export's manifest. lamps.csv is EarthSky's: kind, x, y,
 z, yaw, scale (0 lamp post, 1 wooden pole, 2 lamp head, 3 the arm of a lamp on a pole).
@@ -46,6 +47,10 @@ MARGIN_M = lint.MARGIN_M
 SD_Q = 8.0                      # the stored distance's steps a metre
 F_WALK, F_DECK, F_BLD = 1, 2, 4
 POST, POLE, HEAD, ARM = 0, 1, 2, 3
+OLD_TOWNS = ((-400.0, 1050.0, 450.0, 2000.0), (-400.0, -450.0, 500.0, 350.0), (-400.0, -2050.0, 100.0, -1300.0),
+             (-10100.0, -6100.0, -9250.0, -5100.0))     # frame m: Firestone, Frederick, Dacono, Erie: the alley grids of the aerial
+ALLEY_W_M = 7.0
+ALLEY_MIN_M = 50.0
 MAJOR = {"primary", "secondary", "tertiary", "trunk"}
 LAMP_SCALE_LOW = 0.85           # 25 ft posts, the arterials' 30+ ft
 MOTORWAY_LAMP_SCALE = furniture.HIGHWAY_LAMP_H["na"] / furniture.LAMP_H[furniture.G_LAMP]
@@ -135,6 +140,7 @@ def mapped_infra(path):
     import ue_roadnet
     cells, frame, urban, widths, keys, md = ue_roadnet.load_features(os.path.abspath(os.environ["BNGE_WORLD_CACHE"]), (-10240, -10240, 10240, 10240))
     want = {"street_lamp": [], "power_pole": [], "power_tower": []}
+    lines = []
     seen = set()
     for key in keys:
         lay = md.cell(key, layers=("infrastructure",), kind="demand").layers.get("infrastructure")
@@ -143,14 +149,18 @@ def mapped_infra(path):
         cls = lay.attrs.get("class")
         for i in range(len(lay)):
             fid, c = str(lay.ids[i]), str(cls[i])
-            if c not in want or fid in seen:
+            if (c not in want and c != "power_line") or fid in seen:
                 continue
             seen.add(fid)
             for part in lay.parts(i):
                 for ring in part:
                     e, n, _ = frame.geodetic_to_enu(ring[:, 1], ring[:, 0], 0.0)
-                    want[c].append(np.c_[e, n].mean(0))
+                    if c == "power_line":
+                        lines.append(np.c_[e, n])
+                    else:
+                        want[c].append(np.c_[e, n].mean(0))
     out = {k: np.array(v).reshape(-1, 2) for k, v in want.items()}
+    out["power_line"] = lines
     with open(path, "wb") as f:
         pickle.dump(out, f)
     return out
@@ -459,6 +469,136 @@ def place_roads(w, chains, urban_tree, urban_of, poles_mapped, places, runs):
     return stats
 
 
+def place_alleys(w, links, runs):
+    """The old towns' power runs down their alleys: a line of poles along each."""
+    seen = set()
+    n_put = 0
+    for lk in links:
+        key = tuple(sorted((lk["from"], lk["to"])))
+        if key in seen or lk["class"] != "service" or lk["level"] != 0 or float(lk["width"]) > ALLEY_W_M:
+            continue
+        seen.add(key)
+        p = np.array(lk["points"])[:, :2]
+        L = float(np.hypot(*np.diff(p, axis=0).T).sum())
+        m = p.mean(0)
+        if L < ALLEY_MIN_M or np.hypot(*(p[-1] - p[0])) < 0.97 * L:
+            continue
+        if not any(x0 <= m[0] < x1 and y0 <= m[1] < y1 for x0, y0, x1, y1 in OLD_TOWNS):
+            continue
+        side = 1 if h01(round(float(m[1]) / 200.0), round(float(m[0]) / 200.0), "alley") < 0.5 else -1
+        at, P, U = stations(p, TOWN_SPAN_M, 6.0)
+        run = []
+        for q, u in zip(P, U):
+            got = spot(w, q, u, np.array([-u[1], u[0]]) * side, float(lk["width"]) / 2, (0.6, 1.0, 1.5, 2.0), 0.4, (0.0, 2.0, -2.0, 4.0, -4.0))
+            if got is not None:
+                run.append(got[0])
+        if len(run) > 1:
+            runs.append(run)
+            n_put += len(run)
+    return n_put
+
+
+TOWER_H = 28.0                  # m: the area's 230 kV lattice towers
+TOWER_BASE_M = 4.0              # half the base's side
+TOWER_TOP_M = 0.7
+TOWER_ARMS = ((19.0, 6.5), (23.0, 5.5), (27.0, 4.5))    # (height, half length) of the cross-arms
+TOWER_PANELS = 6
+CONDUCTOR_DROP_M = 2.2          # m the conductors hang under the arms
+CONDUCTOR_SAG = 0.03            # of a span
+CONDUCTOR_R = 0.03
+TOWER_LINE_SHARE = 0.5          # of a line's supports towers: the line is a tower line
+
+
+def tower_mesh(m, c, yaw, z0):
+    """A lattice tower at c, its arms along yaw, into ue_signals.Mesh m."""
+    ca, sa = math.cos(yaw), math.sin(yaw)
+    ex, ey = np.array([ca, sa, 0.0]), np.array([-sa, ca, 0.0])
+
+    def corner(z, sx, sy):
+        h = TOWER_BASE_M + (TOWER_TOP_M - TOWER_BASE_M) * (max(z, 0.0) / TOWER_H) ** 0.7
+        return np.array([c[0], c[1], z0 + z]) + ex * sx * h + ey * sy * h
+    zs = np.linspace(0.0, TOWER_H, TOWER_PANELS + 1)
+    legs = ((1, 1), (-1, 1), (-1, -1), (1, -1))
+    for k, (sx, sy) in enumerate(legs):
+        nx, ny = legs[(k + 1) % 4]
+        m.tube(corner(-0.3, sx, sy), corner(TOWER_H, sx, sy), 0.14, 0.07, 0, sides=4)
+        for a, b in zip(zs[:-1], zs[1:]):
+            m.tube(corner(a, sx, sy), corner(b, nx, ny), 0.05, 0.05, 0, sides=3)
+            m.tube(corner(a, nx, ny), corner(b, sx, sy), 0.05, 0.05, 0, sides=3)
+    for z, half in TOWER_ARMS:
+        o = np.array([c[0], c[1], z0 + z])
+        m.tube(o - ex * half, o + ex * half, 0.1, 0.1, 0, sides=4)
+
+
+def tower_lines(w, lines, towers, poles, export):
+    """The high voltage lines: lattice towers at the supports of a mapped line that the map calls towers, conductors between.
+    Writes tower_<i>_<j>.glb and towercol_<i>_<j>.glb; returns their manifest entries and the conductors."""
+    import ue_signals
+    tt, pt = cKDTree(towers), cKDTree(poles)
+    built = {}
+    spans = []
+    for ln in lines:
+        nt = int((tt.query(ln)[0] < 1.0).sum())
+        np_ = int((pt.query(ln)[0] < 1.0).sum())
+        if nt == 0 or nt < TOWER_LINE_SHARE * (nt + np_):
+            continue
+        tops = []
+        for k, p in enumerate(ln):
+            a, b = ln[max(k - 1, 0)], ln[min(k + 1, len(ln) - 1)]
+            d = b - a
+            yaw = math.atan2(d[0], -d[1])
+            q = push_off(w, p, 4.0)
+            if q is None:
+                tops.append(None)
+                continue
+            key = (round(float(q[0])), round(float(q[1])))
+            if key not in built:
+                built[key] = (q, yaw)
+            tops.append((q, yaw))
+        for a, b in zip(tops[:-1], tops[1:]):
+            if a is not None and b is not None and np.hypot(*(a[0] - b[0])) > 5.0:
+                spans.append((a, b))
+    mesh, col = {}, {}
+    zs = {}
+    for key, (q, yaw) in built.items():
+        z0 = float(w.h.ground(q[None])[0])
+        if not np.isfinite(z0):
+            continue
+        zs[key] = z0
+        cell = (int(q[0] // CELL), int(q[1] // CELL))
+        tower_mesh(mesh.setdefault(cell, ue_signals.Mesh()), q, yaw, z0)
+        h = TOWER_BASE_M * 0.9
+        col.setdefault(cell, ue_signals.Mesh()).box((q[0], q[1], z0 + 2.0), (h, 0, 0), (0, h, 0), (0, 0, 2.5), 0)
+    entries = []
+    for f in os.listdir(export):
+        if f.startswith("tower") and f.endswith(".glb"):
+            os.remove(os.path.join(export, f))
+    for cell, m in mesh.items():
+        origin = np.array([cell[0] * CELL, cell[1] * CELL, 0.0])
+        for kind, name, mm in (("sign", f"tower_{cell[0]}_{cell[1]}", m), ("signcol", f"towercol_{cell[0]}_{cell[1]}", col[cell])):
+            P, T, M = mm.result()
+            g = ue_export.Glb()
+            g.add(P - origin, T, np.zeros((len(P), 2)), ["bne_gsign_steel"], M, np.full((len(P), 4), 255, np.uint8))
+            g.write(os.path.join(export, name + ".glb"), name, (0.0, 0.0, 0.0))
+            entries.append({"file": name + ".glb", "kind": kind, "collision_only": kind == "signcol", "origin": origin.tolist(), "tris": int(len(T)),
+                            "verts": int(len(P)), "materials": ["bne_gsign_steel"]})
+    wires = []
+    for (qa, ya), (qb, yb) in spans:
+        za, zb = zs.get((round(float(qa[0])), round(float(qa[1])))), zs.get((round(float(qb[0])), round(float(qb[1]))))
+        if za is None or zb is None:
+            continue
+        span = float(np.hypot(*(qa - qb)))
+        t = np.linspace(0.0, 1.0, max(3, int(span / 30.0)) + 1)
+        for z, half in TOWER_ARMS:
+            for sd in (1, -1):
+                pa = np.array([qa[0] + math.cos(ya) * sd * half, qa[1] + math.sin(ya) * sd * half, za + z - CONDUCTOR_DROP_M])
+                pb = np.array([qb[0] + math.cos(yb) * sd * half, qb[1] + math.sin(yb) * sd * half, zb + z - CONDUCTOR_DROP_M])
+                p = pa[None] + (pb - pa)[None] * t[:, None]
+                p[:, 2] -= 4.0 * CONDUCTOR_SAG * span * t * (1.0 - t)
+                wires.append((p, CONDUCTOR_R))
+    return entries, wires, len(built)
+
+
 def place_junctions(w, links, at, urban_tree, urban_of, places):
     """Where no lamp is mapped: one at a built-up junction with a through road on it (a subdivision's entrance, an arterial's
     crossing), two, diagonally, at a signal."""
@@ -573,9 +713,12 @@ def rows_csv(w, places, runs, loners):
     return rows, wired
 
 
-def write_wires(export, wired, w):
-    """wire_<i>_<j>.glb from the lines of poles, a span in the cell of its first pole; none under a deck."""
+def write_wires(export, wired, w, conductors=(), extra=()):
+    """wire_<i>_<j>.glb from the lines of poles, a span in the cell of its first pole, none under a deck, and the conductors
+    of the tower lines; extra: more manifest entries."""
     by_cell = collections.defaultdict(list)
+    for line in conductors:
+        by_cell[(int(line[0][0, 0] // CELL), int(line[0][0, 1] // CELL))].append(line)
     for line in wired:
         for a, b in zip(line[:-1], line[1:]):
             mid = np.array([[(a[0] + b[0]) / 2, (a[1] + b[1]) / 2]])
@@ -601,7 +744,7 @@ def write_wires(export, wired, w):
     path = os.path.join(export, "manifest.json")
     with open(path) as f:
         doc = json.load(f)
-    doc["meshes"] = [e for e in doc["meshes"] if not e["file"].startswith("wire_")] + entries
+    doc["meshes"] = [e for e in doc["meshes"] if not e["file"].startswith(("wire_", "tower"))] + entries + list(extra)
     with open(path, "w") as f:
         json.dump(doc, f, indent=1)
     return sum(e["tris"] for e in entries)
@@ -637,6 +780,7 @@ def main():
     runs = [ln for ln in lines if len(ln) > 1]
     loners = [run_rows(ln)[0] for ln in lines if len(ln) == 1]
     stats = place_roads(w, chains, urban_tree, urban_of, infra["power_pole"], places, runs)
+    stats["poles_alley"] = place_alleys(w, links, runs)
     stats.update(place_junctions(w, links, at, urban_tree, urban_of, places))
     stats["lamp_ramp"] = place_ramps(w, chains, places)
     rows, wired = rows_csv(w, places, runs, loners)
@@ -648,7 +792,8 @@ def main():
     print(json.dumps({"chains": len(chains), "mapped_lamps": len(infra["street_lamp"]), "lamps_pushed": moved, "lamps_dropped": dropped, "mapped_lines": len(runs),
                       "loners": len(loners), "posts": counts[POST], "poles": counts[POLE], "heads": counts[HEAD], "arms": counts[ARM], **stats}))
     if a.apply:
-        print("wire tris", write_wires(a.dir, wired, w))
+        extra, conductors, towers = tower_lines(w, infra["power_line"], infra["power_tower"], infra["power_pole"], a.dir)
+        print("towers", towers, "wire tris", write_wires(a.dir, wired, w, conductors, extra))
 
 
 if __name__ == "__main__":
