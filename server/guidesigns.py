@@ -91,6 +91,14 @@ BLADE_CAP = (0.25, 0.20)        # a street name blade's capitals: major streets 
                                 # read at ~15 m on a screen: the user, 2026-10-28)
 BLADE_TOP_M = 3.15              # m from the ground to the post's top (the lower blade's bottom: MUTCD 7 ft + the stop
                                 # or yield sign under it on the same corner elsewhere)
+BLADE_TALL = 2.0                # a blade's height in capitals
+BLADE_MAX_W = 3.5               # m: a blade at most this long (a longer name smaller, down to BLADE_MIN_SHARE of its capitals)
+BLADE_MIN_SHARE = 0.7           # ... and with no sign at all past that
+STREET_DEDUPE_M = 0.0           # m: the same two streets' junctions this close get one sign (a divided road's crossing is
+                                # several nodes), 0: each its own
+STREET_SECOND_CORNER = True     # a wide junction's second sign
+ROUTE_STATE_PREFIX = None       # "CO-": a "Highway 52" or "State Highway 52" spelled as its state route
+ROUTE_US_NUMBERS = frozenset()  # the US routes among those numbers ("US-85")
 STREET_CLEAR_M = 1.3            # m from the corner's two carriageway edges to the post (the sidewalk's corner)
 STREET_WIDE_M = 7.0             # a junction whose widest street is wider than this (both halves) gets a second corner
 VERTS_MAX = 60000               # a tile's sign mesh at most (the engine's 16-bit indices)
@@ -1627,6 +1635,8 @@ def street_name(name):
     nm = str(name or "").strip()
     if not nm or nm == "None" or nm == "nan":
         return ""
+    if ROUTE_STATE_PREFIX:
+        nm = _route_spelled(nm)
     w = nm.split()
     if len(w) >= 3 and w[0].lower() in DIRS:
         w[0] = DIRS[w[0].lower()]
@@ -1646,10 +1656,31 @@ def street_name(name):
     return "".join(out)
 
 
+def _route_spelled(name):
+    """Route names as signs spell them: Interstate Highway 25, I 25: I-25; Highway 52, State Highway 52: CO-52; US
+    Highway 85, or Highway 85 where that number is a US route: US-85. County Road 8: CR 8. The rest of the name stays."""
+    m = re.sub(r"\b(?:Interstate(?: Highway)?|I)[ -]+(\d+)\b", r"I-\1", name, flags=re.I)
+    m = re.sub(r"\bU\.?S\.?(?: Highway| Route| Hwy)?[ -]+(\d+)\b", r"US-\1", m, flags=re.I)
+
+    def state(g):
+        n = g.group(1)
+        return f"US-{n}" if int(n) in ROUTE_US_NUMBERS else f"{ROUTE_STATE_PREFIX}{n}"
+    m = re.sub(r"\b(?:Colorado |State )?(?:Highway|Hwy|Route|SH)[ -]+(\d+)\b", state, m, flags=re.I)
+    return re.sub(r"\bCounty (?:Road|Rd)[ -]+(\w+)\b", r"CR \1", m, flags=re.I)
+
+
+def blade_fit(text, cap):
+    """(face, (W, H)) of a blade at capitals cap, smaller for a long name; None when it will not fit BLADE_MAX_W."""
+    face, (W, H) = blade_face(text, cap)
+    if W > BLADE_MAX_W:
+        face, (W, H) = blade_face(text, max(cap * BLADE_MIN_SHARE, cap * BLADE_MAX_W / W * 0.98))
+    return None if W > BLADE_MAX_W else (face, (W, H))
+
+
 def blade_face(text, cap):
     """A street name blade (MUTCD D3-1): white mixed-case lettering on green, a thin white border; bottom middle at
     the origin."""
-    H = round(cap * 2.0 + 0.03, 3)
+    H = round(cap * BLADE_TALL + 0.03, 3)
     W = max(0.6, text_width(text, cap) + cap * 1.4)
     f = Face()
     f.framed(rounded_rect(-W / 2, 0, W / 2, H, cap * 0.25),
@@ -1691,7 +1722,20 @@ def street_signs(mesh, col, roads, box, names, ground=None, avoid=(), left_hand=
     lines = [(sp.width / 2, np.asarray(pts, float)[:, :2]) for _, sp, pts, _ in roads if len(pts) >= 2]
     av = np.asarray([p[:2] for p in avoid], float).reshape(-1, 2)
     n = 0
-    for k, arms in sorted(furniture._arms(roads).items()):
+    all_arms = sorted(furniture._arms(roads).items())
+
+    def pair_of(arms):
+        """The two street names of a junction's sign, or None."""
+        nm = {street_name(names.get(a[0])) for a in arms if a[1].cls in STREET_CLASSES and not a[1].link}
+        nm.discard("")
+        return frozenset(nm) if len(nm) >= 2 else None
+    # one sign for two streets' crossing: its lowest node's, whichever tile that is in
+    first = {}
+    if STREET_DEDUPE_M > 0:
+        for _, arms in all_arms:
+            if len(arms) >= 3 and pair_of(arms) is not None:
+                first.setdefault(pair_of(arms), []).append(tuple(np.asarray(arms[0][3], float)[:2]))
+    for k, arms in all_arms:
         if len(mesh.P) > VERTS_MAX:
             break
         c = np.asarray(arms[0][3], float)
@@ -1701,6 +1745,9 @@ def street_signs(mesh, col, roads, box, names, ground=None, avoid=(), left_hand=
                  if a[1].cls in STREET_CLASSES and not a[1].link]
         named = sorted(((a, nm) for a, nm in named if nm), key=lambda t: (-t[0][1].width, t[1]))
         if len({nm for _, nm in named}) < 2:
+            continue
+        if STREET_DEDUPE_M > 0 and any(math.hypot(q[0] - c[0], q[1] - c[1]) <= STREET_DEDUPE_M and q < tuple(c[:2])
+                                       for q in first.get(pair_of(arms), ())):
             continue
         sa = named[0]
         sb = next(t for t in named if t[1] != sa[1])
@@ -1718,17 +1765,20 @@ def street_signs(mesh, col, roads, box, names, ground=None, avoid=(), left_hand=
             continue
         spots.sort(key=lambda p: _h01(round(float(p[0]), 1), round(float(p[1]), 1)))
         put = [spots[0]]
-        if max(a[1].width for a in arms) > STREET_WIDE_M and len(spots) > 1:
+        if STREET_SECOND_CORNER and max(a[1].width for a in arms) > STREET_WIDE_M and len(spots) > 1:
             put.append(max(spots[1:], key=lambda p: float(np.hypot(*(p - spots[0])))))
+        blades = [(arm, nm, blade_fit(nm, BLADE_CAP[0] if arm[1].cls in STREET_MAJOR else BLADE_CAP[1])) for arm, nm in (sa, sb)]
+        if any(b[2] is None for b in blades):
+            continue                    # (a name too long for a blade)
         for p in put:
             z = _gz(ground, p[0], p[1], c[2] + 0.15)
             top = z + BLADE_TOP_M
-            mesh.box((p[0], p[1], z - 0.3), (p[0], p[1], top + 0.05), 0.03, 0.03, M_STEEL)
+            # (the post runs up behind both blades: stopped under them, the upper one hung in the air)
+            head = top + 0.02 + sum(b[2][1][1] + 0.03 for b in blades)
+            mesh.box((p[0], p[1], z - 0.3), (p[0], p[1], head), 0.03, 0.03, M_STEEL)
             col.add((p[0], p[1], z - 0.3), (p[0], p[1], top), 0.04)
             zb = top + 0.02
-            for (arm, nm) in (sa, sb):
-                cap = BLADE_CAP[0] if arm[1].cls in STREET_MAJOR else BLADE_CAP[1]
-                face, (W, H) = blade_face(nm, cap)
+            for (arm, nm, (face, (W, H))) in blades:
                 u = np.asarray(arm[2], float)
                 if u[0] < -1e-6 or (abs(u[0]) <= 1e-6 and u[1] < 0):     # (either way along: the same blade)
                     u = -u

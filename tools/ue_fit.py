@@ -124,6 +124,22 @@ def _mapped_crosswalks_only(infra):
     junctions.find = mapped
 
 
+def _real_street_signs():
+    """Street name signs at their real size for a world seen at true scale: MUTCD D3-1, 8" capitals on major streets and
+    6" on the rest, one post to a crossing, route names as signs spell them. Blades on signal mast arms are left out: they
+    hang on the stock boom, which Unreal does not have, so they floated."""
+    import guidesigns
+    guidesigns.BLADE_CAP = (0.20, 0.15)
+    guidesigns.BLADE_TALL = 1.5
+    guidesigns.BLADE_TOP_M = 2.3
+    guidesigns.BLADE_MAX_W = 1.6
+    guidesigns.STREET_DEDUPE_M = 90.0
+    guidesigns.STREET_SECOND_CORNER = False
+    guidesigns.ROUTE_STATE_PREFIX = "CO-"
+    guidesigns.ROUTE_US_NUMBERS = frozenset((6, 24, 34, 36, 40, 50, 85, 87, 160, 285, 287, 385, 400, 491, 550))
+    guidesigns.mast_arm_signs = lambda *a, **k: 0
+
+
 def install(path):
     import blockworker
     import roads
@@ -155,6 +171,7 @@ def install(path):
     painted = roads.CENTRE_CLASSES | roads.LANE_CLASSES
     tags = roads.has_lane_tags
     roads.has_lane_tags = lambda spec: tags(spec) and spec.cls in painted
+    _real_street_signs()
     infra = fit.get("infra") or {}
     if len(infra.get("crossing", ())):
         _mapped_crosswalks_only(infra)
