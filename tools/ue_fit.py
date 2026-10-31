@@ -142,13 +142,24 @@ def _real_street_signs():
 
 
 def _lanes_kept(roads, sp):
-    """A measured width goes to the shoulders, not into the lanes: the lanes of a road with a count and a shoulder keep
-    a real width (I-25's pavement is 19.6 m and three 4.8 m lanes is not what is there)."""
-    if not sp.lanes or sp.shoulder is None or not sp.oneway:
+    """A measured width goes to the shoulders, not into the lanes: the lanes of a road keep a real width (I-25's pavement is
+    19.6 m and three 4.8 m lanes is not what is there; nor is Highway 52's 14 m two 7 m lanes, or Summit Boulevard's 7.4 m two
+    1 m ones between the parking a town street is assumed to have). A street whose width does hold lanes and parking keeps
+    them, and one with parking mapped is left be."""
+    if sp.cls not in roads.CENTRE_CLASSES | roads.LANE_CLASSES or sp.kind not in roads.BUILT or sp.park:
         return sp
-    n = int(sp.lanes)
-    lw = float(np.clip((sp.width - 2 * float(sp.shoulder)) / n, LANE_MIN_M, LANE_MAX_M))
-    return sp._replace(shoulder=max(0.0, (sp.width - n * lw) / 2))
+    n = int(sp.lanes) if sp.lanes else 0
+    if sp.oneway:
+        n = n or roads.lane_count(sp)[1]
+    else:
+        n = max(n, 2)
+    if sp.urban and sp.cls in roads.PARKING_CLASSES and sp.shoulder is None:
+        parked = (sp.width - (1 if sp.oneway else 2) * roads.PARKING_M) / n
+        if LANE_MIN_M <= parked <= LANE_MAX_M:
+            return sp
+    edge = float(sp.shoulder) if sp.shoulder is not None else roads.edge_margin(sp)
+    lw = float(np.clip((sp.width - 2 * edge) / n, LANE_MIN_M, LANE_MAX_M))
+    return sp._replace(lanes=n, park=(), shoulder=max(0.0, (sp.width - n * lw) / 2))
 
 
 def install(path):
