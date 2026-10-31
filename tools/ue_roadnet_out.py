@@ -183,7 +183,7 @@ def main():
         if len(xy) < 2:
             continue
         width = widths.get(p["fid"], float(sp0["width"] or 6.0))
-        sp = spec_of(sp0, width)
+        sp = ue_fit._lanes_kept(roads, spec_of(sp0, width))
         lanes = lanes_of(sp)
         # the map's connectors on this piece, by their place on the uncorrected line; the piece's own ends as level joints
         cons = [(c[0], c[2], c[3]) for c in p["connectors"] if np.isfinite(c[2])]
