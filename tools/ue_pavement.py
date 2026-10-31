@@ -41,7 +41,14 @@ MIN_ISLAND_M2 = 6.0             # m2: smaller separate bits of pavement left out
 MIN_HOLE_M2 = 3.0               # m2: smaller holes in it filled
 UNSURVEYED_MATERIAL = {"paved": "road_asphalt_2lane", "cobble": "road_asphalt_2lane", "gravel": "m_dirt_road",
                        "dirt": "m_dirt_road"}
-DROPPED = ("road_asphalt", "m_dirt_road", "m_gm_concrete_plain", "ECA_road_edge_dirt", "italy_cobblestone")
+# (the gutter and its drains are laid at the spec's width from the centreline, not at the curb: out with the asphalt)
+DROPPED = ("road_asphalt", "m_dirt_road", "m_gm_concrete_plain", "ECA_road_edge_dirt", "italy_cobblestone", "gutter",
+           "m_metal_grid_drain")
+PAINT = ("line_", "crossing", "roadmarkings")
+PAINT_OFF_M = 0.5               # m past the pavement's edge paint is still kept
+WALK_W_M = 1.6                  # m: a sidewalk's width, along the curb
+WALK_UP_M = 0.15                # m over the pavement: the curb's height
+WALK_NEAR_M = 4.0               # m from the builders' sidewalks the curb gets one
 MATERIALS = ["road_asphalt_2lane", "m_dirt_road", "bne_bridge_concrete"]
 
 
@@ -329,6 +336,37 @@ def clip_terrain(polys, mask, z, x0, y0, labels):
     return P[first], inv[T], M
 
 
+def skirted(P, T, drop):
+    """(P, T) of a mesh with a wall drop m down from every open edge: the curb's face."""
+    tri = T[:, [0, 1, 1, 2, 2, 0]].reshape(-1, 2)
+    key = np.sort(tri, axis=1)
+    _, inv, count = np.unique(key, axis=0, return_inverse=True, return_counts=True)
+    edge = tri[count[inv.ravel()] == 1]
+    if not len(edge):
+        return P, T
+    n = len(P)
+    a, b = edge[:, 0], edge[:, 1]
+    low = np.arange(len(edge)) * 2 + n
+    Q = np.empty((len(edge) * 2, 3))
+    Q[0::2] = P[a]
+    Q[1::2] = P[b]
+    Q[:, 2] -= drop
+    wall = np.r_[np.c_[b, a, low], np.c_[b, low, low + 1]]
+    return np.r_[P, Q], np.r_[T, wall]
+
+
+def sidewalks(mask, z, x0, y0, walk_mask):
+    """(P, T) in frame metres of a sidewalk following the pavement's edge: a band WALK_W_M wide along it, where the builders
+    put a sidewalk, on the terrain's triangles, raised to a curb."""
+    d = ndimage.distance_transform_edt(~mask) * PX
+    near = ndimage.binary_dilation(walk_mask, iterations=int(WALK_NEAR_M / PX))
+    band = (d > 0) & (d <= WALK_W_M) & near
+    polys = polygons(band, x0, y0)
+    P, T, _ = clip_terrain(polys, band, z, x0, y0, np.zeros(band.shape, np.uint8))
+    P[:, 2] += LIFT_M + WALK_UP_M
+    return skirted(P, T, WALK_UP_M + 0.05)
+
+
 def build_cell(pieces, lines, i, j, in_dir, out_dir, lots=(), road_dir=None):
     t0 = time.perf_counter()
     x0, y0 = i * CELL, j * CELL
@@ -349,25 +387,48 @@ def build_cell(pieces, lines, i, j, in_dir, out_dir, lots=(), road_dir=None):
     UV = P[:, :2] / 8.0
     C = np.full((len(P), 4), 255, np.uint8)
     names = list(MATERIALS)
+    cell_mask = mask[m:m + n, m:m + n]
+    paint_ok = ndimage.binary_dilation(cell_mask, iterations=int(PAINT_OFF_M / PX))
     allP, allT, allUV, allC, allM, base = [P], [T], [UV], [C], [M], len(P)
     path = os.path.join(road_dir or in_dir, f"road_{i}_{j}.glb")
     if os.path.exists(path):
         for prim in ue_survey.read_glb(path):
             if prim["name"].startswith(DROPPED):
                 continue
+            T0 = prim["T"]
+            if prim["name"].startswith(PAINT):      # (paint past the pavement: a lot's stalls with no lot mapped)
+                c = prim["P"][T0].mean(1)[:, :2]
+                cc = np.clip((c[:, 0] / PX).astype(np.int64), 0, n - 1)
+                rr = np.clip((c[:, 1] / PX).astype(np.int64), 0, n - 1)
+                T0 = T0[paint_ok[rr, cc]]
+                if not len(T0):
+                    continue
             if prim["name"] not in names:
                 names.append(prim["name"])
-            used, inv = np.unique(prim["T"], return_inverse=True)
+            used, inv = np.unique(T0, return_inverse=True)
             allP.append(prim["P"][used])
             allT.append(inv.reshape(-1, 3) + base)
             allUV.append(prim["UV"][used])
             allC.append(prim["C"][used])
-            allM.append(np.full(len(prim["T"]), names.index(prim["name"])))
+            allM.append(np.full(len(T0), names.index(prim["name"])))
             base += len(used)
     g = ue_export.Glb()
     g.add(np.concatenate(allP), np.concatenate(allT), np.concatenate(allUV), names, np.concatenate(allM), np.concatenate(allC))
     os.makedirs(out_dir, exist_ok=True)
     g.write(os.path.join(out_dir, f"road_{i}_{j}.glb"), f"road_{i}_{j}", (0.0, 0.0, 0.0))
+    walk_path = os.path.join(in_dir, f"walks_{i}_{j}.glb")
+    if os.path.exists(walk_path):
+        import ue_road_eval
+        wm = np.zeros(cell_mask.shape, bool)
+        for prim in ue_survey.read_glb(walk_path):
+            wm = ue_road_eval.fill_tris(wm, prim["P"][:, :2] + (x0, y0), prim["T"], x0, y0)
+        WP, WT = sidewalks(cell_mask, z, x0, y0, wm)
+        if len(WT):
+            WP = WP - (x0, y0, 0.0)
+            for kind, mat in (("walks", "sidewalk1"), ("walkcol", "curbs")):
+                w = ue_export.Glb()
+                w.add(WP, WT, WP[:, :2] / 2.0, [mat], None, np.full((len(WP), 4), 255, np.uint8))
+                w.write(os.path.join(out_dir, f"{kind}_{i}_{j}.glb"), f"{kind}_{i}_{j}", (0.0, 0.0, 0.0))
     return {"cell": [i, j], "pavement_tris": int(len(T)), "pavement_m2": int(mask[m:m + n, m:m + n].sum() * PX * PX),
             "from_curbs": round(surveyed, 3), "polys": len(polys), "s": round(time.perf_counter() - t0, 1)}
 
