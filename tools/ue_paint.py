@@ -71,7 +71,8 @@ POCKET_BASE_M = (150.0, 280.0)  # m before the stop bar the road's own width is 
 ARROW_W = 0.22
 ARROW_BACK_M = (6.0, 34.0)      # m before the bar a lane's arrows stand
 ONLY_BACK_M = 14.0
-ZEBRA_NEAR_M = 9.0              # m: a builder's crosswalk this near a new one goes
+ZEBRA_NEAR_M = 28.0             # m: a builder's crosswalk this near a new one goes: the junction has its own now
+GAP_M = 34.0                    # m: a stretch this short between two junctions' cuts is painted as neither
 ALONG_M = 15.0                  # m from our stations a builder's line is along a repainted road
 PARTNER_M = 22.0                # m: the other carriageway of a divided road is looked for this near
 CROSS_LEN_M = 6.0               # m: builders' paint parts longer than this along a road are its lines
@@ -436,7 +437,11 @@ def stops(run, c, mouth):
             ways.append({"i": lo - 1, "dir": 1, "control": g["along"], "signal": signal})
         if hi + 1 < n and (g["against"] or signal):
             ways.append({"i": hi + 1, "dir": -1, "control": g["against"], "signal": signal})
-    return cut, ways
+    # (a divided road's two carriageways are two junctions to whatever crosses them: the bit between is still the junction)
+    for a, b in runs_of(~cut):
+        if 0 < a and b < n and (b - a) * STEP_M < GAP_M:
+            cut[a:b] = True
+    return cut, [e for e in ways if not cut[e["i"]]]
 
 
 class Strips:
