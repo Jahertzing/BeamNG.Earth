@@ -2,7 +2,7 @@
 # The export chain, start to finish: sh tools/ue_chain.sh <name> [jobs]. Writes export/<name>, ready for Unreal but for the far
 # mesh and the plants (the look thread's). Each stage prints its minutes. Prop rows come with the export: props_<i>_<j>.json.
 # Jobs: 10 by default; a pavement job peaks at 2.9 GB, so leave them down if an editor is running.
-set -e
+set -eo pipefail
 NAME=${1:?export name}
 JOBS=${2:-10}
 PY=/c/beamng-earth/Earth.UE/.venv/Scripts/python
