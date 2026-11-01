@@ -27,7 +27,7 @@ import ue_survey  # noqa: E402
 
 CELL = ue_mask.CELL
 PX = ue_mask.PX
-HALF_WIDE_M = 2.0               # m from the middle of a strip to the pavement: no wider, or it is planted ground
+HALF_WIDE_M = 4.0               # m from the middle of a strip to the pavement: no wider, or it is a block of its own
 MIN_M2 = 6.0
 MAX_M2 = 2500.0
 MAX_WALK_SHARE = 0.3            # of a strip that is already sidewalk
@@ -35,35 +35,41 @@ SOLID_M = 0.9                   # m from the middle of a strip to its edge: no w
 CURB_M = 0.75                   # m of a wider strip's edge that is curb
 
 
-def islands(export, i, j):
-    """Cell raster, 0.5 m a pixel, row 0 south, of the strips to raise, and (count, m2)."""
+def islands(export, i, j, above=0.0, walk_share=MAX_WALK_SHARE):
+    """(cell raster, 0.5 m a pixel, row 0 south, of the strips to raise, (count, m2), rows x, y, m2, half width, kind). above: only
+    strips wider than this half width."""
     _, sd16, fl = ue_furniture.raster_cell((export, i, j))
     sd = sd16 / ue_mask.SD_Q
     free = (sd > 0) & ((fl & (ue_furniture.F_BLD | ue_furniture.F_DECK)) == 0)
     lab, n = ndimage.label(sd > 0)
     if not n:
-        return None, (0, 0.0)
+        return None, (0, 0.0), []
     ids = np.arange(1, n + 1)
     size = ndimage.sum_labels(np.ones(lab.shape), lab, ids) * PX * PX
     top = ndimage.maximum(sd, lab, ids)
     walk = ndimage.sum_labels((fl & ue_furniture.F_WALK) > 0, lab, ids) * PX * PX
     bad = ndimage.sum_labels(~free & (sd > 0), lab, ids)
     edge = np.unique(np.r_[lab[0], lab[-1], lab[:, 0], lab[:, -1]])
-    good = (top <= HALF_WIDE_M) & (size >= MIN_M2) & (size <= MAX_M2) & (walk <= MAX_WALK_SHARE * size) & (bad == 0)
+    good = (top <= HALF_WIDE_M) & (top > above) & (size >= MIN_M2) & (size <= MAX_M2) & (walk <= walk_share * size) & (bad == 0)
     good[edge[edge > 0] - 1] = False
     a = int(ue_mask.MARGIN_M / PX)
     m = int(CELL / PX)
     keep = np.r_[False, good][lab][a:a + m, a:a + m]
     if not keep.any():
-        return None, (0, 0.0)
-    return keep, (len(np.unique(lab[a:a + m, a:a + m][keep])), float(keep.sum()) * PX * PX)
+        return None, (0, 0.0), []
+    inside = lab[a:a + m, a:a + m]
+    who = np.unique(inside[keep])
+    com = ndimage.center_of_mass(keep, inside, who)
+    rows = [[round(c[1] * PX + i * CELL, 1), round(c[0] * PX + j * CELL, 1), round(float(size[k - 1])), round(float(top[k - 1]), 1),
+             "solid" if top[k - 1] <= SOLID_M else "curbed"] for k, c in zip(who, com)]
+    return keep, (len(who), float(keep.sum()) * PX * PX), rows
 
 
 def cell(job):
-    export, i, j, count = job
-    keep, got = islands(export, i, j)
+    export, i, j, count, above = job
+    keep, got, rows = islands(export, i, j, above, 1.0 if count else MAX_WALK_SHARE)   # (counted after a pass, its strips are walks)
     if keep is None or count:
-        return got
+        return got, rows
     x0, y0 = i * CELL, j * CELL
     k = int(PX / ue_pavement.PX)
     inside = ndimage.distance_transform_edt(keep) * PX
@@ -77,7 +83,7 @@ def cell(job):
     polys = ue_pavement.polygons(band, x0, y0)
     P, T, _ = ue_pavement.clip_terrain(polys, band, z, x0, y0, np.zeros(band.shape, np.uint8))
     if not len(T):
-        return got
+        return got, rows
     P = P.copy()
     P[:, 2] += ue_pavement.LIFT_M + ue_pavement.WALK_UP_M
     P, T = ue_pavement.skirted(P, T, ue_pavement.WALK_UP_M + 0.05)
@@ -94,7 +100,7 @@ def cell(job):
         g = ue_export.Glb()
         g.add(P, T, P[:, :2] / 2.0, ["sidewalk1"], None, np.full((len(P), 4), 255, np.uint8))
         g.write(path, f"walks_{i}_{j}", (0.0, 0.0, 0.0))
-    return got
+    return got, rows
 
 
 def main():
@@ -102,11 +108,19 @@ def main():
     ap.add_argument("--dir", default="C:/beamng-earth/Earth.UE/export/frederick-r6")
     ap.add_argument("--jobs", type=int, default=6)
     ap.add_argument("--count", action="store_true", help="say how much, change nothing")
+    ap.add_argument("--above", type=float, default=0.0, help="only strips wider than this half width (m): a pass that adds to an earlier one")
+    ap.add_argument("--csv", default=None, help="the strips' list: x, y, m2, half_width_m, kind")
     a = ap.parse_args()
     cells = [tuple(int(v) for v in f[7:-4].split("_")) for f in os.listdir(a.dir) if f.startswith("ground_") and f.endswith(".glb")]
     with concurrent.futures.ProcessPoolExecutor(a.jobs) as pool:
-        got = list(pool.map(cell, [(a.dir, i, j, a.count) for i, j in cells]))
-    print(json.dumps({"islands": sum(g[0] for g in got), "m2": round(sum(g[1] for g in got)), "cells": sum(1 for g in got if g[0])}))
+        got = list(pool.map(cell, [(a.dir, i, j, a.count, a.above) for i, j in cells]))
+    if a.csv:
+        with open(a.csv, "w") as f:
+            print("x,y,m2,half_width_m,kind", file=f)
+            for _, rows in got:
+                for r in rows:
+                    print(",".join(str(v) for v in r), file=f)
+    print(json.dumps({"islands": sum(g[0][0] for g in got), "m2": round(sum(g[0][1] for g in got)), "cells": sum(1 for g in got if g[0][0])}))
 
 
 if __name__ == "__main__":
