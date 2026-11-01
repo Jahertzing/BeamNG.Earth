@@ -645,7 +645,8 @@ def rewrite(export, out, cell, strips, tree, cut_tree, cut_r, heights, zebra_tre
     paint = [k for k, n in enumerate(names) if n.startswith("line_")]
     drop = np.zeros(len(T), bool)
     # (a run before this one's paint is the only paint with no texture coordinates: a rerun starts clean)
-    ours = np.isin(M, [k for k, n in enumerate(names) if n.startswith(("line_", "crossing"))]) & (np.abs(UV[T]).max(axis=(1, 2)) == 0.0)
+    ours = np.isin(M, [k for k, n in enumerate(names) if n.startswith(("line_", "crossing"))])
+    ours[ours] = np.abs(UV[T[ours]]).reshape(-1, 6).max(axis=1) == 0.0
     drop |= ours
     crossing = [k for k, n in enumerate(names) if n.startswith("crossing")]
     if crossing and zebra_tree is not None:
