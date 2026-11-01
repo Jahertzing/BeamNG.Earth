@@ -21,8 +21,11 @@ from scipy import ndimage  # noqa: E402
 
 import ue_furniture  # noqa: E402
 import ue_mask  # noqa: E402
+import ue_paint_lift  # noqa: E402
+import ue_pavement  # noqa: E402
 import ue_road_eval  # noqa: E402
 import ue_settle  # noqa: E402
+import ue_survey  # noqa: E402
 
 CELL = ue_mask.CELL
 PX = ue_mask.PX
@@ -31,7 +34,7 @@ LOOK_M = (3.0, 7.5)             # m past the pavement the strip is read
 PALE = 16.0                     # luma over the lot's own ground
 GREY = 12.0                     # r - b at most over the road's
 WIDTH_M = (3.0, 11.0)           # m along the walk a driveway is
-CUT_DROP_M = 0.13               # m the walk comes down at a cut
+CUT_UP_M = 0.03                 # m over the pavement a walk stands at a cut
 
 
 def finds(export, i, j):
@@ -82,8 +85,11 @@ def cell(job):
     q = np.clip((P[:, :2] / PX).astype(np.int64), 0, N - 1)
     grown = ndimage.binary_dilation(cut, iterations=2)
     hit = grown[q[:, 1], q[:, 0]]
+    G = ue_survey.read_glb(os.path.join(export, f"ground_{i}_{j}.glb"))[0]["P"]
+    n = int(round(len(G) ** 0.5))
+    top = ue_paint_lift.terrain_z(G[:, 2].reshape(n, n), P[hit, :2]) + ue_pavement.LIFT_M + CUT_UP_M
     P = P.copy()
-    P[hit, 2] -= CUT_DROP_M
+    P[hit, 2] = np.minimum(P[hit, 2], top)      # (a height, not a drop: a second run changes nothing)
     ue_settle.write(os.path.join(out, f"walks_{i}_{j}.glb"), f"walks_{i}_{j}", P, UV, C, T, M, names)
     return int(ndimage.label(cut)[1])
 
