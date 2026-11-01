@@ -41,7 +41,8 @@ $PY tools/ue_walks.py --dir "$OUT" | tail -1
 $PY tools/ue_manifest_sync.py --dir "$OUT"
 stage "signals, sign posts, furniture"
 $PY tools/ue_signals.py --export "$OUT" --manifest | tail -1
-$PY tools/ue_settle.py --dir "$OUT" | tail -1 | cut -c1-200
+cp "$E/$NAME"/sign_*.glb "$E/$NAME"/signcol_*.glb "$E/$NAME-builder/"
+$PY tools/ue_settle.py --dir "$OUT" --src "$E/$NAME-builder" | tail -1 | cut -c1-200
 $PY tools/ue_furniture.py --dir "$OUT" --lamps "$W/_qa/lamps-$NAME.csv" --apply | tail -1 | cut -c1-200
 $PY tools/ue_mask.py --dir "$OUT" | tail -1
 $PY tools/ue_road_qa.py --dir "$OUT" --out "$W/_qa/$NAME" | tail -14 | cut -c1-200 || true
