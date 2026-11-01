@@ -32,6 +32,8 @@ PX = 0.25
 CELL = 2048.0
 MARGIN_M = 64.0                 # m of roads and curbs round the cell
 GRID_M = 2.0                    # the terrain's lattice
+CORE_JOIN_M = 45.0              # m: junction nodes this close are one junction's box
+CORE_BACK_M = 3.0               # m past the widest road's edge a junction's own surface runs up each road
 BULB_R_M = 24.0                 # m round a street's end the flood may look for its cul-de-sac
 BULB_CLOSED_SHARE = 0.9         # a region under this share of its disk is closed by its curb
 BULB_LEAK_SHARE = 0.7           # a disk filled over this share has no curb round it
@@ -92,6 +94,37 @@ def junction_disks(pieces):
     for got in ends.values():
         if len({g[0] for g in got}) >= 3:
             out.append((got[0][2], max(18.0, 1.3 * max(g[1] for g in got) + 8.0)))
+    return out
+
+
+def junction_cores(pieces):
+    """[(ring (k, 2), material)]: the box of each junction of real roads, in the surface of the biggest road there: a hull of
+    the roads' edges a little back from the node, so a side road's surface stops at a straight line across its mouth."""
+    ends = {}
+    for p in pieces:
+        if p["kind"] != "ground" or len(p["st"]) < 2 or p["spec"]["cls"] in ("service", "track", "unknown"):
+            continue
+        for at, q in ((0, p["xy"][0]), (-1, p["xy"][-1])):
+            ends.setdefault((round(q[0] / 2.0), round(q[1] / 2.0)), []).append((p, at))
+    nodes = [(np.mean([p["xy"][at] for p, at in v], axis=0), v) for v in ends.values() if len({p["fid"] for p, _ in v}) >= 3]
+    groups = []                         # (a divided road's crossing is several nodes: one box)
+    for q, v in nodes:
+        near = [g for g in groups if any(float(np.hypot(*(q - c))) <= CORE_JOIN_M for c in g[0])]
+        merged = ([q] + [c for g in near for c in g[0]], list(v) + [a for g in near for a in g[1]])
+        groups = [g for g in groups if not any(g is h for h in near)] + [merged]
+    out = []
+    for _, arms in groups:
+        top = max(arms, key=lambda v: (CLASS_ORDER.get(v[0]["spec"]["cls"], 0), float(v[0]["spec"]["width"] or 0)))[0]
+        back = max(float(p["spec"]["width"] or 6.0) for p, _ in arms) / 2 + CORE_BACK_M
+        pts = []
+        for p, at in arms:
+            L, R, _ = edges_of(p)
+            t = p["t"] if at == 0 else p["t"][-1] - p["t"]
+            k = int(np.abs(t - min(back, float(t.max()))).argmin())
+            pts += [L[k], R[k]]
+        hull = shapely.MultiPoint(np.array(pts)).convex_hull
+        if hull.geom_type == "Polygon":
+            out.append((np.asarray(hull.exterior.coords), material_of(top["spec"])))
     return out
 
 
@@ -168,6 +201,8 @@ def outline_mask(pieces, lines, box, lots=()):
         if two.any():
             mid = p["st"][two] + p["nrm"][two] * p["ab"][two].mean(1)[:, None]
             seeds.append(mid)
+    for ring, material in junction_cores(pieces):
+        dl.polygon([tuple(v) for v in (ring - (x0, y0)) / PX], fill=material + 1)
     fit = draw_polys(shape, fitted, x0, y0) > 0
     spec = draw_polys(shape, spec_ribbons, x0, y0) > 0
     corridor = ndimage.binary_dilation(fit, iterations=int(CORRIDOR_M / PX))
