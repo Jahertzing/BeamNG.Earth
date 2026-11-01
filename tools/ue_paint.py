@@ -50,7 +50,7 @@ MIN_RUN_M = 45.0                # m: a stretch of another lane count shorter tha
 EDGE_CLEAR_M = 0.25             # m the outer line stays inside the pavement
 MIN_CHAIN_M = 24.0
 MOUTH_M = 2.0                   # m past the crossing road's edge paint stops
-MOUTH_MAX_M = 30.0
+MOUTH_MAX_M = 40.0
 CENTRE_W = 0.12
 CENTRE_GAP = 0.12
 LANE_W = 0.12
@@ -394,7 +394,8 @@ def reach(jn, u):
     for seg, q in jn["arms"]:
         p = seg.xy if seg.a == q else seg.xy[::-1]
         if abs(float(leave(p) @ u)) < 0.7:
-            wide = max(wide, seg.width / 2.0)
+            # (a divided crossing road is two carriageways, each its side of the junction's middle)
+            wide = max(wide, abs(float((p[0] - jn["xy"]) @ u)) + seg.width / 2.0)
     if not wide:
         wide = max(seg.width for seg, _ in jn["arms"]) / 2.0
     return min(wide + jn["back"], MOUTH_MAX_M)
