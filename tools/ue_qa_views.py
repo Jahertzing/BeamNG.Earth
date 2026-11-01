@@ -74,6 +74,17 @@ for lk in links:
         a = np.array([np.interp(s, L, p[:, 0]), np.interp(s, L, p[:, 1])])
         add(f"signal_{n}", float(a[0]), float(a[1]), math.degrees(math.atan2(*(p[-1, :2] - a)[::-1])), 1.8)
         n += 1
+n = 0
+for lk in links:
+    if lk["control"] == "signal" and lk["class"] in ("primary", "secondary", "trunk") and n < 6 and not lk["ramp"] and len(lk["lanes"]) >= 2:
+        p = np.array(lk["points"])
+        L = np.r_[0.0, np.cumsum(np.hypot(*np.diff(p[:, :2], axis=0).T))]
+        if L[-1] < 60 or int(lk["id"]) % 7:
+            continue
+        s = L[-1] - 26.0
+        a = np.array([np.interp(s, L, p[:, 0]), np.interp(s, L, p[:, 1])])
+        add(f"close_{n}", float(a[0]), float(a[1]), math.degrees(math.atan2(*(p[-1, :2] - a)[::-1])), 1.8, pitch=9.0)
+        n += 1
 inf = pickle.load(open(NET + "/furniture_infra.pkl", "rb"))
 T = inf["power_tower"]
 T = T[(np.abs(T) < 9000).all(1)]
@@ -82,6 +93,7 @@ for k, i in enumerate(np.argsort(np.abs(d - 60.0))[:60:30]):
     add(f"tower_{k}", float(T[i, 0]), float(T[i, 1]), None, 0.0)
 add("county_road", -2000, -9000, klass={"unclassified", "tertiary"})
 add("subdivision", -4300, -230, klass={"residential"})
+add("night_signal", -3241, -1330, 90, 1.8, hour=21.5, klass={"secondary", "tertiary", "primary"})
 add("night_old", 0, 39, 0, hour=21.5)
 add("night_lyden", 1300, -406, 0, hour=21.5)
 add("night_arterial", -40, -61, 0, hour=21.5)

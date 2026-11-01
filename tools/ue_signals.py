@@ -248,7 +248,11 @@ def main():
             m.tube(np.r_[H, bottom + HEAD_H], np.r_[H, arm_z], 0.03, 0.03, 0)
             m.box(mid - nrm * HEAD_DEPTH / 2, nv * HEAD_W / 2, -nrm * HEAD_DEPTH / 2, up * HEAD_H / 2, 1)
             m.box(mid - nrm * (HEAD_DEPTH + 0.015), nv * PLATE_W / 2, -nrm * 0.012, up * PLATE_H / 2, 1)
-            m.box(mid - nrm * (HEAD_DEPTH + 0.03), nv * (PLATE_W / 2 + PLATE_EDGE_M), -nrm * 0.008, up * (PLATE_H / 2 + PLATE_EDGE_M), M_AMBER)
+            # (a yellow edge on the plate's face: the back of a signal is black)
+            face = mid - nrm * (HEAD_DEPTH - 0.004)
+            for sd in (1, -1):
+                m.box(face + up * sd * (PLATE_H - PLATE_EDGE_M) / 2, nv * PLATE_W / 2, -nrm * 0.006, up * PLATE_EDGE_M / 2, M_AMBER)
+                m.box(face + nv * sd * (PLATE_W - PLATE_EDGE_M) / 2, nv * PLATE_EDGE_M / 2, -nrm * 0.006, up * PLATE_H / 2, M_AMBER)
             lens = {}
             for j, name in enumerate(("red", "yellow", "green")):
                 q = mid + nrm * 0.006 + up * ((1 - j) * HEAD_H / 3.1)
