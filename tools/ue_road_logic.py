@@ -6,6 +6,7 @@ and facing the traffic. Works on roadnet.json and signals.json, no Unreal.
     Earth.UE\\.venv\\Scripts\\python tools\\ue_road_logic.py --net <roadnet dir> --export <export dir> [--png sheet.png]
 
 Writes logic.json in --export: {"counts": {check: n}, "findings": [{check, at, sev, ...}]}, worst first. Checks:
+    edge_step    the pavement's edges step at a plain joint
     lane_step    lanes do not line up across a node (m sideways)         lane_jump   the count changes by 2 or more on a through road
     lane_pop     the count changes at a node with no side road            kink        a through road turns sharply at a node with no junction
     dead_end     a painted road stops with nothing to go on to            head_on     one-way roads meet nose to nose
@@ -30,6 +31,7 @@ PAINTED = {"motorway", "trunk", "primary", "secondary", "tertiary"}
 THROUGH_DEG = 35.0              # a turn under this is going straight on
 STEP_M = 1.2                    # lanes further apart than this across a node do not meet
 KINK_DEG = 25.0
+EDGE_STEP_M = 1.0               # the pavement's edges stepping this much at a joint
 OVERLAP_M = 2.5
 OVERLAP_MIN_M = 20.0
 LANE_RANGE = (2.7, 4.2)
@@ -79,6 +81,10 @@ def best_step(a, b):
     return min(float(np.hypot(*(a - b[s:s + len(a)]).T).max()) for s in range(len(b) - len(a) + 1))
 
 
+def side_road_at(arms, links, lk):
+    return len([k for k in arms if links[k]["name"] != lk["name"]]) > 0
+
+
 def link_check(net, inside):
     links = net["links"]
     P = [np.array(lk["points"]) for lk in links]
@@ -126,6 +132,11 @@ def link_check(net, inside):
             continue
         la, lb = lanes_at(E, u, lk["lanes"]), lanes_at(P[b["id"]][0, :2], v, b["lanes"])
         step = best_step(la, lb)
+        if not side_road_at(arms, links, lk) and lk["oneway"] == b["oneway"] and "edges" in lk and "edges" in b:
+            ea, eb = lk["edges"][-1], b["edges"][0]
+            gap = max(abs(ea[0] - eb[0]), abs(ea[1] - eb[1]))
+            if gap > EDGE_STEP_M:
+                add("edge_step", E, gap, link=a, to=b["id"], name=lk["name"], cls=cls, gap=round(gap, 2))
         na, nb = len(lk["lanes"]), len(b["lanes"])
         side_road = len([k for k in arms if links[k]["name"] != lk["name"]]) > 0
         if step > STEP_M:
@@ -225,7 +236,8 @@ def main():
         net = json.load(f)
     with open(os.path.join(a.export, "signals.json")) as f:
         heads = json.load(f)["heads"]
-    with open(os.path.join(a.net, "net.pkl"), "rb") as f:
+    pk = os.path.join(a.net, "net.pkl")
+    with open(pk if os.path.exists(pk) else os.path.join(a.net, "..", "net.pkl"), "rb") as f:
         mapped = pickle.load(f).get("infra", {}).get("traffic_signals", np.zeros((0, 2)))
 
     def inside(q):

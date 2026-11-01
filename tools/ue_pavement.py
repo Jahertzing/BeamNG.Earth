@@ -31,6 +31,8 @@ PX = 0.25
 CELL = 2048.0
 MARGIN_M = 64.0                 # m of roads and curbs round the cell
 GRID_M = 2.0                    # the terrain's lattice
+SURFACE_OVERLAP_PX = 2          # px two surfaces overlap where they meet
+SURFACE_STEP_M = 0.002          # m each surface lies over the one before
 LIFT_M = 0.03                   # m over the terrain
 CORRIDOR_M = 1.5                # m past a fitted ribbon the flood may go
 BLOCK_M = 64.0                  # m: the outline is cut to blocks of this side before the triangles are clipped
@@ -51,6 +53,9 @@ WALK_UP_M = 0.15                # m over the pavement: the curb's height
 WALK_NEAR_M = 4.0               # m from the builders' sidewalks the curb gets one
 MATERIALS = ["road_asphalt_2lane", "m_dirt_road", "bne_bridge_concrete", "road_asphalt_worn"]
 READ_MATERIAL = {"asphalt": 0, "gravel": 1, "concrete": 2, "faded": 3}      # tools/ue_surface.py's names
+
+
+CLASS_ORDER = {"motorway": 7, "trunk": 6, "primary": 5, "secondary": 4, "tertiary": 3, "unclassified": 2, "residential": 1}
 
 
 def material_of(spec):
@@ -101,7 +106,7 @@ def outline_mask(pieces, lines, box, lots=()):
     label = Image.new("L", shape[::-1], 0)
     dl = ImageDraw.Draw(label)
     seeds = []
-    for p in pieces:
+    for p in sorted(pieces, key=lambda v: CLASS_ORDER.get(v["spec"]["cls"], 0)):     # (the through road drawn last: on top)
         if p["kind"] != "ground" or len(p["st"]) < 2:
             continue
         L, R, measured = edges_of(p)
@@ -332,6 +337,32 @@ def clip_terrain(polys, mask, z, x0, y0, labels):
     return P[first], inv[T], M
 
 
+def surfaces(mask, labels, z, x0, y0):
+    """(P, T, material per triangle, polygons drawn) of the pavement, one outline per surface: the terrain's triangles of one
+    road cut along its own edge, not stepped along the 2 m lattice. Neighbours overlap a little, the later a few mm over the
+    earlier, so no ground shows between them."""
+    Ps, Ts, Ms, base, count = [], [], [], 0, 0
+    for k in range(len(MATERIALS)):
+        own = mask & (labels == k + 1)
+        if own.sum() * PX * PX < MIN_ISLAND_M2:
+            continue
+        grown = ndimage.binary_dilation(own, iterations=SURFACE_OVERLAP_PX) & mask
+        polys = polygons(grown, x0, y0)
+        P, T, _ = clip_terrain(polys, grown, z, x0, y0, np.ones(grown.shape, np.uint8))
+        if not len(T):
+            continue
+        P = P.copy()
+        P[:, 2] += k * SURFACE_STEP_M
+        Ps.append(P)
+        Ts.append(T + base)
+        Ms.append(np.full(len(T), k))
+        base += len(P)
+        count += len(polys)
+    if not Ps:
+        return np.zeros((0, 3)), np.zeros((0, 3), np.int64), np.zeros(0, np.int64), 0
+    return np.concatenate(Ps), np.concatenate(Ts), np.concatenate(Ms), count
+
+
 def skirted(P, T, drop):
     """(P, T) of a mesh with a wall drop m down from every open edge: the curb's face."""
     tri = T[:, [0, 1, 1, 2, 2, 0]].reshape(-1, 2)
@@ -372,11 +403,10 @@ def build_cell(pieces, lines, i, j, in_dir, out_dir, lots=(), road_dir=None):
     mask, labels, surveyed = outline_mask(near, lines, box, lots)
     m = int(MARGIN_M / PX)
     n = int(CELL / PX)
-    polys = polygons(mask[m:m + n, m:m + n], x0, y0)
     ground = ue_survey.read_glb(os.path.join(in_dir, f"ground_{i}_{j}.glb"))[0]
     N = int(round(len(ground["P"]) ** 0.5)) - 1
     z = ground["P"][:, 2].reshape(N + 1, N + 1)
-    P, T, M = clip_terrain(polys, mask[m:m + n, m:m + n], z, x0, y0, labels[m:m + n, m:m + n])
+    P, T, M, polys = surfaces(mask[m:m + n, m:m + n], labels[m:m + n, m:m + n], z, x0, y0)
     P[:, 2] += LIFT_M
     P[:, 0] -= x0
     P[:, 1] -= y0
@@ -426,7 +456,7 @@ def build_cell(pieces, lines, i, j, in_dir, out_dir, lots=(), road_dir=None):
             w.add(WP, WT, WP[:, :2] / 2.0, ["sidewalk1"], None, np.full((len(WP), 4), 255, np.uint8))
             w.write(os.path.join(out_dir, f"walks_{i}_{j}.glb"), f"walks_{i}_{j}", (0.0, 0.0, 0.0))
     return {"cell": [i, j], "pavement_tris": int(len(T)), "pavement_m2": int(mask[m:m + n, m:m + n].sum() * PX * PX),
-            "from_curbs": round(surveyed, 3), "polys": len(polys), "s": round(time.perf_counter() - t0, 1)}
+            "from_curbs": round(surveyed, 3), "polys": polys, "s": round(time.perf_counter() - t0, 1)}
 
 
 _w = {}

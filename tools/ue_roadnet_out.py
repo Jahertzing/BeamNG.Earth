@@ -5,7 +5,7 @@ z up, origin 40.0992, -104.9372).
     Earth.UE\\.venv\\Scripts\\python tools\\ue_roadnet_out.py --net <roadnet dir> --export <export dir>
 
 {"frame", "links": [{id, from, to, points [[x, y, z], ...], class, ramp, level (0 ground, 1+ deck, -1 tunnel), name, oneway,
-speed (m/s), width (m, this link's median), edges: [[left, right], ...] per point (the pavement's edges in m left of the points,
+speed (m/s), width (m, the feature's median, what its lanes were laid out on), edges: [[left, right], ...] per point (the pavement's edges in m left of the points,
 right negative; a two-way road's reverse link sees the same road from the other side), lanes: [offsets m left of the points, kerb lane first], lane_width, turns: [per lane, kerb first] or
 null, control ("signal", "stop", "give_way", null) at its end, control_source ("mapped", "rule", null), surface}], "nodes":
 {id: {xy, junction, arms}}, "junctions": [{id, nodes, control, xy}]}
@@ -318,7 +318,6 @@ def main():
             prof_l, prof_r = p["edge_b"] - p["edge_m"], p["edge_a"] - p["edge_m"]
         else:
             prof_l, prof_r = np.full(len(t_st), width / 2), np.full(len(t_st), -width / 2)
-        prof_w = prof_l - prof_r
         z = heights.ground(xy)
         if p["kind"] == "bridge" and len(xy) >= 2:
             tree, zz = heights.decks(xy)
@@ -340,14 +339,8 @@ def main():
             q0 = [float(np.interp(s0, scale, pts[:, c])) for c in range(3)]
             q1 = [float(np.interp(s1, scale, pts[:, c])) for c in range(3)]
             seg = np.vstack([q0, pts[inner], q1])
-            span = (t_st >= s0) & (t_st <= s1)
-            link_w = float(np.median(prof_w[span])) if span.any() else width
-            if abs(link_w - width) > 0.5:       # (this stretch's own width, not the whole feature's median)
-                lanes_here = lanes_of(ue_fit._lanes_kept(roads, spec_of(sp0, link_w)))
-            else:
-                lanes_here, link_w = lanes, width
             edge_pts = np.c_[np.interp(np.r_[s0, scale[inner], s1], t_st, prof_l), np.interp(np.r_[s0, scale[inner], s1], t_st, prof_r)]
-            for d, (offs, lw) in lanes_here.items():
+            for d, (offs, lw) in lanes.items():
                 if not offs:
                     continue
                 turns = sp.turns_f if d > 0 else sp.turns_b
@@ -358,7 +351,7 @@ def main():
                 links.append({"id": lid, "from": a_id, "to": b_id,
                               "points": line.round(2).tolist(), "class": sp.cls, "ramp": bool(sp.link),
                               "level": p["level"], "name": p["name"], "oneway": bool(sp.oneway), "speed": round(speed, 1),
-                              "width": round(link_w, 2), "edges": (edge_pts if d > 0 else edge_pts[::-1, ::-1]).round(2).tolist(), "lanes": [round(-o if d < 0 else o, 2) for o in offs],
+                              "width": round(width, 2), "edges": (edge_pts if d > 0 else -edge_pts[::-1, ::-1]).round(2).tolist(), "lanes": [round(-o if d < 0 else o, 2) for o in offs],
                               "lane_width": round(lw, 2), "turns": list(turns) if turns else None, "control": None,
                               "control_source": None, "surface": sp.kind})
                 node(a_id, line[0])["ends"].append(("out", lid))
