@@ -44,6 +44,12 @@ SIGN_NODE_M = 22.0              # m from a mapped stop sign the end of a link is
 CLUSTER_M = 34.0                # m: nodes joined by a link this short are one junction ...
 JUNCTION_MAX_M = 70.0           # ... while it stays this far across
 CLUSTER_SKIP = {"service", "track", "unknown"}
+THROUGH_DEG = 30.0              # a turn under this is the road going on
+LANE_PLAN_CLASSES = {"motorway", "trunk", "primary", "secondary", "tertiary"}
+LANE_WINDOW_M = 300.0           # m each way along the road its through lane count is taken over
+TURN_REACH_M = 350.0            # m: a stretch this short before a junction may have more lanes than the road: its turn lanes
+MAX_TURN_LANES = 2
+SHORT_STRETCH_M = 150.0         # m: a shorter stretch with fewer lanes than the road is a gap in the map's tags
 SIGNAL_GROUP_M = 50.0           # m: mapped signals this close are one intersection's
 SIGNAL_JOIN_M = 100.0           # m: junctions a road this short ties are one signalled crossing (a wide median)
 
@@ -130,6 +136,90 @@ def lanes_of(sp):
         centres = [lo + (k + 0.5) * w for k in range(n)]
         out[int(d)] = (centres if d > 0 else centres[::-1], w)     # (right of travel is low offsets along, high against)
     return out
+
+
+def end_unit(pts, at_end, reach=15.0):
+    """Unit direction of travel at a link's start or end, over reach m."""
+    p = np.asarray(pts)[:, :2]
+    q = p[::-1] if at_end else p
+    d = np.r_[0.0, np.cumsum(np.hypot(*np.diff(q, axis=0).T))]
+    a = np.array([np.interp(min(reach, d[-1]), d, q[:, 0]), np.interp(min(reach, d[-1]), d, q[:, 1])])
+    u = (q[0] - a) if at_end else (a - q[0])
+    return u / max(float(np.hypot(*u)), 1e-9)
+
+
+def through_chains(links, nodes):
+    """Lists of link ids a driver follows straight on: same road, one way or two as it was, under THROUGH_DEG of turn."""
+    out = {}
+    for lk in links:
+        out.setdefault(lk["from"], []).append(lk)
+    nxt, prv = {}, {}
+    for lk in links:
+        if lk["class"] not in LANE_PLAN_CLASSES or lk["ramp"] or lk["level"] < 0:
+            continue
+        u = end_unit(lk["points"], True)
+        best = None
+        for b in out.get(lk["to"], ()):
+            if b["to"] == lk["from"] or b["ramp"] or b["class"] not in LANE_PLAN_CLASSES or b["oneway"] != lk["oneway"]:
+                continue
+            if b["name"] != lk["name"]:
+                continue
+            v = end_unit(b["points"], False)
+            t = math.degrees(abs(math.atan2(u[0] * v[1] - u[1] * v[0], float(u @ v))))
+            if t <= THROUGH_DEG and (best is None or t < best[0]):
+                best = (t, b["id"])
+        if best is not None and best[1] not in prv:
+            nxt[lk["id"]] = best[1]
+            prv[best[1]] = lk["id"]
+    chains = []
+    for a in nxt:
+        if a in prv:
+            continue
+        c = [a]
+        while c[-1] in nxt and nxt[c[-1]] not in c:
+            c.append(nxt[c[-1]])
+        chains.append(c)
+    return chains
+
+
+def lane_plan(links, nodes):
+    """Lanes a road really has along its length: a count from the map is often the whole cross-section at one junction. The
+    through count at a stretch is the length-weighted median of the road round it; more than that stays only on a stretch that
+    ends at a junction (its turn lanes, TURN_REACH_M at most), and a short stretch with fewer takes the through count. Lanes that
+    change keep the kerb lane where it was. Returns the links changed."""
+    changed = 0
+    for chain in through_chains(links, nodes):
+        rows = [links[k] for k in chain]
+        n = np.array([len(lk["lanes"]) for lk in rows])
+        if n.min() == n.max():
+            continue
+        length = np.array([link_length(lk) for lk in rows])
+        mid = np.cumsum(length) - length / 2
+        for k, (lk, count, m) in enumerate(zip(rows, n, length)):
+            near = np.abs(mid - mid[k]) <= LANE_WINDOW_M        # (what the road is here: a road changes along its length)
+            order = np.argsort(n[near])
+            cum = np.cumsum(length[near][order])
+            through = int(n[near][order][int(np.searchsorted(cum, cum[-1] / 2))])
+            node = nodes.get(lk["to"], {})
+            at_junction = node.get("junction") is not None
+            want = count
+            if count > through and not (at_junction and m <= TURN_REACH_M):
+                want = through
+            elif count > through + MAX_TURN_LANES:
+                want = through + MAX_TURN_LANES
+            elif count < through and m < SHORT_STRETCH_M:
+                want = through
+            if want == count or want < 1:
+                continue
+            offs = sorted(lk["lanes"], reverse=False)
+            lw = float(np.clip(float(lk["lane_width"] or 3.6), 3.0, 3.9))
+            kerb = lk["lanes"][0]
+            step = 1.0 if len(offs) < 2 or lk["lanes"][-1] >= lk["lanes"][0] else -1.0
+            lk["lanes"] = [round(kerb + step * q * lw, 2) for q in range(int(want))]
+            lk["lane_width"] = round(lw, 2)
+            lk["turns"] = None
+            changed += 1
+    return changed
 
 
 def link_length(lk):
@@ -390,6 +480,7 @@ def main():
                     continue
             if RANK.get(links[lk]["class"], 1) < top and n_top >= 1:
                 links[lk]["control"], links[lk]["control_source"] = "stop", "rule"
+    planned = lane_plan(links, nodes)
     # arms for the nodes
     out_nodes = {k: {"xy": v["xy"], "junction": v.get("junction"), "arms": len({lk for _, lk in v["ends"]})} for k, v in nodes.items()}
     doc = {"frame": {"lat": ue_export.FRAME[0], "lon": ue_export.FRAME[1], "axes": "x east, y north, z up, metres"},
@@ -401,7 +492,7 @@ def main():
     for lk in links:
         c[lk["control"]] = c.get(lk["control"], 0) + 1
     print(json.dumps({"links": len(links), "nodes": len(nodes), "junctions": len(junctions),
-                      "signal_junctions": sum(1 for j in junctions if j["control"]), "control": {str(k): v for k, v in c.items()},
+                      "signal_junctions": sum(1 for j in junctions if j["control"]), "lanes_planned": planned, "control": {str(k): v for k, v in c.items()},
                       "mb": round(os.path.getsize(path) / 1e6, 1),
                       "s": round(time.perf_counter() - t0, 1)}))
 
