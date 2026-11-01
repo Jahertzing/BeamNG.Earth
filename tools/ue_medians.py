@@ -33,7 +33,7 @@ MIN_M2 = 6.0
 MAX_M2 = 2500.0
 MAX_WALK_SHARE = 0.3            # of a strip that is already sidewalk
 SOLID_M = 0.9                   # m from the middle of a strip to its edge: no wider, and it is concrete all through
-CURB_M = 0.75                   # m of a wider strip's edge that is curb
+CURB_M = 0.3                    # m of a wider strip's edge that is curb
 STEP_M = 0.6                    # m of the raster's stairs smoothed off an outline
 TUCK_M = 0.35                   # m an island runs on over the pavement's edge: it hides that edge's wander
 
@@ -84,7 +84,7 @@ def raised(polys):
         p = smooth(poly)
         if p.is_empty:
             continue
-        if not p.buffer(-SOLID_M).is_empty:
+        if not p.buffer(-(SOLID_M + TUCK_M)).is_empty:
             p = p.difference(p.buffer(-CURB_M))
         out.extend(shapely.get_parts(shapely.make_valid(p)).tolist())
     return [p for p in out if p.geom_type == "Polygon" and not p.is_empty]

@@ -60,6 +60,7 @@ DROPPED = ("road_asphalt", "m_dirt_road", "m_gm_concrete_plain", "ECA_road_edge_
 PAINT = ("line_", "crossing", "roadmarkings")
 PAINT_OFF_M = 0.5               # m past the pavement's edge paint is still kept
 WALK_W_M = 1.6                  # m: a sidewalk's width, along the curb
+BATTER_M = 0.12                 # m a curb's face leans out at its foot
 WALK_UP_M = 0.15                # m over the pavement: the curb's height
 WALK_NEAR_M = 4.0               # m from the builders' sidewalks the curb gets one
 MATERIALS = ["road_asphalt_2lane", "m_dirt_road", "bne_bridge_concrete", "road_asphalt_worn"]
@@ -485,7 +486,12 @@ def surfaces(mask, labels, z, x0, y0):
 
 
 def skirted(P, T, drop):
-    """(P, T) of a mesh with a wall drop m down from every open edge: the curb's face."""
+    """(P, T) of a mesh with a wall drop m down from every open edge: the curb's face, leaning out BATTER_M at its foot (road
+    materials are mapped from above, so a plumb face smears the texture down it in a comb)."""
+    a0, b0, c0 = P[T[:, 0], :2], P[T[:, 1], :2], P[T[:, 2], :2]
+    flip = (b0[:, 0] - a0[:, 0]) * (c0[:, 1] - a0[:, 1]) - (b0[:, 1] - a0[:, 1]) * (c0[:, 0] - a0[:, 0]) < 0
+    T = T.copy()
+    T[flip] = T[flip][:, [0, 2, 1]]
     tri = T[:, [0, 1, 1, 2, 2, 0]].reshape(-1, 2)
     key = np.sort(tri, axis=1)
     _, inv, count = np.unique(key, axis=0, return_inverse=True, return_counts=True)
@@ -499,6 +505,14 @@ def skirted(P, T, drop):
     Q[0::2] = P[a]
     Q[1::2] = P[b]
     Q[:, 2] -= drop
+    d = P[b, :2] - P[a, :2]
+    out = np.c_[d[:, 1], -d[:, 0]] / np.maximum(np.hypot(d[:, 0], d[:, 1]), 1e-6)[:, None]
+    lean = np.zeros((n, 2))
+    np.add.at(lean, a, out)
+    np.add.at(lean, b, out)
+    lean = lean / np.maximum(np.hypot(lean[:, 0], lean[:, 1]), 1e-6)[:, None]
+    Q[0::2, :2] += lean[a] * BATTER_M
+    Q[1::2, :2] += lean[b] * BATTER_M
     wall = np.r_[np.c_[b, a, low], np.c_[b, low, low + 1]]
     return np.r_[P, Q], np.r_[T, wall]
 
