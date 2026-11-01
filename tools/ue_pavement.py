@@ -31,6 +31,8 @@ PX = 0.25
 CELL = 2048.0
 MARGIN_M = 64.0                 # m of roads and curbs round the cell
 GRID_M = 2.0                    # the terrain's lattice
+CORNER_R_M = 6.0                # m: a junction corner's radius where the survey gives none
+CORNER_MIN_M2 = 60.0            # m2 of unsurveyed ribbon in a junction's box for it to be rounded
 SURFACE_HOPS = 6                # pieces each way a road's surface is voted over
 SURFACE_OVERLAP_PX = 2          # px two surfaces overlap where they meet
 SURFACE_STEP_M = 0.002          # m each surface lies over the one before
@@ -97,6 +99,26 @@ def draw_polys(shape, polys, x0, y0, value=255):
     return np.asarray(img)
 
 
+def rounded_corners(mask, spec, pieces, x0, y0):
+    """Corners on the roads the survey has no curbs for: their ribbons crossed at a square corner. Round each junction of them
+    with a closing of CORNER_R_M, inside the junction's disk (the builders' corner fills went with their asphalt)."""
+    out = mask.copy()
+    h, w = mask.shape
+    for q, r in junction_disks(pieces):
+        c, a = int((q[0] - x0) / PX), int((q[1] - y0) / PX)
+        k = int((r + 2 * CORNER_R_M) / PX)
+        if a < k or c < k or a + k >= h or c + k >= w or spec[a - k:a + k, c - k:c + k].sum() * PX * PX < CORNER_MIN_M2:
+            continue
+        crop = mask[a - k:a + k, c - k:c + k]
+        grown = ndimage.distance_transform_edt(~crop) * PX <= CORNER_R_M
+        closed = ndimage.distance_transform_edt(grown) * PX > CORNER_R_M
+        yy, xx = np.ogrid[-k:k, -k:k]
+        disk = (xx * xx + yy * yy) * PX * PX <= r * r
+        near_spec = ndimage.binary_dilation(spec[a - k:a + k, c - k:c + k], iterations=int(CORNER_R_M / PX))
+        out[a - k:a + k, c - k:c + k] |= closed & disk & near_spec
+    return out
+
+
 def outline_mask(pieces, lines, box, lots=()):
     """(pavement mask, material label raster, surveyed share) of window box, row 0 at its y0. lots: the mapped parking
     lots' rings, asphalt from edge to edge."""
@@ -149,7 +171,7 @@ def outline_mask(pieces, lines, box, lots=()):
     keep &= inside / size >= RIBBON_SHARE
     flood = ndimage.binary_opening(keep[lab], iterations=OPEN_PX)
     flood = ndimage.binary_dilation(flood, iterations=2)    # (back over the line and its dilation)
-    mask = flood | fit | spec
+    mask = rounded_corners(flood | fit | spec, spec, pieces, x0, y0)
     if len(lots):
         near = [r for r in lots if r[:, 0].max() >= x0 and r[:, 0].min() <= x1 and r[:, 1].max() >= y0 and r[:, 1].min() <= y1]
         if near:
