@@ -17,6 +17,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import ue_export  # noqa: E402
 
 import numpy as np  # noqa: E402
+import shapely  # noqa: E402
 from scipy import ndimage  # noqa: E402
 
 import ue_furniture  # noqa: E402
@@ -33,6 +34,8 @@ MAX_M2 = 2500.0
 MAX_WALK_SHARE = 0.3            # of a strip that is already sidewalk
 SOLID_M = 0.9                   # m from the middle of a strip to its edge: no wider, and it is concrete all through
 CURB_M = 0.75                   # m of a wider strip's edge that is curb
+STEP_M = 0.6                    # m of the raster's stairs smoothed off an outline
+TUCK_M = 0.35                   # m an island runs on over the pavement's edge: it hides that edge's wander
 
 
 def islands(export, i, j, above=0.0, walk_share=MAX_WALK_SHARE):
@@ -65,6 +68,28 @@ def islands(export, i, j, above=0.0, walk_share=MAX_WALK_SHARE):
     return keep, (len(who), float(keep.sum()) * PX * PX), rows
 
 
+def smooth(poly):
+    """The outline with its raster steps taken off, tucked a little under the pavement's edge."""
+    p = poly.simplify(TUCK_M).buffer(STEP_M).buffer(-STEP_M)
+    q = p.buffer(-STEP_M).buffer(STEP_M)
+    if not q.is_empty and q.area >= 0.8 * p.area:
+        p = q
+    return p.buffer(TUCK_M)
+
+
+def raised(polys):
+    """What stands up of each island: all of a narrow one, of a wider one the band CURB_M in from its one smoothed outline."""
+    out = []
+    for poly in polys:
+        p = smooth(poly)
+        if p.is_empty:
+            continue
+        if not p.buffer(-SOLID_M).is_empty:
+            p = p.difference(p.buffer(-CURB_M))
+        out.extend(shapely.get_parts(shapely.make_valid(p)).tolist())
+    return [p for p in out if p.geom_type == "Polygon" and not p.is_empty]
+
+
 def cell(job):
     export, i, j, count, above = job
     keep, got, rows = islands(export, i, j, above, 1.0 if count else MAX_WALK_SHARE)   # (counted after a pass, its strips are walks)
@@ -72,16 +97,15 @@ def cell(job):
         return got, rows
     x0, y0 = i * CELL, j * CELL
     k = int(PX / ue_pavement.PX)
-    inside = ndimage.distance_transform_edt(keep) * PX
-    lab, n = ndimage.label(keep)
-    solid = np.r_[False, ndimage.maximum(inside, lab, np.arange(1, n + 1)) <= SOLID_M]
-    raised = keep & ((inside <= CURB_M) | solid[lab])
-    band = np.repeat(np.repeat(raised, k, axis=0), k, axis=1)
+    band = np.repeat(np.repeat(keep, k, axis=0), k, axis=1)
     ground = ue_survey.read_glb(os.path.join(export, f"ground_{i}_{j}.glb"))[0]
     N = int(round(len(ground["P"]) ** 0.5)) - 1
     z = ground["P"][:, 2].reshape(N + 1, N + 1)
-    polys = ue_pavement.polygons(band, x0, y0)
-    P, T, _ = ue_pavement.clip_terrain(polys, band, z, x0, y0, np.zeros(band.shape, np.uint8))
+    polys = raised(ue_pavement.polygons(band, x0, y0))
+    if not polys:
+        return got, rows
+    near = ndimage.binary_erosion(band, iterations=int((CURB_M + 0.5) / ue_pavement.PX))       # (none of a curbed strip is whole)
+    P, T, _ = ue_pavement.clip_terrain(polys, band & ~near, z, x0, y0, np.zeros(band.shape, np.uint8))
     if not len(T):
         return got, rows
     P = P.copy()
