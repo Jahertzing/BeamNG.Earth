@@ -127,7 +127,7 @@ def tile(row, pave_dir, ground_dir, lines):
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--dir", default="C:/beamng-earth/Earth.UE/export/frederick-r-pave")
+    ap.add_argument("--dir", default="C:/beamng-earth/Earth.UE/export/frederick-r6")
     ap.add_argument("--ground", default="C:/beamng-earth/Earth.UE/export/frederick-r")
     ap.add_argument("--net", default="C:/beamng-earth/Earth.UE/export/roadnet")
     ap.add_argument("--jobs", type=int, default=3)

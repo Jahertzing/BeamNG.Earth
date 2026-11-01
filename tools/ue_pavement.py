@@ -10,6 +10,7 @@ Writes <kind road>_<i>_<j>.glb over the builder's: its asphalt, dirt and edge de
 """
 import argparse
 import json
+import math
 import os
 import pickle
 import sys
@@ -31,6 +32,9 @@ PX = 0.25
 CELL = 2048.0
 MARGIN_M = 64.0                 # m of roads and curbs round the cell
 GRID_M = 2.0                    # the terrain's lattice
+BULB_R_M = 24.0                 # m round a street's end the flood may look for its cul-de-sac
+BULB_CLOSED_SHARE = 0.9         # a region under this share of its disk is closed by its curb
+BULB_LEAK_SHARE = 0.7           # a disk filled over this share has no curb round it
 CORNER_R_M = 6.0                # m: a junction corner's radius where the survey gives none
 CORNER_MIN_M2 = 60.0            # m2 of unsurveyed ribbon in a junction's box for it to be rounded
 SURFACE_HOPS = 6                # pieces each way a road's surface is voted over
@@ -91,6 +95,26 @@ def junction_disks(pieces):
     return out
 
 
+def end_disks(pieces):
+    """[(xy, r)] at the ends of streets that stop: the bulb of a cul-de-sac is curbed, and past the road's ribbon."""
+    ends = {}
+    for p in pieces:
+        if p["kind"] != "ground" or p["spec"]["cls"] in ("track", "motorway", "trunk"):
+            continue
+        for q in (p["xy"][0], p["xy"][-1]):
+            ends.setdefault((round(q[0] / 2.0), round(q[1] / 2.0)), []).append((p["fid"], q))
+    return [(got[0][1], BULB_R_M) for got in ends.values() if len({g[0] for g in got}) == 1]
+
+
+def disk_of(shape, q, r, x0, y0):
+    """(row slice, column slice, disk mask) of a disk in a raster, or None off it."""
+    c, a, k = int((q[0] - x0) / PX), int((q[1] - y0) / PX), int(r / PX)
+    if a < k or c < k or a + k >= shape[0] or c + k >= shape[1]:
+        return None
+    yy, xx = np.ogrid[-k:k, -k:k]
+    return slice(a - k, a + k), slice(c - k, c + k), xx * xx + yy * yy <= k * k
+
+
 def draw_polys(shape, polys, x0, y0, value=255):
     img = Image.new("L", shape[::-1], 0)
     d = ImageDraw.Draw(img)
@@ -149,7 +173,8 @@ def outline_mask(pieces, lines, box, lots=()):
     corridor = ndimage.binary_dilation(fit, iterations=int(CORRIDOR_M / PX))
     disks = Image.new("L", shape[::-1], 0)
     dd = ImageDraw.Draw(disks)
-    for q, r in junction_disks(pieces):
+    jd, ed = junction_disks(pieces), end_disks(pieces)
+    for q, r in jd + ed:
         c = (q - (x0, y0)) / PX
         dd.ellipse([c[0] - r / PX, c[1] - r / PX, c[0] + r / PX, c[1] + r / PX], fill=255)
     corridor |= np.asarray(disks) > 0
@@ -169,7 +194,21 @@ def outline_mask(pieces, lines, box, lots=()):
     inside = ndimage.sum_labels(fit, lab, np.arange(count + 1))
     size = np.maximum(np.bincount(lab.ravel(), minlength=count + 1), 1)
     keep &= inside / size >= RIBBON_SHARE
-    flood = ndimage.binary_opening(keep[lab], iterations=OPEN_PX)
+    # a curbed circle round a junction or a street's end with no surveyed road to seed it (driveways meeting in a turning
+    # circle): closed if it stops short of its disk
+    for q, r in jd + ed:
+        c, a = int((q[0] - x0) / PX), int((q[1] - y0) / PX)
+        if 0 <= a < shape[0] and 0 <= c < shape[1] and lab[a, c]:
+            if size[lab[a, c]] * PX * PX < BULB_CLOSED_SHARE * math.pi * r * r:
+                keep[lab[a, c]] = True
+    flood = keep[lab]
+    for q, r in ed:                     # (no curb round a street's end: the flood filled its disk, not a bulb)
+        got = disk_of(shape, q, r, x0, y0)
+        if got is not None:
+            ra, rc, disk = got
+            if flood[ra, rc][disk].mean() > BULB_LEAK_SHARE:
+                flood[ra, rc] &= ~disk | fit[ra, rc]
+    flood = ndimage.binary_opening(flood, iterations=OPEN_PX)
     flood = ndimage.binary_dilation(flood, iterations=2)    # (back over the line and its dilation)
     mask = rounded_corners(flood | fit | spec, spec, pieces, x0, y0)
     if len(lots):
