@@ -7,7 +7,7 @@ through its nodes, and its paint comes from one lane plan along it:
     the lanes are what the links say each way, or what fits at a real width; a change of lanes shorter than MIN_RUN_M is flicker;
     centre, lane lines and edge lines are offsets along the road that ease over a taper, never a step;
     nothing is painted through a junction: paint stops at the mouth, where the stop bar is. A road going straight past a T with no
-    control of its own keeps its lines past it.
+    control of its own keeps its lines past it; at a crossroads it does not.
 
 At a junction each way in gets what a signal or a stop asks of it: a stop bar across its lanes, solid lane lines up to it, and at a
 signal a zebra crossing on the arm and, where the pavement widens for it, a left turn pocket with its arrows and ONLY.
@@ -75,6 +75,7 @@ ARROW_BACK_M = (6.0, 34.0)      # m before the bar a lane's arrows stand
 ONLY_BACK_M = 14.0
 ZEBRA_NEAR_M = 28.0             # m: a builder's crosswalk this near a new one goes: the junction has its own now
 GAP_M = 34.0                    # m: a stretch this short between two junctions' cuts is painted as neither
+CROSSROADS = 4                  # arms: a junction no road's paint runs through, stopped or not
 ALONG_M = 15.0                  # m from our stations a builder's line is along a repainted road
 PARTNER_M = 22.0                # m: the other carriageway of a divided road is looked for this near
 CROSS_LEN_M = 6.0               # m: builders' paint parts longer than this along a road are its lines
@@ -421,8 +422,8 @@ def stops(run, c, mouth):
             g["against"] = g["against"] or after.control.get(node)
         g["end"] = after is None
     for g in groups.values():
-        if not (g["along"] or g["against"] or g["start"] or g["end"]):
-            continue            # (straight on past a side road)
+        if not (g["along"] or g["against"] or g["start"] or g["end"] or len(g["jn"]["arms"]) >= CROSSROADS):
+            continue            # (straight on past a T)
         jn = g["jn"]
         d = np.hypot(*(c["X"] - jn["xy"]).T)
         near = int(np.argmin(d))
@@ -643,13 +644,16 @@ def rewrite(export, out, cell, strips, tree, cut_tree, cut_r, heights, zebra_tre
     names = list(names)
     paint = [k for k, n in enumerate(names) if n.startswith("line_")]
     drop = np.zeros(len(T), bool)
+    # (a run before this one's paint is the only paint with no texture coordinates: a rerun starts clean)
+    ours = np.isin(M, [k for k, n in enumerate(names) if n.startswith(("line_", "crossing"))]) & (np.abs(UV[T]).max(axis=(1, 2)) == 0.0)
+    drop |= ours
     crossing = [k for k, n in enumerate(names) if n.startswith("crossing")]
     if crossing and zebra_tree is not None:
-        pm = np.flatnonzero(np.isin(M, crossing))
+        pm = np.flatnonzero(np.isin(M, crossing) & ~ours)
         c = P[T[pm]].mean(1)[:, :2] + org
         drop[pm[zebra_tree.query(c)[0] <= ZEBRA_NEAR_M]] = True
     if paint:
-        pm = np.isin(M, paint)
+        pm = np.isin(M, paint) & ~ours
         lab = ue_settle.parts_of(P, T[pm])
         tl = lab[T[pm][:, 0]]
         c = P[T[pm]].mean(1)[:, :2] + org
