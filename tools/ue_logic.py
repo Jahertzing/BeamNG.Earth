@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Does the road network make sense to a driver? Checks roadnet.json for the things that read as wrong whatever the map says:
 lanes that jump sideways or change count where a road goes on through a node, signals that control only some of a junction's
-ways in, signals on a road nothing crosses, signalled junctions a few metres apart.
+ways in, signals on a road nothing crosses, signalled junctions a few metres apart. (Pavement steps are the road thread's
+edge_step check: a link's width is a median, its edges field the truth.)
 
     Earth.UE\\.venv\\Scripts\\python tools\\ue_logic.py --net <roadnet dir> --out <folder>
 
@@ -19,7 +20,6 @@ CLASSES = {"motorway", "trunk", "primary", "secondary", "tertiary"}
 STREETS = CLASSES | {"residential", "unclassified", "living_street"}
 TURN_THROUGH_DEG = 30.0         # a road goes on through a node within this turn
 JUMP_M = 0.8                    # m a lane's line may step sideways at a node
-WIDTH_JUMP_M = 3.0
 NEAR_SIGNALS_M = 45.0           # m between two signalled junctions that are really one
 
 
@@ -67,7 +67,7 @@ def through_pairs(links):
 
 
 def lanes_check(links):
-    jumps, widths, counts = [], [], []
+    jumps, counts = [], []
     for a, b in through_pairs(links):
         if not a["lanes"] or not b["lanes"]:
             continue
@@ -83,12 +83,9 @@ def lanes_check(links):
             float(np.abs(off_a[:k] - off_b[:k]).max()), float(np.abs(off_a[-k:] - off_b[-k:]).max()))
         if step > JUMP_M:
             jumps.append(dict(row, step=round(step, 2)))
-        dw = abs(float(a["width"]) - float(b["width"]))
-        if dw > WIDTH_JUMP_M:
-            widths.append(dict(row, width=[a["width"], b["width"]]))
         if abs(len(a["lanes"]) - len(b["lanes"])) >= 2:
             counts.append(row)
-    return (sorted(jumps, key=lambda f: -f["step"]), sorted(widths, key=lambda f: -abs(f["width"][0] - f["width"][1])), counts)
+    return sorted(jumps, key=lambda f: -f["step"]), counts
 
 
 def signals_check(net):
@@ -104,7 +101,7 @@ def signals_check(net):
     sig = []
     for j, inc in by_j.items():
         group = set(jx[j]["nodes"]) if j in jx else set()
-        ins = [k for k in inc if k["from"] not in group and k["class"] in STREETS and not k["ramp"]]
+        ins = [k for k in inc if k["from"] not in group and k["class"] in STREETS]
         s = [k for k in ins if k["control"] == "signal"]
         if not s:
             continue
@@ -130,19 +127,19 @@ def main():
     a = ap.parse_args()
     with open(os.path.join(a.net, "roadnet.json")) as f:
         net = json.load(f)
-    jumps, widths, counts = lanes_check(net["links"])
+    jumps, counts = lanes_check(net["links"])
     sig, n_sig = signals_check(net)
-    summary = {"lane_jumps": len(jumps), "width_jumps": len(widths), "lane_count_jumps": len(counts), "signal_junctions": n_sig, **{"signal_" + k: len(v) for k, v in sig.items()}}
+    summary = {"lane_jumps": len(jumps), "lane_count_jumps": len(counts), "signal_junctions": n_sig, **{"signal_" + k: len(v) for k, v in sig.items()}}
     print(json.dumps(summary, indent=1))
     print("by class", collections.Counter(f["class"] for f in jumps).most_common())
-    for f in jumps[:10] + widths[:6] + counts[:6]:
+    for f in jumps[:10] + counts[:6]:
         print(f)
     for k, v in sig.items():
         print(k, v[:8])
     if a.out:
         os.makedirs(a.out, exist_ok=True)
         with open(os.path.join(a.out, "logic.json"), "w") as f:
-            json.dump({"summary": summary, "faults": {"lane_jumps": jumps, "width_jumps": widths, "lane_count_jumps": counts, **sig}}, f, separators=(",", ":"))
+            json.dump({"summary": summary, "faults": {"lane_jumps": jumps, "lane_count_jumps": counts, **sig}}, f, separators=(",", ":"))
 
 
 if __name__ == "__main__":
