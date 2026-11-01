@@ -1,13 +1,14 @@
 #!/usr/bin/env python3
 """Traffic signals for the Unreal world: a mast arm and heads for every signalled approach of roadnet.json, US style: the
-pole on the far right corner, the arm over the lanes, one head a lane, facing the drivers who come in. The meshes go per cell
-into signal_<i>_<j>.glb (drawn) and signalcol_<i>_<j>.glb (the poles' collision); signals.json has every lens's place for
-whoever lights them (the traffic sim knows the phases).
+pole on the far right corner, the arm over the lanes, one head a lane with its yellow edged backplate, facing the drivers who
+come in, the cross street's name on the arm and a tall luminaire on the pole, as nearly every signal here has. The meshes go per
+cell into signal_<i>_<j>.glb (drawn) and signalcol_<i>_<j>.glb (the poles' collision); signals.json has every lens's place for
+whoever lights them (the traffic sim knows the phases), and the luminaires' for ue_furniture.
 
     Earth.UE\\.venv\\Scripts\\python tools\\ue_signals.py --net <roadnet dir> --export <export dir> [--manifest]
 
 signals.json: {"heads": [{"junction", "link", "node", "lens": {"red": [x, y, z], "yellow": ..., "green": ...}, "facing": [x, y, 0],
-"radius"}]}, frame metres. --manifest adds the meshes to the export's manifest.json as sign and signcol.
+"radius"}], "lamps": [[x, y, z, yaw]]}, frame metres. --manifest adds the meshes to the export's manifest.json as sign and signcol.
 """
 import argparse
 import json
@@ -21,6 +22,7 @@ import ue_export  # noqa: E402
 
 import numpy as np  # noqa: E402
 
+import guidesigns  # noqa: E402
 import ue_furniture  # noqa: E402
 import ue_roadnet_out  # noqa: E402
 
@@ -41,7 +43,16 @@ FAR_DEFAULT_M = (12.0, 48.0)    # m from the stop line to the far side, at least
 SLIDE_M = (0.0, 1.5, -1.5, 3.0, -3.0, 4.5, 6.0, 8.0, 10.0, 12.0)    # m along the road the pole may stand off its place
 KERB_SEARCH_M = 16.0            # m past the lanes' side to look for the curb
 POLE_CLEAR_M = 0.7              # m off the pavement
-MATERIALS = ["bne_gsign_steel", "bne_gsign_textk", "bne_signal_red", "bne_signal_yellow", "bne_signal_green"]
+MATERIALS = ["bne_gsign_steel", "bne_gsign_textk", "bne_signal_red", "bne_signal_yellow", "bne_signal_green", "bne_gsign_amber",
+             "bne_gsign_panel", "bne_gsign_letter"]
+M_AMBER, M_PANEL, M_LETTER = 5, 6, 7
+PLATE_EDGE_M = 0.05             # m of retroreflective yellow round a backplate
+POLE_TOP_M = 10.5               # m over the road: the pole, carrying its luminaire
+DAVIT_M = 3.2                   # m the luminaire reaches out over the road
+DAVIT_RISE_M = 0.5
+NAME_CAP_M = 0.2                # m: the mast arm name sign's capitals (MUTCD D3-1, 8 in.)
+NAME_MAX_M = 3.6
+NAME_FROM_POLE_M = 1.2          # m from the pole to the sign's near end
 
 
 class Mesh:
@@ -103,6 +114,24 @@ def end_dir(points, reach=15.0):
     return u / max(np.linalg.norm(u), 1e-6)
 
 
+def name_sign(m, c, right, up, nrm, name):
+    """A green street name sign centred at c on the arm, facing nrm, its text running along right."""
+    w = guidesigns.text_width(name, NAME_CAP_M)
+    W, H = w + 0.3, NAME_CAP_M * 2.0
+    m.box(c, right * W / 2, -nrm * 0.015, up * H / 2, M_PANEL)
+    org = c + nrm * 0.018 - right * w / 2 - up * NAME_CAP_M / 2
+    for pts, tris in guidesigns.text_tris(name, NAME_CAP_M, 0.0, 0.0):
+        q = np.array(pts, float)
+        m.add(org + right * q[:, :1] + up * q[:, 1:], np.array(tris, np.int64), M_LETTER)
+
+
+def cross_name(links, group, name, t):
+    """The name of the road that crosses one running along t, the longest spelled."""
+    got = [lk.get("name") or "" for k in group for lk in links.get(k, ()) if abs(float(end_dir(lk["points"]) @ t)) < 0.6]
+    got = sorted({v.split(";")[0] for v in got if v and v != name}, key=len)
+    return got[-1] if got else None
+
+
 def corner(world, F, t, n, kerb):
     """(F, kerb) with the pole's foot on free ground: the far right corner as the drawn pavement has it, moved along the road
     and out past the curb as little as will do; None when no ground is near. The arm stays square to the lanes."""
@@ -145,6 +174,7 @@ def main():
     # (a slip lane past the corner has no head of its own: a ramp counts only where a through road stops too)
     main_ends = {lk["to"] for lk in links if lk["control"] == "signal" and not lk["ramp"]}
     mesh, col, heads = {}, {}, []
+    lamps = []
     made = 0
     for lk in links:
         if lk["control"] != "signal" or lk["level"] != 0:
@@ -186,18 +216,23 @@ def main():
         zr = float(heights.ground(F[None])[0])
         if not np.isfinite(z0) or not np.isfinite(zr):
             continue
-        tip = offs[-1] + lw * 0.5
+        tip = offs[-1] + lw * 0.5 + 0.4
         if tip - kerb > ARM_MAX_M:
             tip = kerb + ARM_MAX_M
         cell = (int(P[0] // CELL), int(P[1] // CELL))
         m = mesh.setdefault(cell, Mesh())
         c = col.setdefault(cell, Mesh())
-        top = zr + ARM_Z + 0.9
+        top = zr + POLE_TOP_M
         m.tube((P[0], P[1], z0 - 0.3), (P[0], P[1], top), POLE_R, POLE_TOP_R, 0)
         c.box((P[0], P[1], (z0 + top) / 2), (POLE_R, 0, 0), (0, POLE_R, 0), (0, 0, (top - z0) / 2 + 0.3), 0)
         A0 = np.r_[P, zr + ARM_Z]
         A1 = np.r_[F + n * tip, zr + ARM_Z + ARM_RISE]
         m.tube(A0, A1, ARM_R, ARM_R * 0.55, 0)
+        L0 = np.r_[P, top - 0.2]
+        L1 = np.r_[P + n * DAVIT_M, top + DAVIT_RISE_M]
+        m.tube(L0, L1, 0.05, 0.04, 0)
+        m.box(L1 + np.r_[n * 0.3, -0.03], np.r_[n * 0.36, 0.0], np.r_[t * 0.16, 0.0], np.array([0.0, 0.0, 0.07]), 0)
+        lamps.append([round(float(v), 2) for v in (*(L1[:2] + n * 0.3), L1[2] - 0.12)] + [round(math.degrees(math.atan2(n[1], n[0])) % 360.0, 1)])
         # one head a lane, at least two
         at = offs[:] if len(offs) >= 2 else [offs[0] - lw * 0.25, offs[0] + lw * 0.25]
         at = [v for v in at if v <= tip][-4:]
@@ -213,6 +248,7 @@ def main():
             m.tube(np.r_[H, bottom + HEAD_H], np.r_[H, arm_z], 0.03, 0.03, 0)
             m.box(mid - nrm * HEAD_DEPTH / 2, nv * HEAD_W / 2, -nrm * HEAD_DEPTH / 2, up * HEAD_H / 2, 1)
             m.box(mid - nrm * (HEAD_DEPTH + 0.015), nv * PLATE_W / 2, -nrm * 0.012, up * PLATE_H / 2, 1)
+            m.box(mid - nrm * (HEAD_DEPTH + 0.03), nv * (PLATE_W / 2 + PLATE_EDGE_M), -nrm * 0.008, up * (PLATE_H / 2 + PLATE_EDGE_M), M_AMBER)
             lens = {}
             for j, name in enumerate(("red", "yellow", "green")):
                 q = mid + nrm * 0.006 + up * ((1 - j) * HEAD_H / 3.1)
@@ -220,6 +256,14 @@ def main():
                 lens[name] = [round(float(v), 3) for v in q + nrm * 0.01]
             heads.append({"junction": jid, "link": lk["id"], "node": lk["to"], "lens": lens,
                           "facing": [round(float(v), 4) for v in nrm], "radius": LENS_R})
+        name = cross_name(by_from, group, lk.get("name") or "", t)
+        if name and guidesigns.text_width(name, NAME_CAP_M) + 0.3 < NAME_MAX_M:
+            W = guidesigns.text_width(name, NAME_CAP_M) + 0.3
+            first = min(at) if at else tip
+            x = kerb + NAME_FROM_POLE_M + W / 2
+            if x + W / 2 < first - PLATE_W / 2:
+                sz = (x - kerb) / max(tip - kerb, 1e-6)
+                name_sign(m, np.r_[F + n * x, zr + ARM_Z + ARM_RISE * sz - 0.02] + nrm * 0.12, -nv, up, nrm, name)
         made += 1
     os.makedirs(out_dir, exist_ok=True)
     entries = []
@@ -234,7 +278,7 @@ def main():
             entries.append({"file": name + ".glb", "kind": kind, "collision_only": kind == "signcol", "origin": origin.tolist(),
                             "tris": int(len(TT)), "verts": int(len(PP)), "materials": names})
     with open(os.path.join(out_dir, "signals.json"), "w") as f:
-        json.dump({"frame": net["frame"], "heads": heads}, f, separators=(",", ":"))
+        json.dump({"frame": net["frame"], "heads": heads, "lamps": lamps}, f, separators=(",", ":"))
     if a.manifest:
         path = os.path.join(out_dir, "manifest.json")
         with open(path) as f:
