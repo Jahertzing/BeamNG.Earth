@@ -33,6 +33,8 @@ CELL = 2048.0
 MARGIN_M = 64.0                 # m of roads and curbs round the cell
 GRID_M = 2.0                    # the terrain's lattice
 CORE_JOIN_M = 45.0              # m: junction nodes this close are one junction's box
+MOUTH_WIDE_M = 14.0             # m past a road's edge a junction's cut runs on: over the flare of the curb returns
+MOUTH_LONG_M = 30.0             # m along the road the flare beyond the cut stays that road's
 CORE_BACK_M = 3.0               # m past the widest road's edge a junction's own surface runs up each road
 BULB_R_M = 24.0                 # m round a street's end the flood may look for its cul-de-sac
 BULB_CLOSED_SHARE = 0.9         # a region under this share of its disk is closed by its curb
@@ -98,8 +100,10 @@ def junction_disks(pieces):
 
 
 def junction_cores(pieces):
-    """[(ring (k, 2), material)]: the box of each junction of real roads, in the surface of the biggest road there: a hull of
-    the roads' edges a little back from the node, so a side road's surface stops at a straight line across its mouth."""
+    """([(ring (k, 2), material)], [the same for the flares]): the box of each junction of real roads, in the surface of the
+    biggest road there: a hull of the roads' edges a little back from the node, so a side road's surface stops at a straight
+    line across its mouth. The flares, pavement no ribbon covers, take that line on to the curb: the box's surface this side
+    of it and the road's own past it, drawn after the mouths. (Left to the nearest ribbon they met along a curve.)"""
     ends = {}
     for p in pieces:
         if p["kind"] != "ground" or len(p["st"]) < 2 or p["spec"]["cls"] in ("service", "track", "unknown"):
@@ -112,20 +116,34 @@ def junction_cores(pieces):
         near = [g for g in groups if any(float(np.hypot(*(q - c))) <= CORE_JOIN_M for c in g[0])]
         merged = ([q] + [c for g in near for c in g[0]], list(v) + [a for g in near for a in g[1]])
         groups = [g for g in groups if not any(g is h for h in near)] + [merged]
-    out = []
+    out, flares = [], []
     for _, arms in groups:
         top = max(arms, key=lambda v: (CLASS_ORDER.get(v[0]["spec"]["cls"], 0), float(v[0]["spec"]["width"] or 0)))[0]
         back = max(float(p["spec"]["width"] or 6.0) for p, _ in arms) / 2 + CORE_BACK_M
-        pts = []
+        pts, wide = [], []
         for p, at in arms:
             L, R, _ = edges_of(p)
             t = p["t"] if at == 0 else p["t"][-1] - p["t"]
             k = int(np.abs(t - min(back, float(t.max()))).argmin())
             pts += [L[k], R[k]]
+            across = L[k] - R[k]
+            span = float(np.hypot(*across))
+            if span < 0.1:
+                continue
+            across = across / span
+            along = np.array([-across[1], across[0]])
+            if float(along @ (p["st"][k] - p["xy"][at])) < 0:
+                along = -along
+            a, b = L[k] + across * MOUTH_WIDE_M, R[k] - across * MOUTH_WIDE_M
+            wide += [a, b]
+            flares.append((np.array([a, b, b + along * MOUTH_LONG_M, a + along * MOUTH_LONG_M]), material_of(p["spec"])))
         hull = shapely.MultiPoint(np.array(pts)).convex_hull
         if hull.geom_type == "Polygon":
             out.append((np.asarray(hull.exterior.coords), material_of(top["spec"])))
-    return out
+            box = shapely.MultiPoint(np.array(wide or pts)).convex_hull
+            if box.geom_type == "Polygon":
+                flares.append((np.asarray(box.exterior.coords), material_of(top["spec"])))
+    return out, flares
 
 
 def end_disks(pieces):
@@ -201,8 +219,13 @@ def outline_mask(pieces, lines, box, lots=()):
         if two.any():
             mid = p["st"][two] + p["nrm"][two] * p["ab"][two].mean(1)[:, None]
             seeds.append(mid)
-    for ring, material in junction_cores(pieces):
+    cores, flares = junction_cores(pieces)
+    for ring, material in cores:
         dl.polygon([tuple(v) for v in (ring - (x0, y0)) / PX], fill=material + 1)
+    flare = Image.new("L", shape[::-1], 0)
+    df = ImageDraw.Draw(flare)
+    for ring, material in flares:
+        df.polygon([tuple(v) for v in (ring - (x0, y0)) / PX], fill=material + 1)
     fit = draw_polys(shape, fitted, x0, y0) > 0
     spec = draw_polys(shape, spec_ribbons, x0, y0) > 0
     corridor = ndimage.binary_dilation(fit, iterations=int(CORRIDOR_M / PX))
@@ -256,6 +279,7 @@ def outline_mask(pieces, lines, box, lots=()):
     mask = ndimage.binary_closing(mask, iterations=2)
     # a label for every pixel of it: the nearest ribbon's
     lb = np.asarray(label)
+    lb = np.where(lb == 0, np.asarray(flare), lb)
     idx = ndimage.distance_transform_edt(lb == 0, return_distances=False, return_indices=True)
     return mask, lb[idx[0], idx[1]], float(flood.sum()) / max(float(mask.sum()), 1.0)
 
