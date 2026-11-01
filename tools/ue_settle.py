@@ -5,7 +5,8 @@ pavement is moved, with what hangs on it, to the nearest free ground, at that gr
 
     Earth.UE\\.venv\\Scripts\\python tools\\ue_settle.py --dir <export dir> [--out <dir>]
 
-Rewrites sign_<i>_<j>.glb and signcol_<i>_<j>.glb, the same meshes moved. Run after the pavement pass.
+Rewrites sign_<i>_<j>.glb and signcol_<i>_<j>.glb, the same meshes moved. Run after the pavement pass, once: it moves what it
+finds, so a rerun works from the builders' own (--src <export>-builder, tools/ue_chain.sh keeps them there).
 """
 import argparse
 import json
@@ -28,6 +29,8 @@ CLEAR_M = 0.5                   # m a post's foot stays off the pavement
 POST_MAX_M = 1.5                # m: a box wider than this is no post (a gantry's leg foot, a wall)
 PART_NEAR_M = 0.4               # m from a post to a part's box that hangs on it
 PART_MAX_M = 6.0                # m: a bigger part is no post's
+TOUCH_M = 0.08                  # m: parts this close hang together
+SIGN_MAX_M = 5.0                # m: what hangs on a post is no wider than this
 
 
 def read(path):
@@ -68,7 +71,32 @@ def boxes(P, lab):
     return out
 
 
+def hanging(B, seeds):
+    """The parts of a post's sign: seeds, and every small part touching one of them, in 3D, and so on. A blade's letters are parts
+    of their own, so those past the post's own box stayed behind when only the post's neighbours moved ("Ri" in a house wall)."""
+    small = (B[:, 2] - B[:, 0] < PART_MAX_M) & (B[:, 3] - B[:, 1] < PART_MAX_M)
+    done = set(int(k) for k in seeds)
+    todo = list(done)
+    box = np.array([B[todo, 0].min(), B[todo, 1].min(), B[todo, 2].max(), B[todo, 3].max()]) if todo else None
+    while todo:
+        a = B[todo.pop()]
+        hit = small & (B[:, 0] - TOUCH_M <= a[2]) & (B[:, 2] + TOUCH_M >= a[0]) & (B[:, 1] - TOUCH_M <= a[3]) & (B[:, 3] + TOUCH_M >= a[1]) & \
+            (B[:, 4] - TOUCH_M <= a[5]) & (B[:, 5] + TOUCH_M >= a[4])
+        for k in np.flatnonzero(hit):
+            k = int(k)
+            if k in done:
+                continue
+            grown = np.array([min(box[0], B[k, 0]), min(box[1], B[k, 1]), max(box[2], B[k, 2]), max(box[3], B[k, 3])])
+            if max(grown[2] - grown[0], grown[3] - grown[1]) > SIGN_MAX_M:
+                continue        # (the walk has reached the next sign, or a gantry)
+            box = grown
+            done.add(k)
+            todo.append(k)
+    return sorted(done)
+
+
 def settle_cell(w, export, out_dir, i, j):
+    """export: where the unsettled meshes are."""
     col_path = os.path.join(export, f"signcol_{i}_{j}.glb")
     sign_path = os.path.join(export, f"sign_{i}_{j}.glb")
     if not os.path.exists(col_path) or not os.path.exists(sign_path):
@@ -82,7 +110,9 @@ def settle_cell(w, export, out_dir, i, j):
     slab = parts_of(sP, sT)
     sbox = boxes(sP, slab)
     sB = np.array([b[1:5] for b in sbox])
+    sB3 = np.array([b[1:7] for b in sbox])
     moved, stuck = 0, 0
+    shifted = set()
     cP, sP = cP.copy(), sP.copy()
     for lab, x0, y0, x1, y1, z0, z1 in boxes(cP, clab):
         if max(x1 - x0, y1 - y0) > POST_MAX_M:
@@ -104,8 +134,11 @@ def settle_cell(w, export, out_dir, i, j):
         f = foot - org[:2]
         near = (sB[:, 0] - PART_NEAR_M <= f[0]) & (sB[:, 2] + PART_NEAR_M >= f[0]) & (sB[:, 1] - PART_NEAR_M <= f[1]) & (sB[:, 3] + PART_NEAR_M >= f[1]) & \
             (sB[:, 2] - sB[:, 0] < PART_MAX_M) & (sB[:, 3] - sB[:, 1] < PART_MAX_M)
-        for k in np.flatnonzero(near):
-            sP[slab == sbox[k][0]] += d
+        # (each part once: two posts of one sign, or posts that touch, move as the first one does, the second's box with them)
+        for k in hanging(sB3, np.flatnonzero(near)):
+            if k not in shifted:
+                shifted.add(k)
+                sP[slab == sbox[k][0]] += d
         moved += 1
     if moved:
         write(os.path.join(out_dir, f"sign_{i}_{j}.glb"), f"sign_{i}_{j}", sP, sUV, sC, sT, sM, sN)
@@ -117,6 +150,7 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--dir", default="C:/beamng-earth/Earth.UE/export/frederick-r3")
     ap.add_argument("--out", default=None)
+    ap.add_argument("--src", default=None, help="where the unsettled sign meshes are (the builders' own), if not --dir")
     ap.add_argument("--jobs", type=int, default=6)
     a = ap.parse_args()
     out_dir = a.out or a.dir
@@ -125,7 +159,7 @@ def main():
     w = ue_furniture.World(a.dir, cells, a.jobs)
     total = [0, 0]
     for i, j in cells:
-        m, s = settle_cell(w, a.dir, out_dir, i, j)
+        m, s = settle_cell(w, a.src or a.dir, out_dir, i, j)
         total[0] += m
         total[1] += s
     print(json.dumps({"posts_moved": total[0], "stuck": total[1]}))
