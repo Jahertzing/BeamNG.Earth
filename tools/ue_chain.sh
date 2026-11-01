@@ -36,6 +36,7 @@ rm -f "$E/$NAME"/walkcol_*.glb
 ln "$E/$NAME-pave"/road_*.glb "$E/$NAME-pave"/walks_*.glb "$E/$NAME/"
 stage "dashes cut, sidewalks only where the aerial has them"
 $PY tools/ue_dashes.py --dir "$OUT" | tail -1
+$PY tools/ue_paint.py --dir "$OUT" | tail -1
 $PY tools/ue_paint_lift.py --dir "$OUT" | tail -1
 $PY tools/ue_walks.py --dir "$OUT" | tail -1
 $PY tools/ue_manifest_sync.py --dir "$OUT"
