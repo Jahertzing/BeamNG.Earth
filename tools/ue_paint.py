@@ -663,17 +663,14 @@ def rewrite(export, out, cell, strips, tree, cut_tree, cut_r, heights, zebra_tre
         where = np.flatnonzero(pm)
         for g in (np.split(order, cuts) if len(order) else ()):
             q = c[g]
-            span = q.max(0) - q.min(0)
-            long_ = float(np.hypot(*span)) >= CROSS_LEN_M
-            mid = q.mean(0)
-            along = tree.query(mid)[0] <= ALONG_M
+            long_ = float(np.hypot(*(q.max(0) - q.min(0)))) >= CROSS_LEN_M
             dashed = names[int(M[where[g[0]]])].startswith("line_dashed")
-            if (long_ or dashed) and along:
+            if (long_ or dashed) and tree.query(q.mean(0))[0] <= ALONG_M:
                 drop[where[g]] = True
-            else:
-                d, k = cut_tree.query(mid)
-                if d < cut_r[k] and (float(np.hypot(*span)) >= 2.5):
-                    drop[where[g]] = True
+        # (triangle by triangle: a builder's long line of a street not repainted here crosses the core with its middle outside it)
+        if len(c):
+            d, k = cut_tree.query(c)
+            drop[where[d < cut_r[k]]] = True
     P2, UV2, C2, T2, M2 = [P], [UV], [C], [T[~drop]], [M[~drop]]
     n = len(P)
     tris = 0
