@@ -431,10 +431,11 @@ def stops(run, c, mouth):
         while hi + 1 < n and here[hi + 1]:
             hi += 1
         cut[lo:hi + 1] = True
-        if g["along"] and lo > 0:
-            ways.append({"i": lo - 1, "dir": 1, "control": g["along"]})
-        if g["against"] and hi + 1 < n:
-            ways.append({"i": hi + 1, "dir": -1, "control": g["against"]})
+        signal = any(s.control.get(q) == "signal" for s, q in jn["arms"])
+        if lo > 0 and (g["along"] or signal):
+            ways.append({"i": lo - 1, "dir": 1, "control": g["along"], "signal": signal})
+        if hi + 1 < n and (g["against"] or signal):
+            ways.append({"i": hi + 1, "dir": -1, "control": g["against"], "signal": signal})
     return cut, ways
 
 
@@ -513,7 +514,7 @@ def paint_chain(w, run, mouth, st, stat, opposite, zebras):
                     if (v - u) * STEP_M >= 20.0:
                         st.add("line_white", line(np.clip(off, low, high))[u:v], EDGE_W)
     for e in ways:
-        if live[e["i"]] and e["control"] in ("signal", "stop"):
+        if live[e["i"]]:
             way_in(st, c, p, e, stat, zebras)
     stat["km"] += float(c["s"][-1]) / 1000.0
     stat["chains"] += 1
@@ -546,7 +547,8 @@ def only(st, p, u):
 
 
 def way_in(st, c, p, e, stat, zebras):
-    """A way in to a junction: its stop bar, solid lane lines up to it; at a signal the crossing on the arm, the arrows of a pocket."""
+    """A way in to a junction: its stop bar, solid lane lines up to it; at a signal the crossing on the arm, the arrows of a pocket. (A
+    divided road's way out has a crossing too, nothing else.)"""
     i, d = e["i"], e["dir"]
     X, t, n = c["X"], c["t"], c["n"]
     o, lw = float(p["centre"][i]), float(p["lw"][i])
@@ -554,15 +556,16 @@ def way_in(st, c, p, e, stat, zebras):
     lo, hi = (o - F, o) if d > 0 else (o, o + B)
     count = int(round((hi - lo) / lw))
     u = t[i] * d
-    st.add("line_white", np.array([X[i] + n[i] * lo, X[i] + n[i] * hi]), BAR_W)
-    stat["stop_bars"] += 1
-    k = np.arange(1, int(SOLID_M / STEP_M))
-    js = i - d * k
-    js = js[(js >= 0) & (js < len(X))]
-    for q in range(1, count):
-        off = (p["centre"][js] - q * p["lw"][js]) if d > 0 else (p["centre"][js] + q * p["lw"][js])
-        st.add("line_white", X[js] + n[js] * off[:, None], LANE_W)
-    if e["control"] != "signal":
+    if e["control"] in ("signal", "stop"):
+        st.add("line_white", np.array([X[i] + n[i] * lo, X[i] + n[i] * hi]), BAR_W)
+        stat["stop_bars"] += 1
+        k = np.arange(1, int(SOLID_M / STEP_M))
+        js = i - d * k
+        js = js[(js >= 0) & (js < len(X))]
+        for q in range(1, count):
+            off = (p["centre"][js] - q * p["lw"][js]) if d > 0 else (p["centre"][js] + q * p["lw"][js])
+            st.add("line_white", X[js] + n[js] * off[:, None], LANE_W)
+    if not e.get("signal"):
         return
     mid = X[i] + u * (BAR_BACK_M + ZEBRA_LEN / 2)
     right, left = -float(p["R"][i]) + 0.4, float(p["L"][i]) - 0.4
