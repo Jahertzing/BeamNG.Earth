@@ -66,9 +66,13 @@ def through_pairs(links):
             yield a, best
 
 
-def lanes_check(links):
+def lanes_check(links, nodes):
+    """Only out on the road: across a junction a lane need not line up with itself on the far side."""
+    junction = {k for k, v in nodes.items() if v.get("junction") is not None}
     jumps, counts = [], []
     for a, b in through_pairs(links):
+        if a["to"] in junction:
+            continue
         if not a["lanes"] or not b["lanes"]:
             continue
         A, ua = lane_lines(a, True)
@@ -127,7 +131,7 @@ def main():
     a = ap.parse_args()
     with open(os.path.join(a.net, "roadnet.json")) as f:
         net = json.load(f)
-    jumps, counts = lanes_check(net["links"])
+    jumps, counts = lanes_check(net["links"], net["nodes"])
     sig, n_sig = signals_check(net)
     summary = {"lane_jumps": len(jumps), "lane_count_jumps": len(counts), "signal_junctions": n_sig, **{"signal_" + k: len(v) for k, v in sig.items()}}
     print(json.dumps(summary, indent=1))

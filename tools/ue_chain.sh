@@ -52,6 +52,9 @@ $PY tools/ue_signals.py --export "$OUT" --manifest | tail -1
 cp "$E/$NAME"/sign_*.glb "$E/$NAME"/signcol_*.glb "$E/$NAME-builder/"
 $PY tools/ue_settle.py --dir "$OUT" --src "$E/$NAME-builder" | tail -1 | cut -c1-200
 $PY tools/ue_furniture.py --dir "$OUT" --lamps "$W/_qa/lamps-$NAME.csv" --apply | tail -1 | cut -c1-200
+stage "traffic lanes and signal lenses, for EarthTraffic/Data with this export"
+mkdir -p "$E/$NAME/traffic"
+$PY /c/beamng-earth/Earth.UE/traffic/lanegraph.py $W/roadnet/roadnet.json "$OUT/traffic/lanes.bin" "$OUT/signals.json" | tail -2 | cut -c1-200
 $PY tools/ue_mask.py --dir "$OUT" | tail -1
 $PY tools/ue_road_qa.py --dir "$OUT" --out "$W/_qa/$NAME" | tail -14 | cut -c1-200 || true
 stage "done"
