@@ -17,6 +17,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import ue_export  # noqa: E402,F401
 
 import numpy as np  # noqa: E402
+from scipy.spatial import cKDTree  # noqa: E402
 
 import ue_road_eval  # noqa: E402
 
@@ -26,6 +27,8 @@ CONCRETE_LUMA = 168.0           # I-25's slab is 180; dark asphalt 90-120; a tow
 FADED_LUMA = 138.0
 GRAVEL_WARM = 45.0              # r - b past the photo's warm cast (pavement 2-35, dirt roads 24-55)
 GRAVEL_KINDS = ("gravel", "dirt")
+CONCRETE_CLASSES = ("motorway", "trunk", "primary")     # (20 of 20 "concrete" side streets on Street View are pale asphalt)
+APRON_M = 130.0                 # m from a concrete road a smaller road's pale read is still its junction's slab
 
 
 class Photos:
@@ -99,6 +102,16 @@ def main():
         seen[(cls, name)].append(float(np.hypot(*np.diff(p["xy"], axis=0).T).sum()) / 1000.0)
         seen[("luma", cls)].append(luma)
         seen[("warm", p["spec"]["kind"] + " " + cls)].append(warm)
+    # a smaller road's pale read counts only at the slab of a concrete road: colour alone cannot tell it from sun-bleached asphalt
+    big = [p["st"] for p in pieces if out.get((p.get("fid"), p.get("k"))) == "concrete" and p["spec"]["cls"] in CONCRETE_CLASSES]
+    tree = cKDTree(np.concatenate(big)) if big else None
+    for p in pieces:
+        key = (p.get("fid"), p.get("k"))
+        if out.get(key) != "concrete" or p["spec"]["cls"] in CONCRETE_CLASSES:
+            continue
+        if tree is None or tree.query(p["st"][len(p["st"]) // 2])[0] > APRON_M:
+            out[key] = "faded"
+            seen[(p["spec"]["cls"], "pale to faded")].append(float(np.hypot(*np.diff(p["xy"], axis=0).T).sum()) / 1000.0)
     table = {f"{k[0]} {k[1]}": round(sum(v), 1) for k, v in sorted(seen.items()) if k[0] not in ("luma", "warm")}
     print(json.dumps(table, indent=0))
     for k, v in sorted(seen.items()):

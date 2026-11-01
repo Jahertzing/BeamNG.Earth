@@ -47,6 +47,7 @@ $PY tools/ue_paint.py --dir "$OUT" | tail -1
 $PY tools/ue_paint_lift.py --dir "$OUT" | tail -1
 $PY tools/ue_walks.py --dir "$OUT" | tail -1
 $PY tools/ue_driveways.py --dir "$OUT" | tail -1
+$PY tools/ue_medians.py --dir "$OUT" | tail -1
 $PY tools/ue_manifest_sync.py --dir "$OUT"
 if [ "$FROM" = all ]; then
     stage "signals, sign posts, furniture"
