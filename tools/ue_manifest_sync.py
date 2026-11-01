@@ -28,6 +28,12 @@ def main():
     n = 0
     gone = [e["file"] for e in doc["meshes"] if not os.path.exists(os.path.join(a.dir, e["file"]))]
     doc["meshes"] = [e for e in doc["meshes"] if e["file"] not in gone]     # (walkcol: ue_pavement's walks collide themselves)
+    have = {e["file"] for e in doc["meshes"]}
+    for kind in KINDS:          # (ue_medians can make a cell's first walks)
+        for f in sorted(os.listdir(a.dir)):
+            if f.startswith(kind + "_") and f.endswith(".glb") and f not in have:
+                i, j = (int(v) for v in f[len(kind) + 1:-4].split("_"))
+                doc["meshes"].append({"file": f, "kind": kind, "collision_only": False, "origin": [i * 2048.0, j * 2048.0, 0.0]})
     for e in doc["meshes"]:
         if e["kind"] in KINDS:
             prims = ue_survey.read_glb(os.path.join(a.dir, e["file"]))
