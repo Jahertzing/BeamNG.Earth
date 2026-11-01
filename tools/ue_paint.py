@@ -661,7 +661,7 @@ def rewrite(export, out, cell, strips, tree, cut_tree, cut_r, heights, zebra_tre
         order = np.argsort(tl)
         cuts = np.flatnonzero(np.diff(tl[order])) + 1
         where = np.flatnonzero(pm)
-        for g in np.split(order, cuts):
+        for g in (np.split(order, cuts) if len(order) else ()):
             q = c[g]
             span = q.max(0) - q.min(0)
             long_ = float(np.hypot(*span)) >= CROSS_LEN_M
