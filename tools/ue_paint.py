@@ -9,8 +9,11 @@ through its nodes, and its paint comes from one lane plan along it:
     nothing is painted through a junction: paint stops at the mouth, where the stop bar is. A road going straight past a T with no
     control of its own keeps its lines past it.
 
-The builders' long lines along these roads go, in trunk to tertiary, and any lengthwise paint inside a junction; stop bars,
-crosswalks, arrows and gores stay. Motorways and ramps keep theirs. Run after ue_dashes, before ue_paint_lift.
+At a junction each way in gets what a signal or a stop asks of it: a stop bar across its lanes, solid lane lines up to it, and at a
+signal a zebra crossing on the arm and, where the pavement widens for it, a left turn pocket with its arrows and ONLY.
+
+The builders' long lines along these roads go, in trunk to tertiary, and any paint inside a junction; gores stay. Motorways
+and ramps keep theirs. Run after ue_dashes, before ue_paint_lift.
 
     python tools/ue_paint.py --dir <export dir> [--net <roadnet dir>] [--out <dir>] [--near x,y,r]
 """
@@ -55,6 +58,20 @@ EDGE_W = 0.15
 DASH = (3.05, 9.15)             # m paint, m gap (MUTCD 3B.04)
 EDGE_CLASSES = {"trunk", "primary", "secondary"}
 EDGE_MIN_SHOULDER_M = 0.5       # m of pavement outside the lanes before an edge line is drawn
+BAR_W = 0.45                    # m: the stop bar (MUTCD 3B.16: 12-24 in.)
+ZEBRA_W, ZEBRA_GAP, ZEBRA_LEN = 0.6, 0.6, 3.0       # m: a continental crossing's bars
+BAR_BACK_M = 1.2                # m from the crossing to the stop bar
+SIGNAL_BACK_M = 8.0             # m past the crossing road's edge a signal's stop bar stands, room for the crossing and the corners
+STOP_BACK_M = 3.5
+SOLID_M = 28.0                  # m of solid lane line before a stop bar
+POCKET_WIDER_M = 2.8            # m the pavement widens at a signal for a left turn lane
+POCKET_MAX_M = 170.0
+POCKET_MIN_M = 24.0
+POCKET_BASE_M = (150.0, 280.0)  # m before the stop bar the road's own width is read
+ARROW_W = 0.22
+ARROW_BACK_M = (6.0, 34.0)      # m before the bar a lane's arrows stand
+ONLY_BACK_M = 14.0
+ZEBRA_NEAR_M = 9.0              # m: a builder's crosswalk this near a new one goes
 ALONG_M = 15.0                  # m from our stations a builder's line is along a repainted road
 PARTNER_M = 22.0                # m: the other carriageway of a divided road is looked for this near
 CROSS_LEN_M = 6.0               # m: builders' paint parts longer than this along a road are its lines
@@ -108,6 +125,11 @@ def segments(links):
     return list(pairs.values())
 
 
+def wanted(s):
+    """Is this piece painted here: a through road, or any way in to a signal?"""
+    return s.cls in PAINTED or "signal" in s.control.values()
+
+
 def chains_of(segs):
     at = collections.defaultdict(list)
     for s in segs:
@@ -120,7 +142,7 @@ def chains_of(segs):
     def next_seg(cur, node, u):
         best, score = None, math.cos(math.radians(TURN_DEG))
         for o in at[node]:
-            if o is cur or o.used or o.oneway != cur.oneway or o.cls not in PAINTED:
+            if o is cur or o.used or o.oneway != cur.oneway or not wanted(o):
                 continue
             if o.oneway and o.a != node:
                 continue
@@ -129,7 +151,7 @@ def chains_of(segs):
                 best, score = o, c
         return best
     chains = []
-    for s0 in sorted((s for s in segs if s.cls in PAINTED), key=lambda s: min(len(at[s.a]), len(at[s.b]))):
+    for s0 in sorted((s for s in segs if wanted(s)), key=lambda s: min(len(at[s.a]), len(at[s.b]))):
         if s0.used:
             continue
         s0.used = True
@@ -154,16 +176,28 @@ def chains_of(segs):
 
 
 def mouths(net, at):
-    """node -> m its junction's paint stays back from it, and the stop reason: where a chain ends or has control."""
+    """node -> its junction: {"xy", "arms": the street pieces that meet there, "back": m a way in stops short of the crossing road's edge}.
+    A junction's nodes share one: a big junction is a dozen nodes, and each must not stop the paint on its own."""
     out = {}
     jx = {j["id"]: j for j in net["junctions"]}
+    made = {}
     for k, nd in net["nodes"].items():
-        arms = at.get(k, ())
         j = nd.get("junction")
-        if j in jx:
-            arms = [s for q in jx[j]["nodes"] for s in at.get(q, ())]
-        if len(arms) >= 3:
-            out[k] = min(max(s.width for s in arms) / 2.0 + MOUTH_M, MOUTH_MAX_M)
+        key = ("j", j) if j in jx else ("n", k)
+        if key not in made:
+            nodes = jx[j]["nodes"] if j in jx else [k]
+            ends = [(s, q) for q in nodes for s in at.get(q, ())]
+            inner = set(nodes)
+            arms = [(s, q) for s, q in ends if not (s.a in inner and s.b in inner)]
+            if len(arms) < 3:
+                made[key] = None
+                continue
+            xy = np.array(jx[j]["xy"], float) if j in jx else np.array((arms[0][0].xy[0] if arms[0][0].a == k else arms[0][0].xy[-1]), float)
+            signal = any(s.control.get(q) == "signal" for s, q in arms)
+            stop = any(s.control.get(q) == "stop" for s, q in arms)
+            made[key] = {"xy": xy, "arms": arms, "key": key, "back": SIGNAL_BACK_M if signal else STOP_BACK_M if stop else MOUTH_M}
+        if made[key] is not None:
+            out[k] = made[key]
     return out
 
 
@@ -274,7 +308,35 @@ def shared_left(w, c, opposite):
     return out
 
 
-def plan(w, c, oneway, opposite=None):
+def pockets(W, ways, f, b):
+    """A signal's left turn lanes the map has no count for: the pavement widens by a lane for the last stretch before the stop bar.
+    Adds the lane to f or b there; marks the way in."""
+    for e in ways:
+        if e["control"] != "signal":
+            continue
+        i, d = e["i"], e["dir"]
+        n = f if d > 0 else b
+        at = lambda m: int(i - d * m / STEP_M)
+        lo, hi = sorted((at(POCKET_BASE_M[0]), at(POCKET_BASE_M[1])))
+        lo, hi = max(lo, 0), min(hi, len(W) - 1)
+        e["pocket"] = False
+        if hi - lo < 10:
+            continue
+        base, lanes = float(np.median(W[lo:hi])), float(np.median(n[lo:hi]))
+        if n[i] > lanes:
+            e["pocket"] = True
+            continue
+        k = 0
+        while k * STEP_M < POCKET_MAX_M and 0 <= i - d * k < len(W) and W[i - d * k] - base >= POCKET_WIDER_M:
+            k += 1
+        if k * STEP_M >= POCKET_MIN_M:
+            js = i - d * np.arange(k + 6 if 0 <= i + d * 6 < len(W) else k)
+            js = js[(js >= 0) & (js < len(W))]
+            n[js] += 1
+            e["pocket"] = True
+
+
+def plan(w, c, oneway, opposite=None, ways=()):
     """The offsets along the road: centre, right edge of the lanes, left edge, lane width, counts, pavement edges."""
     left, right = edges(w, c)
     win = int(EDGE_WINDOW_M / STEP_M) | 1
@@ -311,6 +373,7 @@ def plan(w, c, oneway, opposite=None):
             else:
                 break
     f, b = steady(f, STEP_M), steady(b, STEP_M)
+    pockets(W, ways, f, b)
     total = np.maximum(f + b, 1.0)
     lw = np.clip((W - 0.6) / total, LANE_MIN_M, LANE_MAX_M)
     lw = ndimage.gaussian_filter1d(lw, EDGE_SIGMA_M / STEP_M, mode="nearest")
@@ -324,18 +387,56 @@ def plan(w, c, oneway, opposite=None):
     return {"centre": centre, "F": F, "B": B, "lw": lw, "f": f, "b": b, "L": L, "R": R}
 
 
+def reach(jn, u):
+    """m from a junction's middle a road running along u stops: past the widest road that crosses it."""
+    wide = 0.0
+    for seg, q in jn["arms"]:
+        p = seg.xy if seg.a == q else seg.xy[::-1]
+        if abs(float(leave(p) @ u)) < 0.7:
+            wide = max(wide, seg.width / 2.0)
+    if not wide:
+        wide = max(seg.width for seg, _ in jn["arms"]) / 2.0
+    return min(wide + jn["back"], MOUTH_MAX_M)
+
+
 def stops(run, c, mouth):
-    """Stations where paint is cut: at a junction this road is stopped at, or crosses."""
-    cut = np.zeros(len(c["s"]), bool)
+    """(stations where paint is cut, the ways in: {"i" the last station before the junction, "dir" +1 along the chain or -1, "control"}):
+    cut at a junction this road is stopped at or crosses."""
+    n = len(c["s"])
+    cut = np.zeros(n, bool)
+    ways = []
+    groups = {}
     for arc, node, before, after, _ in node_arcs(run):
-        r = mouth.get(node)
-        if r is None:
+        jn = mouth.get(node)
+        if jn is None:
             continue
-        controlled = any(s is not None and s.control.get(node) for s in (before, after))
-        if not controlled and before is not None and after is not None:
+        g = groups.setdefault(jn["key"], {"jn": jn, "along": None, "against": None, "start": before is None, "end": after is None})
+        if before is not None and before.control.get(node):
+            g["along"] = g["along"] or before.control.get(node)
+        if after is not None and after.control.get(node):
+            g["against"] = g["against"] or after.control.get(node)
+        g["end"] = after is None
+    for g in groups.values():
+        if not (g["along"] or g["against"] or g["start"] or g["end"]):
             continue            # (straight on past a side road)
-        cut |= np.abs(c["s"] - arc) < r
-    return cut
+        jn = g["jn"]
+        d = np.hypot(*(c["X"] - jn["xy"]).T)
+        near = int(np.argmin(d))
+        here = d < reach(jn, c["t"][near])
+        if not here[near]:
+            continue
+        lo, hi = near, near
+        while lo > 0 and here[lo - 1]:
+            lo -= 1
+        while hi + 1 < n and here[hi + 1]:
+            hi += 1
+        cut[lo:hi + 1] = True
+        signal = any(s.control.get(q) == "signal" for s, q in jn["arms"])
+        if lo > 0 and (g["along"] or signal):
+            ways.append({"i": lo - 1, "dir": 1, "control": g["along"], "signal": signal})
+        if hi + 1 < n and (g["against"] or signal):
+            ways.append({"i": hi + 1, "dir": -1, "control": g["against"], "signal": signal})
+    return cut, ways
 
 
 class Strips:
@@ -362,23 +463,21 @@ def runs_of(mask):
     return list(zip(cuts[::2], cuts[1::2]))
 
 
-def paint_chain(w, run, mouth, st, stat, opposite):
+def paint_chain(w, run, mouth, st, stat, opposite, zebras):
     c = corridor(run)
     if c is None:
         return False
     oneway = run[0][0].oneway
     if oneway and turn_of(c["X"][::5]) > 5.0 and c["s"][-1] < 400.0:
         return False            # (a roundabout's ring)
-    p = plan(w, c, oneway, opposite if oneway else None)
     X, n = c["X"], c["n"]
-    cut = stops(run, c, mouth)
+    cut, ways = stops(run, c, mouth)
+    p = plan(w, c, oneway, opposite if oneway else None, ways)
     live = ~cut
     cls = run[len(run) // 2][0].cls
     on = np.isfinite(w.at(X)[0])
     live &= on
 
-    def at(off):
-        return X + n * off[:, None]
     for a, b in runs_of(live):
         if (b - a) * STEP_M < MIN_CHAIN_M / 2:
             continue
@@ -414,9 +513,82 @@ def paint_chain(w, run, mouth, st, stat, opposite):
                 for u, v in runs_of(room >= EDGE_MIN_SHOULDER_M):
                     if (v - u) * STEP_M >= 20.0:
                         st.add("line_white", line(np.clip(off, low, high))[u:v], EDGE_W)
+    for e in ways:
+        if live[e["i"]]:
+            way_in(st, c, p, e, stat, zebras)
     stat["km"] += float(c["s"][-1]) / 1000.0
     stat["chains"] += 1
     return c
+
+
+def stroke(st, p, u, width, lines):
+    """Polylines given as (right, ahead) m from p, u the way of travel, painted."""
+    r = np.array([u[1], -u[0]])
+    for ln in lines:
+        q = np.array(ln, float)
+        st.add("line_white", p + r * q[:, :1] + u * q[:, 1:], width)
+
+
+def arrow(st, p, u, left):
+    lines = ([[(0.0, 0.0), (0.0, 2.1), (-1.0, 3.1)], [(-1.0, 2.25), (-1.0, 3.1), (-0.15, 3.1)]] if left else
+             [[(0.0, 0.0), (0.0, 3.4)], [(-0.5, 2.5), (0.0, 3.4), (0.5, 2.5)]])
+    stroke(st, p, u, ARROW_W, lines)
+
+
+def only(st, p, u):
+    """ONLY, stretched along the road as pavement words are (2.4 m tall, 0.5 m a letter), its foot at p."""
+    w, h, gap = 0.5, 2.4, 0.2
+    letters = ([[(0, 0), (1, 0), (1, 1), (0, 1), (0, 0)]], [[(0, 0), (0, 1), (1, 0), (1, 1)]], [[(0, 1), (0, 0), (1, 0)]],
+               [[(0, 1), (0.5, 0.55), (1, 1)], [(0.5, 0.55), (0.5, 0)]])
+    x = -(4 * w + 3 * gap) / 2
+    for lines in letters:
+        stroke(st, p, u, ARROW_W * 0.8, [[(x + a * w, b * h) for a, b in ln] for ln in lines])
+        x += w + gap
+
+
+def way_in(st, c, p, e, stat, zebras):
+    """A way in to a junction: its stop bar, solid lane lines up to it; at a signal the crossing on the arm, the arrows of a pocket. (A
+    divided road's way out has a crossing too, nothing else.)"""
+    i, d = e["i"], e["dir"]
+    X, t, n = c["X"], c["t"], c["n"]
+    o, lw = float(p["centre"][i]), float(p["lw"][i])
+    F, B = float(p["F"][i]), float(p["B"][i])
+    lo, hi = (o - F, o) if d > 0 else (o, o + B)
+    count = int(round((hi - lo) / lw))
+    u = t[i] * d
+    if e["control"] in ("signal", "stop"):
+        st.add("line_white", np.array([X[i] + n[i] * lo, X[i] + n[i] * hi]), BAR_W)
+        stat["stop_bars"] += 1
+        k = np.arange(1, int(SOLID_M / STEP_M))
+        js = i - d * k
+        js = js[(js >= 0) & (js < len(X))]
+        for q in range(1, count):
+            off = (p["centre"][js] - q * p["lw"][js]) if d > 0 else (p["centre"][js] + q * p["lw"][js])
+            st.add("line_white", X[js] + n[js] * off[:, None], LANE_W)
+    if not e.get("signal"):
+        return
+    mid = X[i] + u * (BAR_BACK_M + ZEBRA_LEN / 2)
+    right, left = -float(p["R"][i]) + 0.4, float(p["L"][i]) - 0.4
+    y = right
+    while y < left:
+        q = mid + n[i] * y
+        st.add("crossing_white", np.array([q - u * ZEBRA_LEN / 2, q + u * ZEBRA_LEN / 2]), ZEBRA_W)
+        y += ZEBRA_W + ZEBRA_GAP
+    zebras.append(mid)
+    stat["crossings"] += 1
+    if not e.get("pocket"):
+        return
+    stat["pockets"] += 1
+    for lane in range(count):
+        # (from the middle out: the first is the left turn lane)
+        off = (hi - (lane + 0.5) * lw) if d > 0 else (lo + (lane + 0.5) * lw)
+        for back in ARROW_BACK_M:
+            j = i - d * int(back / STEP_M)
+            if 0 <= j < len(X):
+                arrow(st, X[j] + n[j] * off, t[j] * d, lane == 0)
+        j = i - d * int(ONLY_BACK_M / STEP_M)
+        if lane == 0 and 0 <= j < len(X):
+            only(st, X[j] + n[j] * off, t[j] * d)
 
 
 def dash(st, line, s):
@@ -433,7 +605,7 @@ def dash(st, line, s):
         st.add("line_white", np.c_[np.interp(t, s, line[:, 0]), np.interp(t, s, line[:, 1])], LANE_W)
 
 
-def rewrite(export, out, cell, strips, tree, cut_tree, cut_r, heights):
+def rewrite(export, out, cell, strips, tree, cut_tree, cut_r, heights, zebra_tree):
     """The cell's road mesh: builders' lengthwise paint along the painted roads and in the junctions out, ours in."""
     i, j = cell
     path = os.path.join(export, f"road_{i}_{j}.glb")
@@ -444,6 +616,11 @@ def rewrite(export, out, cell, strips, tree, cut_tree, cut_r, heights):
     names = list(names)
     paint = [k for k, n in enumerate(names) if n.startswith("line_")]
     drop = np.zeros(len(T), bool)
+    crossing = [k for k, n in enumerate(names) if n.startswith("crossing")]
+    if crossing and zebra_tree is not None:
+        pm = np.flatnonzero(np.isin(M, crossing))
+        c = P[T[pm]].mean(1)[:, :2] + org
+        drop[pm[zebra_tree.query(c)[0] <= ZEBRA_NEAR_M]] = True
     if paint:
         pm = np.isin(M, paint)
         lab = ue_settle.parts_of(P, T[pm])
@@ -468,7 +645,7 @@ def rewrite(export, out, cell, strips, tree, cut_tree, cut_r, heights):
     P2, UV2, C2, T2, M2 = [P], [UV], [C], [T[~drop]], [M[~drop]]
     n = len(P)
     tris = 0
-    for mat in ("line_white", "line_yellow"):
+    for mat in ("line_white", "line_yellow", "crossing_white"):
         got = strips.parts.get((i, j, mat))
         if not got:
             continue
@@ -513,29 +690,34 @@ def main():
     mouth = mouths(net, at)
     st = Strips()
     stat = collections.Counter()
-    stations = []
+    stations, zebras = [], []
     one = [(c["X"], c["t"]) for c in (corridor(r) for r in chains if r[0][0].oneway) if c is not None]
     opposite = (cKDTree(np.concatenate([v[0] for v in one])), np.concatenate([v[1] for v in one])) if one else None
     for run in chains:
         if near and min(float(np.hypot(*(s.xy - near[:2]).T).min()) for s, _ in run) > near[2]:
             continue
-        c = paint_chain(w, run, mouth, st, stat, opposite)
+        c = paint_chain(w, run, mouth, st, stat, opposite, zebras)
         if c:
             stations.append(c["X"])
     stops_xy, stops_r = [], []
-    for k, r in mouth.items():
-        if len({id(s) for s in at.get(k, ())}) >= 4 or any(s.control.get(k) == "signal" for s in at.get(k, ())):
-            xy = next((s.xy[0] if s.a == k else s.xy[-1]) for s in at[k])
-            stops_xy.append(xy)
-            stops_r.append(r)
+    seen = set()
+    for jn in mouth.values():
+        if jn["key"] in seen:
+            continue
+        seen.add(jn["key"])
+        if len(jn["arms"]) >= 4 or any(s.control.get(q) == "signal" for s, q in jn["arms"]):
+            stops_xy.append(jn["xy"])
+            stops_r.append(min(max(s.width for s, _ in jn["arms"]) / 2.0 + jn["back"] - 2.0, MOUTH_MAX_M))
     tree = cKDTree(np.concatenate(stations))
     cut_tree, cut_r = cKDTree(np.array(stops_xy)), np.array(stops_r)
     done = [0, 0]
+    zebra_tree = cKDTree(np.array(zebras)) if zebras else None
     for c in cells:
-        got = rewrite(a.dir, out, c, st, tree, cut_tree, cut_r, w.h.ground)
+        got = rewrite(a.dir, out, c, st, tree, cut_tree, cut_r, w.h.ground, zebra_tree)
         done[0] += got[0]
         done[1] += got[1]
-    print(json.dumps({"km": round(stat["km"]), "chains": stat["chains"], "tris": done[0], "builder_tris_dropped": done[1]}))
+    print(json.dumps({"km": round(stat["km"]), "chains": stat["chains"], "stop_bars": stat["stop_bars"], "crossings": stat["crossings"], "pockets": stat["pockets"],
+                      "tris": done[0], "builder_tris_dropped": done[1]}))
 
 
 if __name__ == "__main__":

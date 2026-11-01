@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Lane lines broken for real: the builders' dashed lines are solid strips whose texture has the gaps (BeamNG's decals), and
-Unreal paints a strip by its material alone, so every lane line in the world came out solid. Each strip is cut to its dashes
-by its own texture coordinate. Run after the pavement pass.
+Unreal paints a strip by its material alone, so every lane line in the world came out solid and every crosswalk a white slab.
+Each strip is cut to its dashes or bars by its own texture coordinate. Run after the pavement pass.
 
     python tools/ue_dashes.py --dir <export dir> [--out <dir>]
 """
@@ -20,7 +20,8 @@ import numpy as np  # noqa: E402
 
 import ue_settle  # noqa: E402
 
-DASH = {"line_dashed_long": 0.25, "line_dashed_short_yellow": 0.5}      # the share of a texture repeat that is paint
+# (paint in a repeat of the texture, repeats a texture v): a crosswalk's slab is cut to continental bars, 0.6 m on, 0.6 m off
+DASH = {"line_dashed_long": (0.25, 1), "line_dashed_short_yellow": (0.5, 1), "crossing_white": (0.5, 4)}
 
 
 def clip(poly, lo, hi):
@@ -50,11 +51,11 @@ def cell(job):
     nP, nUV, nC, nT, nM = [], [], [], [], []
     base = len(P)
     for m in cut:
-        share = DASH[names[m]]
+        share, per = DASH[names[m]]
         for t in T[M == m]:
             vs = UV[t, 1]
-            for k in range(math.floor(vs.min()), math.floor(vs.max()) + 1):
-                poly = clip([(P[i], UV[i], C[i]) for i in t], k, k + share)
+            for k in range(math.floor(vs.min() * per), math.floor(vs.max() * per) + 1):
+                poly = clip([(P[i], UV[i], C[i]) for i in t], k / per, (k + share) / per)
                 if len(poly) < 3:
                     continue
                 first = base + len(nP)

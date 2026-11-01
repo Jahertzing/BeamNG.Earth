@@ -777,6 +777,12 @@ def main():
     chains, at = chains_of(links)
     places = Places()
     moved, dropped = mapped_lamps(w, infra["street_lamp"], places, motor)
+    signal_lamps = []
+    path = os.path.join(a.dir, "signals.json")
+    if os.path.exists(path):
+        with open(path) as f:
+            signal_lamps = json.load(f).get("lamps", [])
+    places.lamp_xy += [(v[0], v[1]) for v in signal_lamps]      # (a signal's corner is lit from its own pole)
     lines = mapped_lines(w, infra["power_pole"])
     runs = [ln for ln in lines if len(ln) > 1]
     loners = [run_rows(ln)[0] for ln in lines if len(ln) == 1]
@@ -785,6 +791,7 @@ def main():
     stats.update(place_junctions(w, links, at, urban_tree, urban_of, places))
     stats["lamp_ramp"] = place_ramps(w, chains, places)
     rows, wired = rows_csv(w, places, runs, loners)
+    rows += [(HEAD, v[0], v[1], v[2], v[3], 1.0) for v in signal_lamps]
     os.makedirs(os.path.dirname(a.lamps), exist_ok=True)
     with open(a.lamps, "w") as f:
         for r in rows:
