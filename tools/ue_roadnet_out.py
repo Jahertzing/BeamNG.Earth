@@ -470,9 +470,12 @@ def main():
             continue
         top = max((RANK.get(links[lk]["class"], 1) for lk in into), default=0)
         n_top = sum(1 for lk in into if RANK.get(links[lk]["class"], 1) == top)
+        lower = any(RANK.get(links[lk]["class"], 1) < top or links[lk]["ramp"] for lk in into)
         for lk in into:
             end = np.array(links[lk]["points"][-1][:2])
-            if stop_tree is not None:
+            # (a sign near a junction is for the side road or the slip lane: the through road does not yield to its own ramp)
+            main = RANK.get(links[lk]["class"], 1) == top and not links[lk]["ramp"] and n_top >= 2 and lower
+            if stop_tree is not None and not main:
                 d, at = stop_tree.query(end)
                 if d <= SIGN_NODE_M:
                     links[lk]["control"] = "stop" if at < n_stop else "give_way"
