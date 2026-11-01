@@ -47,6 +47,7 @@ CLUSTER_SKIP = {"service", "track", "unknown"}
 THROUGH_DEG = 30.0              # a turn under this is the road going on
 LANE_PLAN_CLASSES = {"motorway", "trunk", "primary", "secondary", "tertiary"}
 LANE_WINDOW_M = 300.0           # m each way along the road its through lane count is taken over
+MOTORWAY_WINDOW_M = 2500.0      # m the same on a motorway: its links are long, and it has no turn lanes to keep
 TURN_REACH_M = 350.0            # m: a stretch this short before a junction may have more lanes than the road: its turn lanes
 MAX_TURN_LANES = 2
 SHORT_STRETCH_M = 150.0         # m: a shorter stretch with fewer lanes than the road is a gap in the map's tags
@@ -196,14 +197,16 @@ def lane_plan(links, nodes):
         length = np.array([link_length(lk) for lk in rows])
         mid = np.cumsum(length) - length / 2
         for k, (lk, count, m) in enumerate(zip(rows, n, length)):
-            near = np.abs(mid - mid[k]) <= LANE_WINDOW_M        # (what the road is here: a road changes along its length)
+            motorway = lk["class"] == "motorway"
+            window = MOTORWAY_WINDOW_M if motorway else LANE_WINDOW_M
+            near = np.abs(mid - mid[k]) <= window               # (what the road is here: a road changes along its length)
             order = np.argsort(n[near])
             cum = np.cumsum(length[near][order])
             through = int(n[near][order][int(np.searchsorted(cum, cum[-1] / 2))])
             node = nodes.get(lk["to"], {})
             at_junction = node.get("junction") is not None
             want = count
-            if count > through and not (at_junction and m <= TURN_REACH_M):
+            if count > through and (motorway or not (at_junction and m <= TURN_REACH_M)):
                 want = through
             elif count > through + MAX_TURN_LANES:
                 want = through + MAX_TURN_LANES
@@ -215,6 +218,8 @@ def lane_plan(links, nodes):
             lw = float(np.clip(float(lk["lane_width"] or 3.6), 3.0, 3.9))
             kerb = lk["lanes"][0]
             step = 1.0 if len(offs) < 2 or lk["lanes"][-1] >= lk["lanes"][0] else -1.0
+            if motorway:                # (a count the map got wrong, not a lane that ends: the lanes stay centred)
+                kerb = -step * (want - 1) / 2 * lw
             lk["lanes"] = [round(kerb + step * q * lw, 2) for q in range(int(want))]
             lk["lane_width"] = round(lw, 2)
             lk["turns"] = None
