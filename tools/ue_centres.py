@@ -38,6 +38,7 @@ HALF_COST = 2.0                 # a pavement with one surveyed side, its width t
 MIN_W, MAX_W = 2.5, 42.0        # m a pavement between two lines
 FILL_M = 72.0                   # m a gap (a junction's mouth, under a deck) is bridged from its two sides
 REACH_M = 34.0
+RAMP_MAX_SHARE = 1.7            # a ramp's pavement is at most this many times its spec's width
 SIBLING_M = 42.0                # m: a divided road's other carriageway looked for this far
 PAINTED_MEDIAN_M = 5.0          # m: a gap this narrow between carriageways with no curb in it is paved
 NO_SIBLING = {"service", "track", "unknown", "raceway"}
@@ -248,10 +249,13 @@ def main():
         n = len(q)
         if n:
             here = cands[off:off + n]
+            w0 = float(p["spec"]["width"] or 8.0)
             for i in range(n):
                 ts = sib.get((k, i))
                 if ts is not None:
-                    here[i] = split_median(here[i], ts, float(p["spec"]["width"] or 8.0))
+                    here[i] = split_median(here[i], ts, w0)
+                if p["spec"]["link"]:   # (a ramp beside the road it joins: the road's pavement is not the ramp's)
+                    here[i] = [c for c in here[i] if c[1] - c[0] <= RAMP_MAX_SHARE * w0]
             ab, two = fit_piece(here, p["spec"])
             p["two"] = two
             p["ab"] = smooth_fill(ab, p["t"])

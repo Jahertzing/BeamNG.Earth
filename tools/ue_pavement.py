@@ -31,6 +31,7 @@ PX = 0.25
 CELL = 2048.0
 MARGIN_M = 64.0                 # m of roads and curbs round the cell
 GRID_M = 2.0                    # the terrain's lattice
+SURFACE_HOPS = 6                # pieces each way a road's surface is voted over
 SURFACE_OVERLAP_PX = 2          # px two surfaces overlap where they meet
 SURFACE_STEP_M = 0.002          # m each surface lies over the one before
 LIFT_M = 0.03                   # m over the terrain
@@ -459,6 +460,39 @@ def build_cell(pieces, lines, i, j, in_dir, out_dir, lots=(), road_dir=None):
             "from_curbs": round(surveyed, 3), "polys": polys, "s": round(time.perf_counter() - t0, 1)}
 
 
+def steady_surfaces(pieces):
+    """A road does not go from asphalt to faded asphalt and back every block: each piece takes what most of the same road round
+    it reads as, by length, over SURFACE_HOPS pieces each way. Concrete and gravel are read clearly enough to stand."""
+    ends = {}
+    for k, p in enumerate(pieces):
+        if p["kind"] == "ground" and len(p["xy"]) >= 2:
+            for q in (p["xy"][0], p["xy"][-1]):
+                ends.setdefault((round(q[0]), round(q[1])), []).append(k)
+    near = {}
+    for got in ends.values():
+        for a in got:
+            for b in got:
+                if a != b and pieces[a]["name"] == pieces[b]["name"] and pieces[a]["spec"]["cls"] == pieces[b]["spec"]["cls"]:
+                    near.setdefault(a, set()).add(b)
+    length = {k: float(np.hypot(*np.diff(p["xy"], axis=0).T).sum()) for k, p in enumerate(pieces) if len(p["xy"]) >= 2}
+    new = {}
+    for k, p in enumerate(pieces):
+        if p["spec"].get("read") not in ("asphalt", "faded"):
+            continue
+        seen, edge = {k}, {k}
+        for _ in range(SURFACE_HOPS):
+            edge = {b for a in edge for b in near.get(a, ())} - seen
+            seen |= edge
+        votes = {}
+        for b in seen:
+            r = pieces[b]["spec"].get("read")
+            if r in ("asphalt", "faded"):
+                votes[r] = votes.get(r, 0.0) + length.get(b, 0.0)
+        new[k] = max(votes, key=votes.get)
+    for k, r in new.items():
+        pieces[k]["spec"]["read"] = r
+
+
 _w = {}
 
 
@@ -476,6 +510,7 @@ def init_worker(net_dir):
             read = pickle.load(f)
         for p in _w["pieces"]:
             p["spec"]["read"] = read.get((p["fid"], p["k"]))
+        steady_surfaces(_w["pieces"])
     with open(os.path.join(net_dir, "survey.pkl"), "rb") as f:
         _w["lines"] = pickle.load(f)
     with open(os.path.join(net_dir, "net.pkl"), "rb") as f:
