@@ -15,7 +15,9 @@ signal a zebra crossing on the arm and, where the pavement widens for it, a left
 The builders' long lines along these roads go, in trunk to tertiary, and any paint inside a junction; gores stay. Motorways
 and ramps keep theirs. Run after ue_dashes, before ue_paint_lift.
 
-    python tools/ue_paint.py --dir <export dir> [--net <roadnet dir>] [--out <dir>] [--near x,y,r]
+The lanes go back into roadnet.json, link by link, so the cars drive between the lines: run it before anything else reads them.
+
+    python tools/ue_paint.py --dir <export dir> [--net <roadnet dir>] [--out <dir>] [--net-out <file>] [--near x,y,r]
 """
 import argparse
 import collections
@@ -469,7 +471,25 @@ def runs_of(mask):
     return list(zip(cuts[::2], cuts[1::2]))
 
 
-def paint_chain(w, run, mouth, st, stat, opposite, zebras):
+def lanes_back(run, c, p, live, offsets):
+    """offsets[(from, to)] = (lanes, lane width): each link's lanes as painted, left of its own line, kerb first."""
+    for k, (seg, flip) in enumerate(run):
+        at = np.flatnonzero((c["seg"] == k) & live)
+        if len(at) < 4:
+            continue
+        o, lw = float(np.median(p["centre"][at])), float(np.median(p["lw"][at]))
+        n_f = int(round(float(np.median(p["F"][at])) / lw))
+        n_b = int(round(float(np.median(p["B"][at])) / lw))
+        along = sorted(o - (q + 0.5) * lw for q in range(n_f))
+        against = sorted(-(o + (q + 0.5) * lw) for q in range(n_b))
+        a, b = (seg.b, seg.a) if flip else (seg.a, seg.b)
+        if along:
+            offsets[(a, b)] = (along, lw)
+        if against:
+            offsets[(b, a)] = (against, lw)
+
+
+def paint_chain(w, run, mouth, st, stat, opposite, zebras, offsets):
     c = corridor(run)
     if c is None:
         return False
@@ -522,6 +542,7 @@ def paint_chain(w, run, mouth, st, stat, opposite, zebras):
     for e in ways:
         if live[e["i"]]:
             way_in(st, c, p, e, stat, zebras)
+    lanes_back(run, c, p, live, offsets)
     stat["km"] += float(c["s"][-1]) / 1000.0
     stat["chains"] += 1
     return c
@@ -679,6 +700,7 @@ def main():
     ap.add_argument("--dir", required=True)
     ap.add_argument("--net", default="C:/beamng-earth/Earth.UE/export/roadnet")
     ap.add_argument("--out", default=None)
+    ap.add_argument("--net-out", default=None, help="where roadnet.json with the painted lanes goes (--net's own by default)")
     ap.add_argument("--near", default=None, help="x,y,r: only chains near here, for a look")
     ap.add_argument("--jobs", type=int, default=6)
     a = ap.parse_args()
@@ -697,12 +719,13 @@ def main():
     st = Strips()
     stat = collections.Counter()
     stations, zebras = [], []
+    offsets = {}
     one = [(c["X"], c["t"]) for c in (corridor(r) for r in chains if r[0][0].oneway) if c is not None]
     opposite = (cKDTree(np.concatenate([v[0] for v in one])), np.concatenate([v[1] for v in one])) if one else None
     for run in chains:
         if near and min(float(np.hypot(*(s.xy - near[:2]).T).min()) for s, _ in run) > near[2]:
             continue
-        c = paint_chain(w, run, mouth, st, stat, opposite, zebras)
+        c = paint_chain(w, run, mouth, st, stat, opposite, zebras, offsets)
         if c:
             stations.append(c["X"])
     stops_xy, stops_r = [], []
@@ -716,13 +739,26 @@ def main():
             stops_r.append(min(max(s.width for s, _ in jn["arms"]) / 2.0 + jn["back"] - 2.0, MOUTH_MAX_M))
     tree = cKDTree(np.concatenate(stations))
     cut_tree, cut_r = cKDTree(np.array(stops_xy)), np.array(stops_r)
+    changed = 0
+    for lk in net["links"]:
+        got = offsets.get((lk["from"], lk["to"]))
+        if got is not None and lk["level"] == 0 and not lk["ramp"]:
+            lk["lanes"] = [round(v, 2) for v in got[0]]
+            lk["lane_width"] = round(got[1], 2)
+            if lk.get("turns") and len(lk["turns"]) != len(lk["lanes"]):
+                lk["turns"] = [[] for _ in lk["lanes"]]
+            changed += 1
+    path = a.net_out or (None if near else os.path.join(a.net, "roadnet.json"))
+    if path:
+        with open(path, "w") as f:
+            json.dump(net, f, separators=(",", ":"))
     done = [0, 0]
     zebra_tree = cKDTree(np.array(zebras)) if zebras else None
     for c in cells:
         got = rewrite(a.dir, out, c, st, tree, cut_tree, cut_r, w.h.ground, zebra_tree)
         done[0] += got[0]
         done[1] += got[1]
-    print(json.dumps({"km": round(stat["km"]), "chains": stat["chains"], "stop_bars": stat["stop_bars"], "crossings": stat["crossings"], "pockets": stat["pockets"],
+    print(json.dumps({"km": round(stat["km"]), "chains": stat["chains"], "stop_bars": stat["stop_bars"], "crossings": stat["crossings"], "pockets": stat["pockets"], "links": changed,
                       "tris": done[0], "builder_tris_dropped": done[1]}))
 
 
