@@ -64,15 +64,8 @@ def material_of(spec):
 def edges_of(p):
     """(left edge (n, 2), right edge (n, 2), measured (n,)) of piece p along its stations: the fit where it has one, else
     the spec's width about its line, eased over the change."""
-    w = float(p["spec"]["width"] or 6.0)
-    ab = p["ab"]
-    measured = np.isfinite(ab[:, 0])
-    a = np.where(measured, ab[:, 0], -w / 2)
-    b = np.where(measured, ab[:, 1], w / 2)
-    if len(a) > 4:
-        a = ndimage.gaussian_filter1d(a, 1.5, mode="nearest")
-        b = ndimage.gaussian_filter1d(b, 1.5, mode="nearest")
-    return p["st"] + p["nrm"] * b[:, None], p["st"] + p["nrm"] * a[:, None], measured
+    measured = np.isfinite(p["ab"][:, 0])
+    return p["st"] + p["nrm"] * p["edge_b"][:, None], p["st"] + p["nrm"] * p["edge_a"][:, None], measured
 
 
 def junction_disks(pieces):

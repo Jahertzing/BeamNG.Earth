@@ -18,6 +18,8 @@ WIDTH_MIN_STATIONS = 8          # stations of two surveyed lines for a measured 
 WIDTH_CLASSES_OUT = {"track", "raceway"}
 CROSSWALK_NEAR_M = 15.0         # m from a mapped crossing a painted one stays
 SIGNAL_NEAR_M = 45.0            # m from a mapped signal
+TAPER_M = (30.0, 150.0)         # m a width change at a joint is eased over, at least and at most ...
+TAPER_PER_M = 12.0              # ... per m of it
 M_LAT = 111132.0
 LANE_MIN_M, LANE_MAX_M = 3.0, 3.9     # m a carriageway's lanes stay within, the rest shoulder
 
@@ -79,6 +81,54 @@ def corrections(pieces, infra=None):
     for fid, vs in w_vals.items():
         widths[fid] = float(np.median(np.concatenate(vs)))
     return {"moves": out, "widths": widths, "infra": infra or {}}
+
+
+def edge_profiles(pieces):
+    """Each ground piece's pavement edges along its stations, p["edge_a"] and p["edge_b"] (m along its normal, as ab), whole:
+    measured where the survey has them, the spec's width about the moved line elsewhere, and where one road goes on from one
+    piece to the next (a joint, no side road) the two meet and each eases to the meeting width over TAPER: a road does not jump
+    from 26 m to 4 at a joint, and a feature's one median width said nothing about either end."""
+    joints = {}
+    for p in pieces:
+        if p["kind"] != "ground" or len(p["st"]) < 2:
+            continue
+        w = float(p["spec"]["width"] or 6.0)
+        ab = p["ab"]
+        ok = np.isfinite(ab[:, 0])
+        moved = _piece_moves(p)
+        m = (moved * p["nrm"]).sum(1) if moved is not None else np.zeros(len(ab))
+        a = np.where(ok, ab[:, 0], m - w / 2)
+        b = np.where(ok, ab[:, 1], m + w / 2)
+        if len(a) > 4:
+            a = ndimage.gaussian_filter1d(a, 1.5, mode="nearest")
+            b = ndimage.gaussian_filter1d(b, 1.5, mode="nearest")
+        p["edge_a"], p["edge_b"], p["edge_m"] = a, b, m
+        for end, q in ((0, p["xy"][0]), (-1, p["xy"][-1])):
+            joints.setdefault((round(q[0]), round(q[1])), []).append((p, end))
+    for arms in joints.values():
+        real = [(p, e) for p, e in arms if p["spec"]["cls"] not in ("service", "track")]
+        if len(real) != 2 or real[0][0]["fid"] == real[1][0]["fid"] or real[0][0]["spec"]["kind"] != real[1][0]["spec"]["kind"]:
+            continue
+        (p, ep), (q, eq) = real
+        # looking out of the joint along each piece: one's left is the other's right
+        ul, ur = (p["edge_b"][ep] - p["edge_m"][ep], p["edge_m"][ep] - p["edge_a"][ep])
+        vl, vr = (q["edge_b"][eq] - q["edge_m"][eq], q["edge_m"][eq] - q["edge_a"][eq])
+        if ep != 0:
+            ul, ur = ur, ul
+        if eq != 0:
+            vl, vr = vr, vl
+        for r, e, here, there in ((p, ep, (ul, ur), (vr, vl)), (q, eq, (vl, vr), (ur, ul))):
+            dl, dr = (there[0] - here[0]) / 2, (there[1] - here[1]) / 2
+            if max(abs(dl), abs(dr)) < 0.05:
+                continue
+            t = r["t"]
+            d = t if e == 0 else t[-1] - t
+            T = np.clip(TAPER_PER_M * 2 * max(abs(dl), abs(dr)), *TAPER_M)
+            w = np.clip(1.0 - d / T, 0.0, 1.0)[:, None]
+            dd = np.array([dl, dr]) if e == 0 else np.array([dr, dl])   # (back to the piece's own left, right)
+            r["edge_b"] = r["edge_b"] + (w * dd[0]).ravel()
+            r["edge_a"] = r["edge_a"] - (w * dd[1]).ravel()
+    return pieces
 
 
 def save(pieces, path, infra=None):

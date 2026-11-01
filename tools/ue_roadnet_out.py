@@ -5,7 +5,8 @@ z up, origin 40.0992, -104.9372).
     Earth.UE\\.venv\\Scripts\\python tools\\ue_roadnet_out.py --net <roadnet dir> --export <export dir>
 
 {"frame", "links": [{id, from, to, points [[x, y, z], ...], class, ramp, level (0 ground, 1+ deck, -1 tunnel), name, oneway,
-speed (m/s), width (m), lanes: [offsets m left of the points, kerb lane first], lane_width, turns: [per lane, kerb first] or
+speed (m/s), width (m, this link's median), edges: [[left, right], ...] per point (the pavement's edges in m left of the points,
+right negative; a two-way road's reverse link sees the same road from the other side), lanes: [offsets m left of the points, kerb lane first], lane_width, turns: [per lane, kerb first] or
 null, control ("signal", "stop", "give_way", null) at its end, control_source ("mapped", "rule", null), surface}], "nodes":
 {id: {xy, junction, arms}}, "junctions": [{id, nodes, control, xy}]}
 
@@ -38,9 +39,13 @@ SPEED_DEFAULT = {"motorway": 33.5, "trunk": 29.0, "primary": 24.5, "secondary": 
                  "residential": 11.0, "living_street": 7.0, "service": 7.0, "unknown": 11.0}
 RANK = {"motorway": 9, "trunk": 8, "primary": 7, "secondary": 6, "tertiary": 5, "unclassified": 4, "residential": 3,
         "living_street": 2, "service": 1, "unknown": 1}
-SIGNAL_NODE_M = 36.0            # m from a mapped signal a node is that signal's
+SIGNAL_NODE_M = 55.0            # m from a mapped signal a node is that signal's
 SIGN_NODE_M = 22.0              # m from a mapped stop sign the end of a link is its
-CLUSTER_M = 34.0                # m: nodes joined by a link this short are one junction
+CLUSTER_M = 34.0                # m: nodes joined by a link this short are one junction ...
+JUNCTION_MAX_M = 70.0           # ... while it stays this far across
+CLUSTER_SKIP = {"service", "track", "unknown"}
+SIGNAL_GROUP_M = 50.0           # m: mapped signals this close are one intersection's
+SIGNAL_JOIN_M = 100.0           # m: junctions a road this short ties are one signalled crossing (a wide median)
 
 
 class Heights:
@@ -127,6 +132,115 @@ def lanes_of(sp):
     return out
 
 
+def link_length(lk):
+    p = np.array(lk["points"])
+    return float(np.hypot(*np.diff(p[:, :2], axis=0).T).sum())
+
+
+def road_names(lk):
+    return lk["name"] + lk["class"]
+
+
+def junction_nodes(links, nodes):
+    """The nodes that are junctions: where two roads meet, or a road and a driveway; a joint in one road is not one."""
+    out = {}
+    for k, v in nodes.items():
+        arms = {lk for _, lk in v["ends"]}
+        out[k] = len({road_names(links[a]) for a in arms}) >= 2 or len(arms) >= 5
+    return out
+
+
+def junction_groups(links, nodes, xy_all):
+    """{key: [node ids]} of the intersections. Nodes are joined along a short link of a real road, shortest first, and only
+    while the group stays JUNCTION_MAX_M across: joined along every short link, a street and all its driveways ran together
+    (Erie Parkway's 43 arms)."""
+    is_j = junction_nodes(links, nodes)
+    root = {k: k for k in nodes}
+
+    def find(k):
+        while root[k] != k:
+            root[k] = root[root[k]]
+            k = root[k]
+        return k
+    members = {k: [k] for k in nodes}
+    short = []
+    for lk in links:
+        if lk["level"] == 0 and lk["class"] not in CLUSTER_SKIP and is_j[lk["from"]] and is_j[lk["to"]]:
+            n = link_length(lk)
+            if n <= CLUSTER_M:
+                short.append((n, lk["from"], lk["to"]))
+    for _, a, b in sorted(short):
+        ra, rb = find(a), find(b)
+        if ra == rb:
+            continue
+        pa = np.array([xy_all[k] for k in members[ra]])
+        pb = np.array([xy_all[k] for k in members[rb]])
+        if float(np.hypot(*(pa[:, None] - pb[None]).transpose(2, 0, 1)).max()) > JUNCTION_MAX_M:
+            continue
+        root[rb] = ra
+        members[ra] += members.pop(rb)
+    return {k: v for k, v in ((k, [q for q in v if is_j[q]]) for k, v in members.items()) if v}
+
+
+def signal_groups(groups, signals, links, nodes, xy_all):
+    """(groups, the keys that are signalled). The map's signals are taken group by group (a junction's heads and poles are
+    mapped one by one): the intersection they belong to is the junctions round them, made one where a short road joins them
+    (a divided road's two crossings run off one controller). A group with no cross road gets no signal: it stood on a plain
+    stretch of road."""
+    if not len(signals):
+        return groups, set()
+    pts = np.asarray(signals, float)
+    tree = cKDTree(pts)
+    label = list(range(len(pts)))
+
+    def find(k):
+        while label[k] != k:
+            label[k] = label[label[k]]
+            k = label[k]
+        return k
+    for a, b in tree.query_pairs(SIGNAL_GROUP_M):
+        label[find(a)] = find(b)
+    sets = {}
+    for k in range(len(pts)):
+        sets.setdefault(find(k), []).append(pts[k])
+    keys = list(groups)
+    hub = np.array([np.mean([xy_all[k] for k in groups[j]], axis=0) for j in keys])
+    edge = {}                                       # junction key pairs a road joins, by that road's length
+    of_node = {k: j for j in keys for k in groups[j]}
+    for lk in links:
+        a, b = of_node.get(lk["from"]), of_node.get(lk["to"])
+        if a is not None and b is not None and a != b and lk["level"] == 0 and lk["class"] not in CLUSTER_SKIP:
+            n = link_length(lk)
+            if n <= SIGNAL_JOIN_M:
+                edge.setdefault(a, set()).add(b)
+                edge.setdefault(b, set()).add(a)
+    signalled = set()
+    for group in sets.values():
+        got = np.array(group)
+        near = []
+        for j, c in zip(keys, hub):
+            if j not in groups:
+                continue
+            q = np.array([xy_all[k] for k in groups[j]])
+            d = float(np.hypot(*(got[:, None] - q[None]).transpose(2, 0, 1)).min())
+            if d <= SIGNAL_NODE_M:
+                near.append((d, j))
+        near.sort(key=lambda v: v[0])
+        if not near:
+            continue
+        keep = near[0][1]
+        for _, j in near[1:]:                       # (the rest of the crossing, by the roads that tie it together)
+            if j in groups and j != keep and j in edge.get(keep, ()):
+                groups[keep] = groups[keep] + groups.pop(j)
+                edge[keep] = (edge.get(keep, set()) | edge.get(j, set())) - {keep, j}
+        nodes_in = set(groups[keep])
+        into = [links[lk] for k in nodes_in for how, lk in nodes[k]["ends"] if how == "in" and links[lk]["from"] not in nodes_in]
+        roads = {road_names(lk) for lk in into if lk["class"] not in ("track",)}
+        if len(into) >= 3 and len(roads) >= 2:
+            signalled.add(keep)
+    return groups, signalled
+
+
 def split_at(xy, nodes):
     """Polyline xy cut at nodes [(id, x, y)] lying on it: [(id or None, ...)] pieces [(from id, to id, points)]."""
     d = np.r_[0.0, np.cumsum(np.hypot(*np.diff(xy, axis=0).T))]
@@ -199,6 +313,12 @@ def main():
             elif m[0] >= L - 0.5:
                 stops[-1] = (L, "c" + m[1])
         stops = [(s, ("c" + c) if not c.startswith(("j:", "c")) else c) for s, c in stops]
+        t_st = p["t"] if len(p["t"]) else np.array([0.0, L])
+        if "edge_a" in p and len(p["edge_a"]):
+            prof_l, prof_r = p["edge_b"] - p["edge_m"], p["edge_a"] - p["edge_m"]
+        else:
+            prof_l, prof_r = np.full(len(t_st), width / 2), np.full(len(t_st), -width / 2)
+        prof_w = prof_l - prof_r
         z = heights.ground(xy)
         if p["kind"] == "bridge" and len(xy) >= 2:
             tree, zz = heights.decks(xy)
@@ -220,7 +340,14 @@ def main():
             q0 = [float(np.interp(s0, scale, pts[:, c])) for c in range(3)]
             q1 = [float(np.interp(s1, scale, pts[:, c])) for c in range(3)]
             seg = np.vstack([q0, pts[inner], q1])
-            for d, (offs, lw) in lanes.items():
+            span = (t_st >= s0) & (t_st <= s1)
+            link_w = float(np.median(prof_w[span])) if span.any() else width
+            if abs(link_w - width) > 0.5:       # (this stretch's own width, not the whole feature's median)
+                lanes_here = lanes_of(ue_fit._lanes_kept(roads, spec_of(sp0, link_w)))
+            else:
+                lanes_here, link_w = lanes, width
+            edge_pts = np.c_[np.interp(np.r_[s0, scale[inner], s1], t_st, prof_l), np.interp(np.r_[s0, scale[inner], s1], t_st, prof_r)]
+            for d, (offs, lw) in lanes_here.items():
                 if not offs:
                     continue
                 turns = sp.turns_f if d > 0 else sp.turns_b
@@ -231,41 +358,24 @@ def main():
                 links.append({"id": lid, "from": a_id, "to": b_id,
                               "points": line.round(2).tolist(), "class": sp.cls, "ramp": bool(sp.link),
                               "level": p["level"], "name": p["name"], "oneway": bool(sp.oneway), "speed": round(speed, 1),
-                              "width": round(width, 2), "lanes": [round(-o if d < 0 else o, 2) for o in offs],
+                              "width": round(link_w, 2), "edges": (edge_pts if d > 0 else edge_pts[::-1, ::-1]).round(2).tolist(), "lanes": [round(-o if d < 0 else o, 2) for o in offs],
                               "lane_width": round(lw, 2), "turns": list(turns) if turns else None, "control": None,
                               "control_source": None, "surface": sp.kind})
                 node(a_id, line[0])["ends"].append(("out", lid))
                 node(b_id, line[-1])["ends"].append(("in", lid))
-    # junctions: nodes tied by a short link
     ids = list(nodes)
-    index = {k: i for i, k in enumerate(ids)}
-    parent = list(range(len(ids)))
-
-    def root(i):
-        while parent[i] != i:
-            parent[i] = parent[parent[i]]
-            i = parent[i]
-        return i
-    for lk in links:
-        pts = np.array(lk["points"])
-        if np.hypot(*np.diff(pts[:, :2], axis=0).T).sum() <= CLUSTER_M and lk["level"] == 0:
-            parent[root(index[lk["from"]])] = root(index[lk["to"]])
-    groups = {}
-    for k in ids:
-        arms = {lk for how, lk in nodes[k]["ends"]}
-        if len({links[v]["name"] + links[v]["class"] for v in arms}) >= 2 or len(arms) >= 5:
-            groups.setdefault(root(index[k]), []).append(k)
-    junctions = []
     xy_all = {k: np.array(nodes[k]["xy"]) for k in ids}
+    groups = junction_groups(links, nodes, xy_all)
     signals = infra.get("traffic_signals", np.zeros((0, 2)))
-    sig_tree = cKDTree(signals) if len(signals) else None
+    groups, signalled = signal_groups(groups, signals, links, nodes, xy_all)
+    junctions = []
     stops = np.concatenate([infra.get("stop", np.zeros((0, 2))), infra.get("give_way", np.zeros((0, 2)))])
     n_stop = len(infra.get("stop", ()))
     stop_tree = cKDTree(stops) if len(stops) else None
-    for g in groups.values():
+    for key, g in groups.items():
         c = np.mean([xy_all[k] for k in g], axis=0)
         jid = len(junctions)
-        sig = sig_tree is not None and any(sig_tree.query(xy_all[k])[0] <= SIGNAL_NODE_M for k in g)
+        sig = key in signalled
         for k in g:
             nodes[k]["junction"] = jid
         junctions.append({"id": jid, "nodes": g, "xy": [round(float(c[0]), 2), round(float(c[1]), 2)],

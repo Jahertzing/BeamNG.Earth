@@ -258,6 +258,7 @@ def main():
         else:
             p["two"], p["ab"] = np.zeros(0, bool), np.zeros((0, 2))
         off += n
+    ue_fit.edge_profiles(pieces)
     with open(os.path.join(a.dir, "stations.pkl"), "wb") as f:
         pickle.dump(pieces, f)
     ue_fit.save(pieces, os.path.join(a.dir, "fit.pkl"), net.get("infra"))
